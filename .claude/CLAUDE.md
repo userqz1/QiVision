@@ -214,6 +214,7 @@ Use specialized agents via Task tool:
 | code-reviewer | Verify code follows CLAUDE.md rules |
 | test-runner | Run tests, collect results |
 | **algorithm-expert** | **[Opus]** Complex algorithm design, precision issues, math derivation |
+| **git-sync** | Commit and push to GitHub after completing modules |
 
 **Special Agents**:
 - `algorithm-expert`: Uses **Opus model**. Only invoke for:
@@ -221,6 +222,12 @@ Use specialized agents via Task tool:
   - Precision issues that are hard to diagnose
   - Mathematical derivation and numerical stability analysis
   - This agent is **read-only** (provides analysis and recommendations, does not modify code)
+
+- `git-sync`: Auto-sync to GitHub. Invoke when:
+  - A module implementation is complete (header + source + tests passing)
+  - Design document is created
+  - Significant work is done (≥3 files or ≥200 lines changed)
+  - Work session ends
 
 **Module Implementation Command**: `/project:implement-module <Path>` (e.g., `Internal/Steger`)
 

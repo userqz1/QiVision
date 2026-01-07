@@ -453,6 +453,23 @@ Task tool:
 
 ---
 
+## 📤 完成后同步 GitHub
+
+**模块完成后，调用 `git-sync` agent 提交并推送：**
+
+```
+Task tool:
+  subagent_type: git-sync
+  prompt: "Feature/XXX 模块已完成实现和测试，请提交并推送到 GitHub"
+```
+
+触发条件：
+- 头文件 + 源文件 + 单元测试完成
+- 所有测试通过
+- PROGRESS.md 已更新
+
+---
+
 ## 约束
 
 - **必须复用 Internal** - 禁止重复实现
