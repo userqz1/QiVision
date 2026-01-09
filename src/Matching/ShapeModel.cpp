@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <queue>
 #include <stdexcept>
@@ -874,12 +875,13 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
     }
 
     // OpenMP parallelization over angles (coarse-grained parallelism)
+    const int64_t numAngles = static_cast<int64_t>(angles.size());
     #pragma omp parallel
     {
         std::vector<MatchResult> localCandidates;
 
         #pragma omp for schedule(dynamic)
-        for (size_t ai = 0; ai < angles.size(); ++ai) {
+        for (int64_t ai = 0; ai < numAngles; ++ai) {
             const double angle = angles[ai];
 
             // Compute rotated model bounds
@@ -1046,12 +1048,13 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramidWithResponseMap(
     int32_t stepSize = 2;
 
     // OpenMP parallelization over angles (same as original SearchPyramid)
+    const int64_t numRotatedModels = static_cast<int64_t>(rotatedModels.size());
     #pragma omp parallel
     {
         std::vector<MatchResult> localCandidates;
 
         #pragma omp for schedule(dynamic)
-        for (size_t angleIdx = 0; angleIdx < rotatedModels.size(); ++angleIdx) {
+        for (int64_t angleIdx = 0; angleIdx < numRotatedModels; ++angleIdx) {
             const auto& rotatedModel = rotatedModels[angleIdx];
 
             // Valid search region based on bounding box
@@ -2758,9 +2761,13 @@ std::vector<MatchResult> ShapeModel::Find(const QImage& image,
     pyramidParams.smoothSigma = 0.5;
 
     AnglePyramid targetPyramid;
+    auto pyramidStart = std::chrono::high_resolution_clock::now();
     if (!targetPyramid.Build(image, pyramidParams)) {
         return {};
     }
+    auto pyramidEnd = std::chrono::high_resolution_clock::now();
+    double pyramidMs = std::chrono::duration<double, std::milli>(pyramidEnd - pyramidStart).count();
+    std::printf("[Timing] Pyramid: %.1fms | ", pyramidMs);
 
     // Use traditional pyramid search with bilinear interpolation
     // Response Map was tested but adds overhead without improving performance

@@ -6,6 +6,7 @@
  */
 
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
 namespace Qi::Vision {

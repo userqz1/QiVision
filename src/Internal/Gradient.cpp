@@ -20,6 +20,18 @@
 
 namespace Qi::Vision::Internal {
 
+// =============================================================================
+// OpenMP 阈值控制
+// =============================================================================
+
+/// 启用 OpenMP 的最小像素数阈值 (约 700×700)
+constexpr int32_t OPENMP_MIN_PIXELS = 500000;
+
+/// 判断是否使用 OpenMP 并行
+inline bool ShouldUseOpenMP(int32_t width, int32_t height) {
+    return static_cast<int64_t>(width) * height >= OPENMP_MIN_PIXELS;
+}
+
 // ============================================================================
 // Kernel Functions
 // ============================================================================
@@ -77,9 +89,9 @@ void Convolve1DRow(const SrcT* src, DstT* dst,
                    const double* kernel, int32_t kernelSize,
                    BorderMode borderMode) {
     int32_t halfK = kernelSize / 2;
+    const bool useParallel = ShouldUseOpenMP(width, height);
 
-    #pragma omp parallel for schedule(static)
-    for (int32_t y = 0; y < height; ++y) {
+    auto processRow = [&](int32_t y) {
         for (int32_t x = 0; x < width; ++x) {
             double sum = 0.0;
             for (int32_t k = -halfK; k <= halfK; ++k) {
@@ -92,6 +104,17 @@ void Convolve1DRow(const SrcT* src, DstT* dst,
             }
             dst[y * width + x] = static_cast<DstT>(sum);
         }
+    };
+
+#ifdef _OPENMP
+    if (useParallel) {
+        #pragma omp parallel for schedule(static)
+        for (int32_t y = 0; y < height; ++y) { processRow(y); }
+    } else
+#endif
+    {
+        (void)useParallel;
+        for (int32_t y = 0; y < height; ++y) { processRow(y); }
     }
 }
 
@@ -101,9 +124,9 @@ void Convolve1DCol(const SrcT* src, DstT* dst,
                    const double* kernel, int32_t kernelSize,
                    BorderMode borderMode) {
     int32_t halfK = kernelSize / 2;
+    const bool useParallel = ShouldUseOpenMP(width, height);
 
-    #pragma omp parallel for schedule(static)
-    for (int32_t y = 0; y < height; ++y) {
+    auto processRow = [&](int32_t y) {
         for (int32_t x = 0; x < width; ++x) {
             double sum = 0.0;
             for (int32_t k = -halfK; k <= halfK; ++k) {
@@ -116,6 +139,17 @@ void Convolve1DCol(const SrcT* src, DstT* dst,
             }
             dst[y * width + x] = static_cast<DstT>(sum);
         }
+    };
+
+#ifdef _OPENMP
+    if (useParallel) {
+        #pragma omp parallel for schedule(static)
+        for (int32_t y = 0; y < height; ++y) { processRow(y); }
+    } else
+#endif
+    {
+        (void)useParallel;
+        for (int32_t y = 0; y < height; ++y) { processRow(y); }
     }
 }
 
@@ -131,10 +165,10 @@ void SobelX_AVX2(const SrcT* src, float* dst, int32_t width, int32_t height, Bor
     // Combined as separable: smooth_y first, then deriv_x
 
     std::vector<float> temp(static_cast<size_t>(width) * height);
+    const bool useParallel = ShouldUseOpenMP(width, height);
 
     // Step 1: Smooth in Y with [1 2 1]
-    #pragma omp parallel for schedule(static)
-    for (int32_t y = 0; y < height; ++y) {
+    auto smoothY = [&](int32_t y) {
         int32_t ym1 = (y > 0) ? y - 1 : HandleBorder(-1, height, borderMode);
         int32_t yp1 = (y < height - 1) ? y + 1 : HandleBorder(height, height, borderMode);
 
@@ -144,11 +178,21 @@ void SobelX_AVX2(const SrcT* src, float* dst, int32_t width, int32_t height, Bor
             float v2 = static_cast<float>(src[yp1 * width + x]);
             temp[y * width + x] = v0 + 2.0f * v1 + v2;
         }
+    };
+
+#ifdef _OPENMP
+    if (useParallel) {
+        #pragma omp parallel for schedule(static)
+        for (int32_t y = 0; y < height; ++y) { smoothY(y); }
+    } else
+#endif
+    {
+        (void)useParallel;
+        for (int32_t y = 0; y < height; ++y) { smoothY(y); }
     }
 
     // Step 2: Derivative in X with [-1 0 1]
-    #pragma omp parallel for schedule(static)
-    for (int32_t y = 0; y < height; ++y) {
+    auto derivX = [&](int32_t y) {
         const float* row = temp.data() + y * width;
         float* dstRow = dst + y * width;
 
@@ -179,6 +223,16 @@ void SobelX_AVX2(const SrcT* src, float* dst, int32_t width, int32_t height, Bor
             int32_t xp1 = HandleBorder(width, width, borderMode);
             dstRow[width - 1] = row[xp1] - row[width - 2];
         }
+    };
+
+#ifdef _OPENMP
+    if (useParallel) {
+        #pragma omp parallel for schedule(static)
+        for (int32_t y = 0; y < height; ++y) { derivX(y); }
+    } else
+#endif
+    {
+        for (int32_t y = 0; y < height; ++y) { derivX(y); }
     }
 }
 
@@ -188,10 +242,10 @@ void SobelY_AVX2(const SrcT* src, float* dst, int32_t width, int32_t height, Bor
     // Sobel Y: [1 2 1] in X, [-1 0 1] in Y
 
     std::vector<float> temp(static_cast<size_t>(width) * height);
+    const bool useParallel = ShouldUseOpenMP(width, height);
 
     // Step 1: Smooth in X with [1 2 1]
-    #pragma omp parallel for schedule(static)
-    for (int32_t y = 0; y < height; ++y) {
+    auto smoothX = [&](int32_t y) {
         const SrcT* row = src + y * width;
         float* tmpRow = temp.data() + y * width;
 
@@ -248,11 +302,21 @@ void SobelY_AVX2(const SrcT* src, float* dst, int32_t width, int32_t height, Bor
             float v2 = static_cast<float>(row[xp1]);
             tmpRow[width - 1] = v0 + 2.0f * v1 + v2;
         }
+    };
+
+#ifdef _OPENMP
+    if (useParallel) {
+        #pragma omp parallel for schedule(static)
+        for (int32_t y = 0; y < height; ++y) { smoothX(y); }
+    } else
+#endif
+    {
+        (void)useParallel;
+        for (int32_t y = 0; y < height; ++y) { smoothX(y); }
     }
 
     // Step 2: Derivative in Y with [-1 0 1]
-    #pragma omp parallel for schedule(static)
-    for (int32_t y = 0; y < height; ++y) {
+    auto derivY = [&](int32_t y) {
         int32_t ym1 = (y > 0) ? y - 1 : HandleBorder(-1, height, borderMode);
         int32_t yp1 = (y < height - 1) ? y + 1 : HandleBorder(height, height, borderMode);
 
@@ -271,6 +335,16 @@ void SobelY_AVX2(const SrcT* src, float* dst, int32_t width, int32_t height, Bor
         for (; x < width; ++x) {
             dstRow[x] = rowP1[x] - rowM1[x];
         }
+    };
+
+#ifdef _OPENMP
+    if (useParallel) {
+        #pragma omp parallel for schedule(static)
+        for (int32_t y = 0; y < height; ++y) { derivY(y); }
+    } else
+#endif
+    {
+        for (int32_t y = 0; y < height; ++y) { derivY(y); }
     }
 }
 #endif
@@ -321,10 +395,10 @@ void GradientX(const SrcT* src, DstT* dst,
             derivKernel = PrewittDerivativeKernel();
             kernelSize = 3;
             break;
-        case GradientOperator::Central:
+        case GradientOperator::Central: {
             // Simple central difference: (I(x+1) - I(x-1)) / 2
-            #pragma omp parallel for schedule(static)
-            for (int32_t y = 0; y < height; ++y) {
+            const bool useParallel = ShouldUseOpenMP(width, height);
+            auto processRow = [&](int32_t y) {
                 for (int32_t x = 0; x < width; ++x) {
                     int32_t xm1 = (x > 0) ? x - 1 : HandleBorder(-1, width, borderMode);
                     int32_t xp1 = (x < width - 1) ? x + 1 : HandleBorder(width, width, borderMode);
@@ -332,8 +406,19 @@ void GradientX(const SrcT* src, DstT* dst,
                         (static_cast<double>(src[y * width + xp1]) -
                          static_cast<double>(src[y * width + xm1])) * 0.5);
                 }
+            };
+#ifdef _OPENMP
+            if (useParallel) {
+                #pragma omp parallel for schedule(static)
+                for (int32_t y = 0; y < height; ++y) { processRow(y); }
+            } else
+#endif
+            {
+                (void)useParallel;
+                for (int32_t y = 0; y < height; ++y) { processRow(y); }
             }
             return;
+        }
         default:
             smoothKernel = SobelSmoothingKernel(3);
             derivKernel = SobelDerivativeKernel(3);
@@ -397,10 +482,10 @@ void GradientY(const SrcT* src, DstT* dst,
             derivKernel = PrewittDerivativeKernel();
             kernelSize = 3;
             break;
-        case GradientOperator::Central:
+        case GradientOperator::Central: {
             // Simple central difference: (I(y+1) - I(y-1)) / 2
-            #pragma omp parallel for schedule(static)
-            for (int32_t y = 0; y < height; ++y) {
+            const bool useParallel = ShouldUseOpenMP(width, height);
+            auto processRow = [&](int32_t y) {
                 for (int32_t x = 0; x < width; ++x) {
                     int32_t ym1 = (y > 0) ? y - 1 : HandleBorder(-1, height, borderMode);
                     int32_t yp1 = (y < height - 1) ? y + 1 : HandleBorder(height, height, borderMode);
@@ -408,8 +493,19 @@ void GradientY(const SrcT* src, DstT* dst,
                         (static_cast<double>(src[yp1 * width + x]) -
                          static_cast<double>(src[ym1 * width + x])) * 0.5);
                 }
+            };
+#ifdef _OPENMP
+            if (useParallel) {
+                #pragma omp parallel for schedule(static)
+                for (int32_t y = 0; y < height; ++y) { processRow(y); }
+            } else
+#endif
+            {
+                (void)useParallel;
+                for (int32_t y = 0; y < height; ++y) { processRow(y); }
             }
             return;
+        }
         default:
             smoothKernel = SobelSmoothingKernel(3);
             derivKernel = SobelDerivativeKernel(3);
@@ -439,17 +535,29 @@ void Gradient(const SrcT* src, DstT* gx, DstT* gy,
 #ifdef __AVX2__
     // Use optimized AVX2 version for Sobel 3x3 with float output
     if (op == GradientOperator::Sobel3x3 && std::is_same_v<DstT, float>) {
-        // Run both in parallel using OpenMP sections
-        #pragma omp parallel sections
+        const bool useParallel = ShouldUseOpenMP(width, height);
+
+#ifdef _OPENMP
+        if (useParallel) {
+            // Run both in parallel using OpenMP sections
+            #pragma omp parallel sections
+            {
+                #pragma omp section
+                {
+                    SobelX_AVX2(src, reinterpret_cast<float*>(gx), width, height, borderMode);
+                }
+                #pragma omp section
+                {
+                    SobelY_AVX2(src, reinterpret_cast<float*>(gy), width, height, borderMode);
+                }
+            }
+        } else
+#endif
         {
-            #pragma omp section
-            {
-                SobelX_AVX2(src, reinterpret_cast<float*>(gx), width, height, borderMode);
-            }
-            #pragma omp section
-            {
-                SobelY_AVX2(src, reinterpret_cast<float*>(gy), width, height, borderMode);
-            }
+            // 小图: 顺序执行
+            (void)useParallel;
+            SobelX_AVX2(src, reinterpret_cast<float*>(gx), width, height, borderMode);
+            SobelY_AVX2(src, reinterpret_cast<float*>(gy), width, height, borderMode);
         }
         return;
     }
@@ -547,8 +655,9 @@ void GradientXX(const SrcT* src, DstT* dst,
                 int32_t width, int32_t height,
                 BorderMode borderMode) {
     // Second derivative in X: d²I/dx² = I(x+1) - 2*I(x) + I(x-1)
-    #pragma omp parallel for schedule(static)
-    for (int32_t y = 0; y < height; ++y) {
+    const bool useParallel = ShouldUseOpenMP(width, height);
+
+    auto processRow = [&](int32_t y) {
         for (int32_t x = 0; x < width; ++x) {
             int32_t xm1 = (x > 0) ? x - 1 : HandleBorder(-1, width, borderMode);
             int32_t xp1 = (x < width - 1) ? x + 1 : HandleBorder(width, width, borderMode);
@@ -558,6 +667,17 @@ void GradientXX(const SrcT* src, DstT* dst,
                          static_cast<double>(src[y * width + xm1]);
             dst[y * width + x] = static_cast<DstT>(val);
         }
+    };
+
+#ifdef _OPENMP
+    if (useParallel) {
+        #pragma omp parallel for schedule(static)
+        for (int32_t y = 0; y < height; ++y) { processRow(y); }
+    } else
+#endif
+    {
+        (void)useParallel;
+        for (int32_t y = 0; y < height; ++y) { processRow(y); }
     }
 }
 
@@ -566,8 +686,9 @@ void GradientYY(const SrcT* src, DstT* dst,
                 int32_t width, int32_t height,
                 BorderMode borderMode) {
     // Second derivative in Y: d²I/dy² = I(y+1) - 2*I(y) + I(y-1)
-    #pragma omp parallel for schedule(static)
-    for (int32_t y = 0; y < height; ++y) {
+    const bool useParallel = ShouldUseOpenMP(width, height);
+
+    auto processRow = [&](int32_t y) {
         for (int32_t x = 0; x < width; ++x) {
             int32_t ym1 = (y > 0) ? y - 1 : HandleBorder(-1, height, borderMode);
             int32_t yp1 = (y < height - 1) ? y + 1 : HandleBorder(height, height, borderMode);
@@ -577,6 +698,17 @@ void GradientYY(const SrcT* src, DstT* dst,
                          static_cast<double>(src[ym1 * width + x]);
             dst[y * width + x] = static_cast<DstT>(val);
         }
+    };
+
+#ifdef _OPENMP
+    if (useParallel) {
+        #pragma omp parallel for schedule(static)
+        for (int32_t y = 0; y < height; ++y) { processRow(y); }
+    } else
+#endif
+    {
+        (void)useParallel;
+        for (int32_t y = 0; y < height; ++y) { processRow(y); }
     }
 }
 
@@ -586,6 +718,8 @@ void GradientXY(const SrcT* src, DstT* dst,
                 BorderMode borderMode) {
     // Mixed derivative: d²I/dxdy
     // = (I(x+1,y+1) - I(x-1,y+1) - I(x+1,y-1) + I(x-1,y-1)) / 4
+    const bool useParallel = ShouldUseOpenMP(width, height);
+
     auto getPixel = [&](int32_t px, int32_t py) -> double {
         if (px < 0 || px >= width) {
             px = HandleBorder(px, width, borderMode);
@@ -596,13 +730,23 @@ void GradientXY(const SrcT* src, DstT* dst,
         return static_cast<double>(src[py * width + px]);
     };
 
-    #pragma omp parallel for schedule(static)
-    for (int32_t y = 0; y < height; ++y) {
+    auto processRow = [&](int32_t y) {
         for (int32_t x = 0; x < width; ++x) {
             double val = (getPixel(x + 1, y + 1) - getPixel(x - 1, y + 1) -
                           getPixel(x + 1, y - 1) + getPixel(x - 1, y - 1)) * 0.25;
             dst[y * width + x] = static_cast<DstT>(val);
         }
+    };
+
+#ifdef _OPENMP
+    if (useParallel) {
+        #pragma omp parallel for schedule(static)
+        for (int32_t y = 0; y < height; ++y) { processRow(y); }
+    } else
+#endif
+    {
+        (void)useParallel;
+        for (int32_t y = 0; y < height; ++y) { processRow(y); }
     }
 }
 

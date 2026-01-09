@@ -26,6 +26,8 @@ option(QIVISION_ENABLE_OPENMP "Enable OpenMP for parallelization" ON)
 # =============================================================================
 if(MSVC)
     add_compile_options(/W4 /utf-8)
+    add_compile_definitions(_USE_MATH_DEFINES)  # Enable M_PI etc.
+    add_compile_definitions(NOMINMAX)           # Prevent Windows min/max macros
     if(QIVISION_ENABLE_SIMD)
         add_compile_options(/arch:AVX2)
     endif()
