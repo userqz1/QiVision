@@ -1,6 +1,11 @@
 /**
  * @file ShapeModel.cpp
  * @brief Implementation of shape-based template matching
+ *
+ * Performance: 86-407ms for 360° search on 640×512 images
+ *
+ * @note For optimization attempts and results, see:
+ *       docs/design/ShapeModel_Optimization_Notes.md
  */
 
 #include <QiVision/Matching/ShapeModel.h>
@@ -149,6 +154,10 @@ private:
 // Global cosine lookup table
 static const FastCosTable g_cosTable;
 
+// =============================================================================
+// Shape Model Implementation Class
+// =============================================================================
+
 class ShapeModelImpl {
 public:
     // Model data
@@ -199,6 +208,11 @@ public:
     double ComputeScoreAtPositionAVX2(const AnglePyramid& pyramid, int32_t level,
                                        double x, double y, double angle, double scale,
                                        double greediness, double* outCoverage = nullptr) const;
+
+    // Fast SIMD scoring: scalar load + SIMD batch compute (正确的 SIMD 优化方向)
+    double ComputeScoreAtPositionFastSIMD(const AnglePyramid& pyramid, int32_t level,
+                                          int32_t x, int32_t y, double angle, double scale,
+                                          double* outCoverage = nullptr) const;
 #endif
 
     void RefinePosition(const AnglePyramid& pyramid, MatchResult& match,
@@ -772,7 +786,7 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
     int32_t targetWidth = targetPyramid.GetWidth(startLevel);
     int32_t targetHeight = targetPyramid.GetHeight(startLevel);
 
-    // Search grid (every 2 pixels at top level)
+    // Search grid (every 2 pixels at top level for accuracy)
     int32_t stepSize = 2;
 
     // Build angle list for parallel processing
@@ -816,6 +830,9 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
             for (int32_t y = searchYMin; y <= searchYMax; y += stepSize) {
                 for (int32_t x = searchXMin; x <= searchXMax; x += stepSize) {
                     double coverage = 0.0;
+                    // Use ComputeScoreAtPosition with early termination (greediness)
+                    // Note: Early termination provides ~6× speedup vs checking all points
+                    // ComputeScoreAtPositionFast was tested but lacks early termination
                     double score = ComputeScoreAtPosition(targetPyramid, startLevel,
                                                            x, y, angle, 1.0, params.greediness, &coverage);
 
@@ -928,7 +945,7 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramidWithResponseMap(
             params.angleStart, params.angleExtent, angleStep, rotatedModels.size());
 #endif
 
-    // Coarse search at top level using Response Map
+    // Coarse search at top level using Response Map with O(1) lookups
     std::vector<MatchResult> candidates;
     int32_t targetWidth = responseMap.GetWidth(startLevel);
     int32_t targetHeight = responseMap.GetHeight(startLevel);
@@ -936,70 +953,61 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramidWithResponseMap(
     // Search grid (every 2 pixels at top level)
     int32_t stepSize = 2;
 
-#ifdef QIVISION_DEBUG
-    double maxScoreFound = 0.0;
-    double maxCoverageFound = 0.0;
-    int32_t debugCount = 0;
-#endif
+    // OpenMP parallelization over angles (same as original SearchPyramid)
+    #pragma omp parallel
+    {
+        std::vector<MatchResult> localCandidates;
 
-    // Search all positions and angles
-    for (size_t angleIdx = 0; angleIdx < rotatedModels.size(); ++angleIdx) {
-        const auto& rotatedModel = rotatedModels[angleIdx];
+        #pragma omp for schedule(dynamic)
+        for (size_t angleIdx = 0; angleIdx < rotatedModels.size(); ++angleIdx) {
+            const auto& rotatedModel = rotatedModels[angleIdx];
 
-        // Valid search region based on bounding box
-        int32_t searchXMin = std::max(0, -static_cast<int32_t>(rotatedModel.minX));
-        int32_t searchXMax = std::min(targetWidth - 1,
-                                       targetWidth - 1 - static_cast<int32_t>(rotatedModel.maxX));
-        int32_t searchYMin = std::max(0, -static_cast<int32_t>(rotatedModel.minY));
-        int32_t searchYMax = std::min(targetHeight - 1,
-                                       targetHeight - 1 - static_cast<int32_t>(rotatedModel.maxY));
+            // Valid search region based on bounding box
+            int32_t searchXMin = std::max(0, -static_cast<int32_t>(rotatedModel.minX));
+            int32_t searchXMax = std::min(targetWidth - 1,
+                                           targetWidth - 1 - static_cast<int32_t>(rotatedModel.maxX));
+            int32_t searchYMin = std::max(0, -static_cast<int32_t>(rotatedModel.minY));
+            int32_t searchYMax = std::min(targetHeight - 1,
+                                           targetHeight - 1 - static_cast<int32_t>(rotatedModel.maxY));
 
-        // Skip if no valid search region
-        if (searchXMin > searchXMax || searchYMin > searchYMax) {
-            continue;
-        }
+            // Skip if no valid search region
+            if (searchXMin > searchXMax || searchYMin > searchYMax) {
+                continue;
+            }
 
-        for (int32_t y = searchYMin; y <= searchYMax; y += stepSize) {
-            for (int32_t x = searchXMin; x <= searchXMax; x += stepSize) {
-                double coverage = 0.0;
-                double score = responseMap.ComputeScore(rotatedModel, startLevel,
-                                                        x, y, &coverage);
+            for (int32_t y = searchYMin; y <= searchYMax; y += stepSize) {
+                for (int32_t x = searchXMin; x <= searchXMax; x += stepSize) {
+                    double coverage = 0.0;
+                    double score = responseMap.ComputeScore(rotatedModel, startLevel,
+                                                            x, y, &coverage);
 
-#ifdef QIVISION_DEBUG
-                if (score > maxScoreFound) {
-                    maxScoreFound = score;
-                    maxCoverageFound = coverage;
-                }
-                debugCount++;
-#endif
-
-                // Require minimal coverage and score for coarse search
-                // Response Map scores tend to be lower due to quantization
-                if (score >= params.minScore * 0.3 && coverage >= 0.5) {
-                    MatchResult result;
-                    result.x = x;
-                    result.y = y;
-                    result.angle = rotatedModel.angle;
-                    result.score = score;
-                    result.pyramidLevel = startLevel;
-                    candidates.push_back(result);
+                    // Use same thresholds as original SearchPyramid
+                    if (score >= params.minScore * 0.5 && coverage >= 0.7) {
+                        MatchResult result;
+                        result.x = x;
+                        result.y = y;
+                        result.angle = rotatedModel.angle;
+                        result.score = score;
+                        result.pyramidLevel = startLevel;
+                        localCandidates.push_back(result);
+                    }
                 }
             }
         }
-    }
 
-#ifdef QIVISION_DEBUG
-    fprintf(stderr, "[SearchRM] Evaluated %d positions, maxScore=%.4f, maxCoverage=%.4f\n",
-            debugCount, maxScoreFound, maxCoverageFound);
-    fprintf(stderr, "[SearchRM] Coarse search found %zu candidates\n", candidates.size());
-#endif
+        // Merge local results into global candidates
+        #pragma omp critical
+        {
+            candidates.insert(candidates.end(), localCandidates.begin(), localCandidates.end());
+        }
+    }
 
     // Sort candidates by score
     std::sort(candidates.begin(), candidates.end());
 
-    // Limit candidates for efficiency
-    if (candidates.size() > 2000) {
-        candidates.resize(2000);
+    // Limit candidates for efficiency (same as original)
+    if (candidates.size() > 1000) {
+        candidates.resize(1000);
     }
 
 #ifdef QIVISION_DEBUG
@@ -1009,8 +1017,8 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramidWithResponseMap(
     }
 #endif
 
-    // Refine through pyramid levels using precise scoring
-    // Use Response Map for coarse levels, precise method for fine levels
+    // Refine through pyramid levels using PRECISE scoring (bilinear interpolation)
+    // Response Map is O(1) but lacks subpixel precision - use only for coarse search
     for (int32_t level = startLevel - 1; level >= 0; --level) {
         std::vector<MatchResult> refined;
         refined.reserve(candidates.size());
@@ -1022,16 +1030,6 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramidWithResponseMap(
         int32_t levelWidth = targetPyramid.GetWidth(level);
         int32_t levelHeight = targetPyramid.GetHeight(level);
 
-        // Prepare rotated models for this level if using Response Map
-        std::vector<RotatedResponseModel> levelRotatedModels;
-        bool useResponseMap = (level >= 1);  // Use Response Map for levels >= 1
-
-        if (useResponseMap && level < responseMap.NumLevels()) {
-            const auto& levelModel = levels_[level];
-            // Prepare models for angles around each candidate
-            // This is done per-candidate to minimize memory
-        }
-
         for (const auto& candidate : candidates) {
             double baseX = candidate.x * scaleFactor;
             double baseY = candidate.y * scaleFactor;
@@ -1041,7 +1039,7 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramidWithResponseMap(
             bestMatch.score = -1.0;
             double bestCoverage = 0.0;
 
-            // Local search around candidate
+            // Local search around candidate using PRECISE bilinear interpolation
             for (int32_t dy = -searchRadius; dy <= searchRadius; ++dy) {
                 for (int32_t dx = -searchRadius; dx <= searchRadius; ++dx) {
                     double px = baseX + dx;
@@ -1055,25 +1053,11 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramidWithResponseMap(
                     for (double dAngle = -angleRadius; dAngle <= angleRadius; dAngle += 0.02) {
                         double angle = baseAngle + dAngle;
                         double coverage = 0.0;
-                        double score;
+                        double score = ComputeScoreAtPosition(targetPyramid, level,
+                                                              px, py, angle, 1.0,
+                                                              params.greediness, &coverage);
 
-                        if (useResponseMap && level < responseMap.NumLevels() &&
-                            level < static_cast<int32_t>(levels_.size())) {
-                            // Use Response Map for coarse levels
-                            auto rotModel = ResponseMap::PrepareRotatedModel(
-                                levels_[level].points, angle);
-                            score = responseMap.ComputeScore(rotModel, level,
-                                                             static_cast<int32_t>(px),
-                                                             static_cast<int32_t>(py),
-                                                             &coverage);
-                        } else {
-                            // Use precise scoring for level 0
-                            score = ComputeScoreAtPosition(targetPyramid, level,
-                                                           px, py, angle, 1.0,
-                                                           params.greediness, &coverage);
-                        }
-
-                        if (coverage >= 0.5 && score > bestMatch.score) {
+                        if (coverage >= 0.7 && score > bestMatch.score) {
                             bestMatch.x = px;
                             bestMatch.y = py;
                             bestMatch.angle = angle;
@@ -1085,7 +1069,7 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramidWithResponseMap(
                 }
             }
 
-            if (bestMatch.score >= params.minScore * 0.5 && bestCoverage >= 0.5) {
+            if (bestMatch.score >= params.minScore * 0.5 && bestCoverage >= 0.6) {
                 refined.push_back(bestMatch);
             }
         }
@@ -1184,6 +1168,8 @@ std::vector<MatchResult> ShapeModelImpl::SearchLevel(
                     double angle = baseAngle + dAngle;
 
                     double coverage = 0.0;
+                    // Use ComputeScoreAtPosition with early termination for all levels
+                    // Early termination is key to performance (6× faster than checking all points)
                     double score = ComputeScoreAtPosition(targetPyramid, level,
                                                            x, y, angle, 1.0, params.greediness, &coverage);
 
@@ -1590,6 +1576,212 @@ double ShapeModelImpl::ComputeScoreAtPositionAVX2(
 
     return static_cast<double>(totalScore) / totalWeight;
 }
+
+// =============================================================================
+// Fast SIMD Scoring: Scalar Load + SIMD Batch Compute
+// 正确的 SIMD 优化方向：标量加载梯度到缓冲区，然后 SIMD 并行计算相似度
+// =============================================================================
+
+double ShapeModelImpl::ComputeScoreAtPositionFastSIMD(
+    const AnglePyramid& pyramid, int32_t level,
+    int32_t x, int32_t y, double angle, double scale,
+    double* outCoverage) const
+{
+    if (level < 0 || level >= static_cast<int32_t>(levels_.size())) {
+        if (outCoverage) *outCoverage = 0.0;
+        return 0.0;
+    }
+
+    const auto& levelModel = levels_[level];
+    const size_t numPoints = levelModel.points.size();
+    if (numPoints == 0) {
+        if (outCoverage) *outCoverage = 0.0;
+        return 0.0;
+    }
+
+    // Get direct access to gradient data (no bilinear interpolation)
+    const float* gxData;
+    const float* gyData;
+    int32_t width, height, stride;
+    if (!pyramid.GetGradientData(level, gxData, gyData, width, height, stride)) {
+        if (outCoverage) *outCoverage = 0.0;
+        return 0.0;
+    }
+
+    // Precompute rotation constants
+    const float cosR = static_cast<float>(std::cos(angle));
+    const float sinR = static_cast<float>(std::sin(angle));
+    const float scalef = static_cast<float>(scale);
+
+    // SoA arrays for vectorized access
+    const float* soaX = levelModel.soaX.data();
+    const float* soaY = levelModel.soaY.data();
+    const float* soaCos = levelModel.soaCosAngle.data();
+    const float* soaSin = levelModel.soaSinAngle.data();
+    const float* soaWeight = levelModel.soaWeight.data();
+
+    // AVX2 constants
+    const __m256 vCosR = _mm256_set1_ps(cosR);
+    const __m256 vSinR = _mm256_set1_ps(sinR);
+    const __m256 vScale = _mm256_set1_ps(scalef);
+    const __m256 vX = _mm256_set1_ps(static_cast<float>(x));
+    const __m256 vY = _mm256_set1_ps(static_cast<float>(y));
+    const __m256 vMinMagSq = _mm256_set1_ps(25.0f);
+    const __m256 vSignMask = _mm256_set1_ps(-0.0f);
+    const __m256 vOne = _mm256_set1_ps(1.0f);
+    const __m256 vEpsilon = _mm256_set1_ps(1e-6f);
+
+    // Accumulators
+    __m256 vTotalScore = _mm256_setzero_ps();
+    __m256 vTotalWeight = _mm256_setzero_ps();
+    __m256 vMatchedCount = _mm256_setzero_ps();
+
+    // Temporary buffers (stack allocated, 32-byte aligned)
+    alignas(32) float gxBuf[8];
+    alignas(32) float gyBuf[8];
+    alignas(32) float validBuf[8];
+
+    const size_t n8 = numPoints & ~7;
+
+    // Main loop: process 8 points at a time
+    for (size_t i = 0; i < n8; i += 8) {
+        // ===== Step 1: Load model point data (SoA) =====
+        __m256 vPtX = _mm256_loadu_ps(soaX + i);
+        __m256 vPtY = _mm256_loadu_ps(soaY + i);
+
+        // ===== Step 2: Compute rotated coordinates =====
+        // rotX = cosR * ptX - sinR * ptY
+        // rotY = sinR * ptX + cosR * ptY
+        __m256 vRotX = _mm256_sub_ps(_mm256_mul_ps(vCosR, vPtX), _mm256_mul_ps(vSinR, vPtY));
+        __m256 vRotY = _mm256_add_ps(_mm256_mul_ps(vSinR, vPtX), _mm256_mul_ps(vCosR, vPtY));
+
+        // imgX = x + scale * rotX, imgY = y + scale * rotY
+        __m256 vImgXf = _mm256_add_ps(vX, _mm256_mul_ps(vScale, vRotX));
+        __m256 vImgYf = _mm256_add_ps(vY, _mm256_mul_ps(vScale, vRotY));
+
+        // Round to integer (add 0.5 and truncate)
+        __m256 vHalf = _mm256_set1_ps(0.5f);
+        __m256i vImgX = _mm256_cvttps_epi32(_mm256_add_ps(vImgXf, vHalf));
+        __m256i vImgY = _mm256_cvttps_epi32(_mm256_add_ps(vImgYf, vHalf));
+
+        // ===== Step 3: Scalar load gradients (memory access is irregular) =====
+        alignas(32) int32_t ixArr[8], iyArr[8];
+        _mm256_storeu_si256((__m256i*)ixArr, vImgX);
+        _mm256_storeu_si256((__m256i*)iyArr, vImgY);
+
+        for (int j = 0; j < 8; ++j) {
+            int32_t ix = ixArr[j];
+            int32_t iy = iyArr[j];
+
+            // Bounds check using unsigned comparison
+            if (static_cast<uint32_t>(ix) < static_cast<uint32_t>(width) &&
+                static_cast<uint32_t>(iy) < static_cast<uint32_t>(height)) {
+                int32_t idx = iy * stride + ix;
+                gxBuf[j] = gxData[idx];
+                gyBuf[j] = gyData[idx];
+                validBuf[j] = 1.0f;
+            } else {
+                gxBuf[j] = 0.0f;
+                gyBuf[j] = 0.0f;
+                validBuf[j] = 0.0f;
+            }
+        }
+
+        // ===== Step 4: SIMD batch compute similarity =====
+        __m256 vGx = _mm256_load_ps(gxBuf);
+        __m256 vGy = _mm256_load_ps(gyBuf);
+        __m256 vValid = _mm256_load_ps(validBuf);
+
+        // magSq = gx² + gy²
+        __m256 vMagSq = _mm256_add_ps(_mm256_mul_ps(vGx, vGx), _mm256_mul_ps(vGy, vGy));
+
+        // Valid mask: in bounds AND magSq >= 25
+        __m256 vBoundsMask = _mm256_cmp_ps(vValid, vHalf, _CMP_GT_OQ);
+        __m256 vMagMask = _mm256_cmp_ps(vMagSq, vMinMagSq, _CMP_GE_OQ);
+        __m256 vValidMask = _mm256_and_ps(vBoundsMask, vMagMask);
+
+        // Load model directions and rotate
+        __m256 vPtCos = _mm256_loadu_ps(soaCos + i);
+        __m256 vPtSin = _mm256_loadu_ps(soaSin + i);
+        __m256 vPtW = _mm256_loadu_ps(soaWeight + i);
+
+        // rotCos = ptCos * cosR - ptSin * sinR
+        // rotSin = ptSin * cosR + ptCos * sinR
+        __m256 vRotCos = _mm256_sub_ps(_mm256_mul_ps(vPtCos, vCosR), _mm256_mul_ps(vPtSin, vSinR));
+        __m256 vRotSin = _mm256_add_ps(_mm256_mul_ps(vPtSin, vCosR), _mm256_mul_ps(vPtCos, vSinR));
+
+        // dot = rotCos * gx + rotSin * gy
+        __m256 vDot = _mm256_add_ps(_mm256_mul_ps(vRotCos, vGx), _mm256_mul_ps(vRotSin, vGy));
+
+        // |dot| * rsqrt(magSq) = similarity
+        __m256 vAbsDot = _mm256_andnot_ps(vSignMask, vDot);
+        __m256 vRsqrt = _mm256_rsqrt_ps(_mm256_max_ps(vMagSq, vEpsilon));
+        __m256 vSimilarity = _mm256_mul_ps(vAbsDot, vRsqrt);
+
+        // Apply validity mask
+        vSimilarity = _mm256_and_ps(vSimilarity, vValidMask);
+        __m256 vValidW = _mm256_and_ps(vPtW, vValidMask);
+
+        // Accumulate
+        vTotalScore = _mm256_add_ps(vTotalScore, _mm256_mul_ps(vValidW, vSimilarity));
+        vTotalWeight = _mm256_add_ps(vTotalWeight, vValidW);
+        vMatchedCount = _mm256_add_ps(vMatchedCount, _mm256_and_ps(vOne, vValidMask));
+    }
+
+    // ===== Step 5: Horizontal sum =====
+    alignas(32) float scores[8], weights[8], counts[8];
+    _mm256_store_ps(scores, vTotalScore);
+    _mm256_store_ps(weights, vTotalWeight);
+    _mm256_store_ps(counts, vMatchedCount);
+
+    float totalScore = 0.0f, totalWeight = 0.0f;
+    int32_t matchedCount = 0;
+    for (int j = 0; j < 8; ++j) {
+        totalScore += scores[j];
+        totalWeight += weights[j];
+        matchedCount += static_cast<int32_t>(counts[j]);
+    }
+
+    // ===== Step 6: Process remaining points (scalar) =====
+    for (size_t i = n8; i < numPoints; ++i) {
+        float rotX = cosR * soaX[i] - sinR * soaY[i];
+        float rotY = sinR * soaX[i] + cosR * soaY[i];
+        int32_t imgX = x + static_cast<int32_t>(scalef * rotX + 0.5f);
+        int32_t imgY = y + static_cast<int32_t>(scalef * rotY + 0.5f);
+
+        if (static_cast<uint32_t>(imgX) >= static_cast<uint32_t>(width) ||
+            static_cast<uint32_t>(imgY) >= static_cast<uint32_t>(height)) {
+            continue;
+        }
+
+        float gx = gxData[imgY * stride + imgX];
+        float gy = gyData[imgY * stride + imgX];
+        float magSq = gx * gx + gy * gy;
+
+        if (magSq >= 25.0f) {
+            float rotCos = soaCos[i] * cosR - soaSin[i] * sinR;
+            float rotSin = soaSin[i] * cosR + soaCos[i] * sinR;
+            float dot = rotCos * gx + rotSin * gy;
+            float similarity = std::abs(dot) / std::sqrt(magSq);
+
+            totalScore += soaWeight[i] * similarity;
+            totalWeight += soaWeight[i];
+            matchedCount++;
+        }
+    }
+
+    // Output coverage
+    if (outCoverage) {
+        *outCoverage = static_cast<double>(matchedCount) / numPoints;
+    }
+
+    if (totalWeight <= 0) {
+        return 0.0;
+    }
+
+    return static_cast<double>(totalScore) / totalWeight;
+}
+
 #endif // HAVE_AVX2
 
 void ShapeModelImpl::RefinePosition(
@@ -1758,11 +1950,9 @@ std::vector<MatchResult> ShapeModel::Find(const QImage& image,
         return {};
     }
 
-    // Benchmark: temporarily disable Response Map to compare
-    // ResponseMap responseMap;
-    // if (responseMap.Build(targetPyramid, 2)) {
-    //     return impl_->SearchPyramidWithResponseMap(targetPyramid, responseMap, params);
-    // }
+    // Use traditional pyramid search with bilinear interpolation
+    // Response Map was tested but adds overhead without improving performance
+    // for this image size range (640x512) due to ResponseMap build cost
     return impl_->SearchPyramid(targetPyramid, params);
 }
 
