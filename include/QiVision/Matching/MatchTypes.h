@@ -191,6 +191,9 @@ struct SearchParams {
     // Polarity
     MatchPolarity polarity = MatchPolarity::Same;
 
+    // Non-maximum suppression (Halcon-compatible)
+    double maxOverlap = 0.5;        ///< Maximum overlap ratio for NMS [0, 1] (Halcon default: 0.5)
+
     // Builder pattern
     SearchParams& SetMinScore(double v) { minScore = v; return *this; }
     SearchParams& SetMaxMatches(int32_t v) { maxMatches = v; return *this; }
@@ -210,6 +213,7 @@ struct SearchParams {
     SearchParams& SetSubpixel(SubpixelMethod method) { subpixelMethod = method; return *this; }
     SearchParams& SetGreediness(double v) { greediness = v; return *this; }
     SearchParams& SetPolarity(MatchPolarity p) { polarity = p; return *this; }
+    SearchParams& SetMaxOverlap(double v) { maxOverlap = v; return *this; }
 };
 
 // =============================================================================
@@ -443,7 +447,7 @@ struct ModelStats {
 // =============================================================================
 
 /**
- * @brief Non-maximum suppression for match results
+ * @brief Non-maximum suppression for match results (distance-based)
  * @param matches Input matches
  * @param minDistance Minimum distance between matches
  * @return Filtered matches
@@ -470,6 +474,76 @@ inline std::vector<MatchResult> NonMaxSuppression(
                 break;
             }
         }
+        if (!suppress) {
+            result.push_back(match);
+        }
+    }
+
+    return result;
+}
+
+/**
+ * @brief Non-maximum suppression using overlap ratio (Halcon-compatible)
+ * @param matches Input matches (sorted by score descending)
+ * @param maxOverlap Maximum overlap ratio [0, 1] (Halcon default: 0.5)
+ * @param modelWidth Model bounding box width
+ * @param modelHeight Model bounding box height
+ * @return Filtered matches
+ *
+ * Overlap is computed as: intersection_area / min(area1, area2)
+ * where area is the model's bounding box transformed by each match.
+ */
+inline std::vector<MatchResult> NonMaxSuppressionOverlap(
+    const std::vector<MatchResult>& matches,
+    double maxOverlap,
+    double modelWidth,
+    double modelHeight)
+{
+    if (matches.empty()) return {};
+
+    // Matches should already be sorted by score (descending)
+    std::vector<MatchResult> result;
+    result.reserve(matches.size());
+
+    // For axis-aligned bounding boxes (simplified: ignore rotation for speed)
+    // More accurate: use OBB intersection, but much slower
+    for (const auto& match : matches) {
+        bool suppress = false;
+
+        // Compute match bounding box (account for scale)
+        double w1 = modelWidth * match.scaleX;
+        double h1 = modelHeight * match.scaleY;
+        double area1 = w1 * h1;
+
+        // Half-sizes for overlap computation
+        double hw1 = w1 * 0.5;
+        double hh1 = h1 * 0.5;
+
+        for (const auto& kept : result) {
+            double w2 = modelWidth * kept.scaleX;
+            double h2 = modelHeight * kept.scaleY;
+            double area2 = w2 * h2;
+            double hw2 = w2 * 0.5;
+            double hh2 = h2 * 0.5;
+
+            // AABB intersection
+            double dx = std::abs(match.x - kept.x);
+            double dy = std::abs(match.y - kept.y);
+
+            double overlapX = std::max(0.0, hw1 + hw2 - dx);
+            double overlapY = std::max(0.0, hh1 + hh2 - dy);
+            double intersectionArea = overlapX * overlapY;
+
+            // Overlap ratio = intersection / min(area1, area2)
+            double minArea = std::min(area1, area2);
+            double overlapRatio = (minArea > 0.0) ? (intersectionArea / minArea) : 0.0;
+
+            if (overlapRatio > maxOverlap) {
+                suppress = true;
+                break;
+            }
+        }
+
         if (!suppress) {
             result.push_back(match);
         }
