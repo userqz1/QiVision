@@ -15,8 +15,8 @@
 #include <QiVision/Core/Constants.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
-#include <cstring>
 #include <stdexcept>
 
 #ifdef _OPENMP
@@ -28,18 +28,6 @@
 #endif
 
 namespace Qi::Vision::Internal {
-
-// =============================================================================
-// OpenMP 阈值控制
-// =============================================================================
-
-/// 启用 OpenMP 的最小像素数阈值 (约 700×700)
-constexpr int32_t OPENMP_MIN_PIXELS = 500000;
-
-/// 判断是否使用 OpenMP 并行
-inline bool ShouldUseOpenMP(int32_t width, int32_t height) {
-    return static_cast<int64_t>(width) * height >= OPENMP_MIN_PIXELS;
-}
 
 // =============================================================================
 // SIMD Helper Functions
@@ -139,28 +127,31 @@ public:
     int32_t originalWidth_ = 0;
     int32_t originalHeight_ = 0;
     bool valid_ = false;
+    AnglePyramidTiming timing_;  // Timing statistics
 
     bool BuildLevel(const std::vector<float>& srcData, int32_t width, int32_t height,
                     int32_t level, double scale);
-    bool BuildLevelFused(const std::vector<float>& srcData, int32_t width, int32_t height,
-                         int32_t level, double scale);
     void ExtractEdgePointsForLevel(int32_t level);
 
-    // Optimized functions
+    // Optimized functions (combined for speed when not timing)
     void ComputeGradientMagnitudeDirectionOpt(const float* gx, const float* gy,
                                                float* mag, float* dir,
                                                int32_t width, int32_t height,
                                                int32_t gxStride, int32_t gyStride,
                                                int32_t magStride, int32_t dirStride);
 
+    // Separate functions for detailed timing
+    void ComputeMagnitudeOnly(const float* gx, const float* gy, float* mag,
+                              int32_t width, int32_t height,
+                              int32_t gxStride, int32_t gyStride, int32_t magStride);
+
+    void ComputeDirectionOnly(const float* gx, const float* gy, float* dir,
+                              int32_t width, int32_t height,
+                              int32_t gxStride, int32_t gyStride, int32_t dirStride);
+
     void QuantizeDirectionOpt(const float* dir, int16_t* bins,
                               int32_t width, int32_t height,
                               int32_t dirStride, int32_t binStride,
-                              int32_t numBins);
-
-    // Fused: Sobel + Mag + Dir + Quantize in one pass
-    void FusedSobelMagDirBin(const float* src, int32_t width, int32_t height,
-                              float* gx, float* gy, float* mag, float* dir, int16_t* bins,
                               int32_t numBins);
 };
 
@@ -171,12 +162,11 @@ void AnglePyramid::Impl::ComputeGradientMagnitudeDirectionOpt(
     int32_t gxStride, int32_t gyStride,
     int32_t magStride, int32_t dirStride)
 {
-    const bool useParallel = ShouldUseOpenMP(width, height);
-
 #ifdef __AVX2__
     const float twoPi = static_cast<float>(2.0 * PI);
 
-    auto processRow = [&](int32_t y) {
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < height; ++y) {
         const float* gxRow = gx + y * gxStride;
         const float* gyRow = gy + y * gyStride;
         float* magRow = mag + y * magStride;
@@ -208,27 +198,13 @@ void AnglePyramid::Impl::ComputeGradientMagnitudeDirectionOpt(
             if (angle < 0) angle += twoPi;
             dirRow[x] = angle;
         }
-    };
-
-#ifdef _OPENMP
-    if (useParallel) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
-        }
-    } else
-#endif
-    {
-        (void)useParallel;
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
-        }
     }
 #else
-    // Non-SIMD version
+    // Non-SIMD version with OpenMP
     const float twoPi = static_cast<float>(2.0 * PI);
 
-    auto processRow = [&](int32_t y) {
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < height; ++y) {
         const float* gxRow = gx + y * gxStride;
         const float* gyRow = gy + y * gyStride;
         float* magRow = mag + y * magStride;
@@ -242,20 +218,93 @@ void AnglePyramid::Impl::ComputeGradientMagnitudeDirectionOpt(
             if (angle < 0) angle += twoPi;
             dirRow[x] = angle;
         }
-    };
-
-#ifdef _OPENMP
-    if (useParallel) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
-        }
-    } else
+    }
 #endif
-    {
-        (void)useParallel;
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
+}
+
+// =============================================================================
+// Separate Magnitude and Direction functions for detailed timing
+// =============================================================================
+
+void AnglePyramid::Impl::ComputeMagnitudeOnly(
+    const float* gx, const float* gy, float* mag,
+    int32_t width, int32_t height,
+    int32_t gxStride, int32_t gyStride, int32_t magStride)
+{
+#ifdef __AVX2__
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < height; ++y) {
+        const float* gxRow = gx + y * gxStride;
+        const float* gyRow = gy + y * gyStride;
+        float* magRow = mag + y * magStride;
+
+        int32_t x = 0;
+        for (; x + 8 <= width; x += 8) {
+            __m256 vgx = _mm256_loadu_ps(gxRow + x);
+            __m256 vgy = _mm256_loadu_ps(gyRow + x);
+            __m256 gx2 = _mm256_mul_ps(vgx, vgx);
+            __m256 gy2 = _mm256_mul_ps(vgy, vgy);
+            __m256 vmag = fast_sqrt_avx2(_mm256_add_ps(gx2, gy2));
+            _mm256_storeu_ps(magRow + x, vmag);
+        }
+        for (; x < width; ++x) {
+            float gxVal = gxRow[x];
+            float gyVal = gyRow[x];
+            magRow[x] = std::sqrt(gxVal * gxVal + gyVal * gyVal);
+        }
+    }
+#else
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < height; ++y) {
+        const float* gxRow = gx + y * gxStride;
+        const float* gyRow = gy + y * gyStride;
+        float* magRow = mag + y * magStride;
+        for (int32_t x = 0; x < width; ++x) {
+            float gxVal = gxRow[x];
+            float gyVal = gyRow[x];
+            magRow[x] = std::sqrt(gxVal * gxVal + gyVal * gyVal);
+        }
+    }
+#endif
+}
+
+void AnglePyramid::Impl::ComputeDirectionOnly(
+    const float* gx, const float* gy, float* dir,
+    int32_t width, int32_t height,
+    int32_t gxStride, int32_t gyStride, int32_t dirStride)
+{
+    const float twoPi = static_cast<float>(2.0 * PI);
+
+#ifdef __AVX2__
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < height; ++y) {
+        const float* gxRow = gx + y * gxStride;
+        const float* gyRow = gy + y * gyStride;
+        float* dirRow = dir + y * dirStride;
+
+        int32_t x = 0;
+        for (; x + 8 <= width; x += 8) {
+            __m256 vgx = _mm256_loadu_ps(gxRow + x);
+            __m256 vgy = _mm256_loadu_ps(gyRow + x);
+            __m256 vdir = atan2_avx2(vgy, vgx);
+            _mm256_storeu_ps(dirRow + x, vdir);
+        }
+        for (; x < width; ++x) {
+            float angle = std::atan2(gyRow[x], gxRow[x]);
+            if (angle < 0) angle += twoPi;
+            dirRow[x] = angle;
+        }
+    }
+#else
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < height; ++y) {
+        const float* gxRow = gx + y * gxStride;
+        const float* gyRow = gy + y * gyStride;
+        float* dirRow = dir + y * dirStride;
+        for (int32_t x = 0; x < width; ++x) {
+            float angle = std::atan2(gyRow[x], gxRow[x]);
+            if (angle < 0) angle += twoPi;
+            dirRow[x] = angle;
         }
     }
 #endif
@@ -269,360 +318,52 @@ void AnglePyramid::Impl::QuantizeDirectionOpt(
 {
     const float binScale = static_cast<float>(numBins / (2.0 * PI));
     const int16_t maxBin = static_cast<int16_t>(numBins - 1);
-    const bool useParallel = ShouldUseOpenMP(width, height);
 
 #ifdef __AVX2__
     const __m256 vBinScale = _mm256_set1_ps(binScale);
     const __m256i vMaxBin = _mm256_set1_epi32(numBins - 1);
     const __m256i vZero = _mm256_setzero_si256();
 
-    auto processRow = [&](int32_t y) {
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < height; ++y) {
         const float* dirRow = dir + y * dirStride;
         int16_t* binRow = bins + y * binStride;
 
         int32_t x = 0;
-        // AVX2: process 8 pixels at a time
         for (; x + 8 <= width; x += 8) {
             __m256 vdir = _mm256_loadu_ps(dirRow + x);
             __m256 vbin_f = _mm256_mul_ps(vdir, vBinScale);
             __m256i vbin = _mm256_cvttps_epi32(vbin_f);
-
-            // Clamp to [0, numBins-1]
             vbin = _mm256_max_epi32(vbin, vZero);
             vbin = _mm256_min_epi32(vbin, vMaxBin);
-
-            // Pack 32-bit integers to 16-bit
             __m128i lo = _mm256_castsi256_si128(vbin);
             __m128i hi = _mm256_extracti128_si256(vbin, 1);
             __m128i packed = _mm_packs_epi32(lo, hi);
-
             _mm_storeu_si128(reinterpret_cast<__m128i*>(binRow + x), packed);
         }
-
-        // Scalar fallback
         for (; x < width; ++x) {
             int32_t bin = static_cast<int32_t>(dirRow[x] * binScale);
             binRow[x] = static_cast<int16_t>(std::clamp(bin, 0, static_cast<int32_t>(maxBin)));
         }
-    };
-
-#ifdef _OPENMP
-    if (useParallel) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
-        }
-    } else
-#endif
-    {
-        (void)useParallel;
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
-        }
     }
 #else
-    auto processRow = [&](int32_t y) {
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < height; ++y) {
         const float* dirRow = dir + y * dirStride;
         int16_t* binRow = bins + y * binStride;
-
         for (int32_t x = 0; x < width; ++x) {
             int32_t bin = static_cast<int32_t>(dirRow[x] * binScale);
             binRow[x] = static_cast<int16_t>(std::clamp(bin, 0, static_cast<int32_t>(maxBin)));
         }
-    };
-
-#ifdef _OPENMP
-    if (useParallel) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
-        }
-    } else
-#endif
-    {
-        (void)useParallel;
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
-        }
     }
 #endif
-}
-
-// =============================================================================
-// Fused Sobel + Magnitude + Direction + Quantize (single pass)
-// =============================================================================
-
-void AnglePyramid::Impl::FusedSobelMagDirBin(
-    const float* src, int32_t width, int32_t height,
-    float* gx, float* gy, float* mag, float* dir, int16_t* bins,
-    int32_t numBins)
-{
-    const float twoPi = static_cast<float>(2.0 * PI);
-    const float binScale = static_cast<float>(numBins) / twoPi;
-    const int16_t maxBin = static_cast<int16_t>(numBins - 1);
-    const bool useParallel = ShouldUseOpenMP(width, height);
-
-    // Sobel 3x3 kernel weights: [-1,0,1], [1,2,1]^T for Gx
-    // For center pixels (y=1..height-2, x=1..width-2)
-
-#ifdef __AVX2__
-    const __m256 vTwoPi = _mm256_set1_ps(twoPi);
-    const __m256 vBinScale = _mm256_set1_ps(binScale);
-    const __m256i vMaxBin = _mm256_set1_epi32(numBins - 1);
-    const __m256i vZero = _mm256_setzero_si256();
-
-    auto processRow = [&](int32_t y) {
-        const float* row0 = src + (y - 1) * width;
-        const float* row1 = src + y * width;
-        const float* row2 = src + (y + 1) * width;
-
-        float* gxRow = gx + y * width;
-        float* gyRow = gy + y * width;
-        float* magRow = mag + y * width;
-        float* dirRow = dir + y * width;
-        int16_t* binRow = bins + y * width;
-
-        // Border: x=0
-        gxRow[0] = 0; gyRow[0] = 0; magRow[0] = 0; dirRow[0] = 0; binRow[0] = 0;
-
-        int32_t x = 1;
-
-        // AVX2 vectorized: process 8 pixels at a time
-        for (; x + 8 < width; x += 8) {
-            // Load 10 values for Sobel (need x-1 to x+8)
-            // Gx = (p02 - p00) + 2*(p12 - p10) + (p22 - p20)
-            // Gy = (p20 - p00) + 2*(p21 - p01) + (p22 - p02)
-
-            __m256 p00 = _mm256_loadu_ps(row0 + x - 1);
-            __m256 p01 = _mm256_loadu_ps(row0 + x);
-            __m256 p02 = _mm256_loadu_ps(row0 + x + 1);
-
-            __m256 p10 = _mm256_loadu_ps(row1 + x - 1);
-            __m256 p12 = _mm256_loadu_ps(row1 + x + 1);
-
-            __m256 p20 = _mm256_loadu_ps(row2 + x - 1);
-            __m256 p21 = _mm256_loadu_ps(row2 + x);
-            __m256 p22 = _mm256_loadu_ps(row2 + x + 1);
-
-            // Gx = (p02 - p00) + 2*(p12 - p10) + (p22 - p20)
-            __m256 diff_top = _mm256_sub_ps(p02, p00);
-            __m256 diff_mid = _mm256_sub_ps(p12, p10);
-            __m256 diff_bot = _mm256_sub_ps(p22, p20);
-            __m256 vGx = _mm256_add_ps(diff_top, _mm256_add_ps(_mm256_add_ps(diff_mid, diff_mid), diff_bot));
-
-            // Gy = (p20 - p00) + 2*(p21 - p01) + (p22 - p02)
-            __m256 vert_left = _mm256_sub_ps(p20, p00);
-            __m256 vert_mid = _mm256_sub_ps(p21, p01);
-            __m256 vert_right = _mm256_sub_ps(p22, p02);
-            __m256 vGy = _mm256_add_ps(vert_left, _mm256_add_ps(_mm256_add_ps(vert_mid, vert_mid), vert_right));
-
-            // Store gradients
-            _mm256_storeu_ps(gxRow + x, vGx);
-            _mm256_storeu_ps(gyRow + x, vGy);
-
-            // Magnitude = sqrt(gx^2 + gy^2)
-            __m256 gx2 = _mm256_mul_ps(vGx, vGx);
-            __m256 gy2 = _mm256_mul_ps(vGy, vGy);
-            __m256 vMag = fast_sqrt_avx2(_mm256_add_ps(gx2, gy2));
-            _mm256_storeu_ps(magRow + x, vMag);
-
-            // Direction = atan2(gy, gx) in [0, 2π]
-            __m256 vDir = atan2_avx2(vGy, vGx);
-            _mm256_storeu_ps(dirRow + x, vDir);
-
-            // Quantize to bins
-            __m256 vBinF = _mm256_mul_ps(vDir, vBinScale);
-            __m256i vBin = _mm256_cvttps_epi32(vBinF);
-            vBin = _mm256_max_epi32(vBin, vZero);
-            vBin = _mm256_min_epi32(vBin, vMaxBin);
-
-            // Pack to int16
-            __m128i lo = _mm256_castsi256_si128(vBin);
-            __m128i hi = _mm256_extracti128_si256(vBin, 1);
-            __m128i packed = _mm_packs_epi32(lo, hi);
-            _mm_storeu_si128(reinterpret_cast<__m128i*>(binRow + x), packed);
-        }
-
-        // Scalar fallback for remaining pixels
-        for (; x < width - 1; ++x) {
-            float p00 = row0[x - 1], p01 = row0[x], p02 = row0[x + 1];
-            float p10 = row1[x - 1],               p12 = row1[x + 1];
-            float p20 = row2[x - 1], p21 = row2[x], p22 = row2[x + 1];
-
-            float gxVal = (p02 - p00) + 2.0f * (p12 - p10) + (p22 - p20);
-            float gyVal = (p20 - p00) + 2.0f * (p21 - p01) + (p22 - p02);
-
-            gxRow[x] = gxVal;
-            gyRow[x] = gyVal;
-            magRow[x] = std::sqrt(gxVal * gxVal + gyVal * gyVal);
-
-            float angle = std::atan2(gyVal, gxVal);
-            if (angle < 0) angle += twoPi;
-            dirRow[x] = angle;
-
-            int32_t bin = static_cast<int32_t>(angle * binScale);
-            binRow[x] = static_cast<int16_t>(std::clamp(bin, 0, static_cast<int32_t>(maxBin)));
-        }
-
-        // Border: x=width-1
-        gxRow[width-1] = 0; gyRow[width-1] = 0; magRow[width-1] = 0;
-        dirRow[width-1] = 0; binRow[width-1] = 0;
-    };
-
-#else
-    // Scalar version
-    auto processRow = [&](int32_t y) {
-        const float* row0 = src + (y - 1) * width;
-        const float* row1 = src + y * width;
-        const float* row2 = src + (y + 1) * width;
-
-        float* gxRow = gx + y * width;
-        float* gyRow = gy + y * width;
-        float* magRow = mag + y * width;
-        float* dirRow = dir + y * width;
-        int16_t* binRow = bins + y * width;
-
-        // Border: x=0
-        gxRow[0] = 0; gyRow[0] = 0; magRow[0] = 0; dirRow[0] = 0; binRow[0] = 0;
-
-        for (int32_t x = 1; x < width - 1; ++x) {
-            float p00 = row0[x - 1], p01 = row0[x], p02 = row0[x + 1];
-            float p10 = row1[x - 1],               p12 = row1[x + 1];
-            float p20 = row2[x - 1], p21 = row2[x], p22 = row2[x + 1];
-
-            float gxVal = (p02 - p00) + 2.0f * (p12 - p10) + (p22 - p20);
-            float gyVal = (p20 - p00) + 2.0f * (p21 - p01) + (p22 - p02);
-
-            gxRow[x] = gxVal;
-            gyRow[x] = gyVal;
-            magRow[x] = std::sqrt(gxVal * gxVal + gyVal * gyVal);
-
-            float angle = std::atan2(gyVal, gxVal);
-            if (angle < 0) angle += twoPi;
-            dirRow[x] = angle;
-
-            int32_t bin = static_cast<int32_t>(angle * binScale);
-            binRow[x] = static_cast<int16_t>(std::clamp(bin, 0, static_cast<int32_t>(maxBin)));
-        }
-
-        // Border: x=width-1
-        gxRow[width-1] = 0; gyRow[width-1] = 0; magRow[width-1] = 0;
-        dirRow[width-1] = 0; binRow[width-1] = 0;
-    };
-#endif
-
-    // First row (y=0): set to zero
-    std::memset(gx, 0, width * sizeof(float));
-    std::memset(gy, 0, width * sizeof(float));
-    std::memset(mag, 0, width * sizeof(float));
-    std::memset(dir, 0, width * sizeof(float));
-    std::memset(bins, 0, width * sizeof(int16_t));
-
-    // Process interior rows
-#ifdef _OPENMP
-    if (useParallel) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 1; y < height - 1; ++y) {
-            processRow(y);
-        }
-    } else
-#endif
-    {
-        (void)useParallel;
-        for (int32_t y = 1; y < height - 1; ++y) {
-            processRow(y);
-        }
-    }
-
-    // Last row (y=height-1): set to zero
-    int32_t lastRow = height - 1;
-    std::memset(gx + lastRow * width, 0, width * sizeof(float));
-    std::memset(gy + lastRow * width, 0, width * sizeof(float));
-    std::memset(mag + lastRow * width, 0, width * sizeof(float));
-    std::memset(dir + lastRow * width, 0, width * sizeof(float));
-    std::memset(bins + lastRow * width, 0, width * sizeof(int16_t));
-}
-
-// =============================================================================
-// BuildLevelFused: Use fused computation
-// =============================================================================
-
-bool AnglePyramid::Impl::BuildLevelFused(const std::vector<float>& srcData, int32_t width, int32_t height,
-                                          int32_t level, double scale) {
-    PyramidLevelData levelData;
-    levelData.level = level;
-    levelData.width = width;
-    levelData.height = height;
-    levelData.scale = scale;
-
-    size_t pixelCount = static_cast<size_t>(width) * height;
-
-    // Allocate contiguous buffers
-    std::vector<float> gxBuffer(pixelCount);
-    std::vector<float> gyBuffer(pixelCount);
-    std::vector<float> magBuffer(pixelCount);
-    std::vector<float> dirBuffer(pixelCount);
-    std::vector<int16_t> binBuffer(pixelCount);
-
-    // Fused computation: Sobel + Mag + Dir + Quantize in one pass
-    FusedSobelMagDirBin(srcData.data(), width, height,
-                        gxBuffer.data(), gyBuffer.data(),
-                        magBuffer.data(), dirBuffer.data(),
-                        binBuffer.data(), params_.angleBins);
-
-    // Create QImages and copy data
-    levelData.gradX = QImage(width, height, PixelType::Float32, ChannelType::Gray);
-    levelData.gradY = QImage(width, height, PixelType::Float32, ChannelType::Gray);
-    levelData.gradMag = QImage(width, height, PixelType::Float32, ChannelType::Gray);
-    levelData.gradDir = QImage(width, height, PixelType::Float32, ChannelType::Gray);
-    levelData.angleBinImage = QImage(width, height, PixelType::Int16, ChannelType::Gray);
-
-    float* gxDst = static_cast<float*>(levelData.gradX.Data());
-    float* gyDst = static_cast<float*>(levelData.gradY.Data());
-    float* magDst = static_cast<float*>(levelData.gradMag.Data());
-    float* dirDst = static_cast<float*>(levelData.gradDir.Data());
-    int16_t* binDst = static_cast<int16_t*>(levelData.angleBinImage.Data());
-
-    int32_t gxStride = levelData.gradX.Stride() / sizeof(float);
-    int32_t gyStride = levelData.gradY.Stride() / sizeof(float);
-    int32_t magStride = levelData.gradMag.Stride() / sizeof(float);
-    int32_t dirStride = levelData.gradDir.Stride() / sizeof(float);
-    int32_t binStride = levelData.angleBinImage.Stride() / sizeof(int16_t);
-
-    const bool useParallel = ShouldUseOpenMP(width, height);
-
-    auto copyRow = [&](int32_t y) {
-        for (int32_t x = 0; x < width; ++x) {
-            size_t srcIdx = y * width + x;
-            gxDst[y * gxStride + x] = gxBuffer[srcIdx];
-            gyDst[y * gyStride + x] = gyBuffer[srcIdx];
-            magDst[y * magStride + x] = magBuffer[srcIdx];
-            dirDst[y * dirStride + x] = dirBuffer[srcIdx];
-            binDst[y * binStride + x] = binBuffer[srcIdx];
-        }
-    };
-
-#ifdef _OPENMP
-    if (useParallel) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < height; ++y) {
-            copyRow(y);
-        }
-    } else
-#endif
-    {
-        (void)useParallel;
-        for (int32_t y = 0; y < height; ++y) {
-            copyRow(y);
-        }
-    }
-
-    levels_.push_back(std::move(levelData));
-    return true;
 }
 
 bool AnglePyramid::Impl::BuildLevel(const std::vector<float>& srcData, int32_t width, int32_t height,
                                     int32_t level, double scale) {
+    using Clock = std::chrono::high_resolution_clock;
+    auto t0 = Clock::now(), t1 = t0;
+
     PyramidLevelData levelData;
     levelData.level = level;
     levelData.width = width;
@@ -634,9 +375,14 @@ bool AnglePyramid::Impl::BuildLevel(const std::vector<float>& srcData, int32_t w
     std::vector<float> gyBuffer(static_cast<size_t>(width) * height);
 
     // Use Sobel operator for gradient computation (contiguous memory)
+    t0 = Clock::now();
     Gradient<float, float>(srcData.data(), gxBuffer.data(), gyBuffer.data(),
                            width, height,
                            GradientOperator::Sobel3x3, BorderMode::Reflect101);
+    t1 = Clock::now();
+    if (params_.enableTiming) {
+        timing_.sobelMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    }
 
     // Create QImage for storage
     QImage gx(width, height, PixelType::Float32, ChannelType::Gray);
@@ -647,29 +393,18 @@ bool AnglePyramid::Impl::BuildLevel(const std::vector<float>& srcData, int32_t w
     int32_t gxStride = gx.Stride() / sizeof(float);
     int32_t gyStride = gy.Stride() / sizeof(float);
 
-    // Copy with conditional OpenMP parallelization
-    const bool useParallel = ShouldUseOpenMP(width, height);
-
-    auto copyRow = [&](int32_t y) {
+    // Copy with OpenMP parallelization
+    t0 = Clock::now();
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < height; ++y) {
         for (int32_t x = 0; x < width; ++x) {
             gxDst[y * gxStride + x] = gxBuffer[y * width + x];
             gyDst[y * gyStride + x] = gyBuffer[y * width + x];
         }
-    };
-
-#ifdef _OPENMP
-    if (useParallel) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < height; ++y) {
-            copyRow(y);
-        }
-    } else
-#endif
-    {
-        (void)useParallel;
-        for (int32_t y = 0; y < height; ++y) {
-            copyRow(y);
-        }
+    }
+    t1 = Clock::now();
+    if (params_.enableTiming) {
+        timing_.copyMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
     }
 
     if (gx.Empty() || gy.Empty()) {
@@ -683,7 +418,7 @@ bool AnglePyramid::Impl::BuildLevel(const std::vector<float>& srcData, int32_t w
     levelData.gradMag = QImage(width, height, PixelType::Float32, ChannelType::Gray);
     levelData.gradDir = QImage(width, height, PixelType::Float32, ChannelType::Gray);
 
-    // Compute magnitude and direction with optimized SIMD + OpenMP
+    // Compute magnitude and direction
     const float* gxData = static_cast<const float*>(levelData.gradX.Data());
     const float* gyData = static_cast<const float*>(levelData.gradY.Data());
     float* magData = static_cast<float*>(levelData.gradMag.Data());
@@ -694,16 +429,35 @@ bool AnglePyramid::Impl::BuildLevel(const std::vector<float>& srcData, int32_t w
     int32_t magStr = levelData.gradMag.Stride() / sizeof(float);
     int32_t dirStr = levelData.gradDir.Stride() / sizeof(float);
 
-    ComputeGradientMagnitudeDirectionOpt(gxData, gyData, magData, dirData,
-                                          width, height,
-                                          gxStr, gyStr, magStr, dirStr);
+    if (params_.enableTiming) {
+        // Separate timing for sqrt and atan2
+        t0 = Clock::now();
+        ComputeMagnitudeOnly(gxData, gyData, magData, width, height, gxStr, gyStr, magStr);
+        t1 = Clock::now();
+        timing_.sqrtMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+        t0 = Clock::now();
+        ComputeDirectionOnly(gxData, gyData, dirData, width, height, gxStr, gyStr, dirStr);
+        t1 = Clock::now();
+        timing_.atan2Ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    } else {
+        // Combined computation (slightly faster)
+        ComputeGradientMagnitudeDirectionOpt(gxData, gyData, magData, dirData,
+                                              width, height,
+                                              gxStr, gyStr, magStr, dirStr);
+    }
 
     // Allocate and quantize direction to angle bins
     levelData.angleBinImage = QImage(width, height, PixelType::Int16, ChannelType::Gray);
     int16_t* binData = static_cast<int16_t*>(levelData.angleBinImage.Data());
     int32_t binStr = levelData.angleBinImage.Stride() / sizeof(int16_t);
 
+    t0 = Clock::now();
     QuantizeDirectionOpt(dirData, binData, width, height, dirStr, binStr, params_.angleBins);
+    t1 = Clock::now();
+    if (params_.enableTiming) {
+        timing_.quantizeMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    }
 
     levels_.push_back(std::move(levelData));
     return true;
@@ -726,49 +480,14 @@ void AnglePyramid::Impl::ExtractEdgePointsForLevel(int32_t level) {
     int32_t binStride = levelData.angleBinImage.Stride() / sizeof(int16_t);
 
     double minContrast = params_.minContrast;
-    const bool useParallel = ShouldUseOpenMP(levelData.width, levelData.height);
 
-#ifdef _OPENMP
-    if (useParallel) {
-        // For edge point extraction, we need thread-local vectors then merge
-        #pragma omp parallel
-        {
-            std::vector<EdgePoint> localPoints;
-            localPoints.reserve(1000);
-
-            #pragma omp for schedule(static) nowait
-            for (int32_t y = 1; y < levelData.height - 1; ++y) {
-                for (int32_t x = 1; x < levelData.width - 1; ++x) {
-                    float mag = magData[y * magStride + x];
-
-                    if (mag >= minContrast) {
-                        float dir = dirData[y * dirStride + x];
-                        int16_t bin = binData[y * binStride + x];
-
-                        localPoints.emplace_back(
-                            static_cast<double>(x),
-                            static_cast<double>(y),
-                            static_cast<double>(dir),
-                            static_cast<double>(mag),
-                            static_cast<int32_t>(bin)
-                        );
-                    }
-                }
-            }
-
-            #pragma omp critical
-            {
-                levelData.edgePoints.insert(levelData.edgePoints.end(),
-                                             localPoints.begin(), localPoints.end());
-            }
-        }
-    } else
-#endif
+    // For edge point extraction, we need thread-local vectors then merge
+    #pragma omp parallel
     {
-        // 小图: 单线程执行，避免 OpenMP 开销
-        (void)useParallel;
-        levelData.edgePoints.reserve(1000);
+        std::vector<EdgePoint> localPoints;
+        localPoints.reserve(1000);
 
+        #pragma omp for schedule(static) nowait
         for (int32_t y = 1; y < levelData.height - 1; ++y) {
             for (int32_t x = 1; x < levelData.width - 1; ++x) {
                 float mag = magData[y * magStride + x];
@@ -777,7 +496,7 @@ void AnglePyramid::Impl::ExtractEdgePointsForLevel(int32_t level) {
                     float dir = dirData[y * dirStride + x];
                     int16_t bin = binData[y * binStride + x];
 
-                    levelData.edgePoints.emplace_back(
+                    localPoints.emplace_back(
                         static_cast<double>(x),
                         static_cast<double>(y),
                         static_cast<double>(dir),
@@ -786,6 +505,12 @@ void AnglePyramid::Impl::ExtractEdgePointsForLevel(int32_t level) {
                     );
                 }
             }
+        }
+
+        #pragma omp critical
+        {
+            levelData.edgePoints.insert(levelData.edgePoints.end(),
+                                         localPoints.begin(), localPoints.end());
         }
     }
 }
@@ -813,11 +538,18 @@ AnglePyramid& AnglePyramid::operator=(const AnglePyramid& other) {
 AnglePyramid& AnglePyramid::operator=(AnglePyramid&& other) noexcept = default;
 
 bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) {
+    using Clock = std::chrono::high_resolution_clock;
+    auto totalStart = Clock::now();
+    auto t0 = totalStart, t1 = totalStart;
+
     Clear();
 
     if (image.Empty()) {
         return false;
     }
+
+    // Reset timing
+    impl_->timing_ = AnglePyramidTiming();
 
     // Validate parameters
     impl_->params_ = params;
@@ -834,7 +566,8 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
         return false;
     }
 
-    // Convert to float for processing (with conditional OpenMP)
+    // Convert to float for processing (with OpenMP)
+    t0 = Clock::now();
     QImage floatImage;
     if (image.Type() == PixelType::Float32) {
         floatImage = grayImage;
@@ -848,26 +581,16 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
         int32_t h = grayImage.Height();
         int32_t w = grayImage.Width();
 
-        const bool useParallel = ShouldUseOpenMP(w, h);
-
-#ifdef _OPENMP
-        if (useParallel) {
-            #pragma omp parallel for schedule(static)
-            for (int32_t y = 0; y < h; ++y) {
-                for (int32_t x = 0; x < w; ++x) {
-                    dstData[y * dstStride + x] = static_cast<float>(srcData[y * srcStride + x]);
-                }
-            }
-        } else
-#endif
-        {
-            (void)useParallel;
-            for (int32_t y = 0; y < h; ++y) {
-                for (int32_t x = 0; x < w; ++x) {
-                    dstData[y * dstStride + x] = static_cast<float>(srcData[y * srcStride + x]);
-                }
+        #pragma omp parallel for schedule(static)
+        for (int32_t y = 0; y < h; ++y) {
+            for (int32_t x = 0; x < w; ++x) {
+                dstData[y * dstStride + x] = static_cast<float>(srcData[y * srcStride + x]);
             }
         }
+    }
+    t1 = Clock::now();
+    if (params.enableTiming) {
+        impl_->timing_.toFloatMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
     }
 
     // Build Gaussian pyramid using the existing Pyramid module
@@ -884,30 +607,21 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
 
     std::vector<float> floatContiguous(floatWidth * floatHeight);
 
-    const bool useParallelCopy = ShouldUseOpenMP(floatWidth, floatHeight);
-
-#ifdef _OPENMP
-    if (useParallelCopy) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < floatHeight; ++y) {
-            for (int32_t x = 0; x < floatWidth; ++x) {
-                floatContiguous[y * floatWidth + x] = floatSrcData[y * floatStride + x];
-            }
-        }
-    } else
-#endif
-    {
-        (void)useParallelCopy;
-        for (int32_t y = 0; y < floatHeight; ++y) {
-            for (int32_t x = 0; x < floatWidth; ++x) {
-                floatContiguous[y * floatWidth + x] = floatSrcData[y * floatStride + x];
-            }
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < floatHeight; ++y) {
+        for (int32_t x = 0; x < floatWidth; ++x) {
+            floatContiguous[y * floatWidth + x] = floatSrcData[y * floatStride + x];
         }
     }
 
     // Use the float overload of BuildGaussianPyramid
+    t0 = Clock::now();
     ImagePyramid gaussPyramid = BuildGaussianPyramid(floatContiguous.data(),
                                                       floatWidth, floatHeight, pyramidParams);
+    t1 = Clock::now();
+    if (params.enableTiming) {
+        impl_->timing_.gaussPyramidMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    }
 
     // Update actual number of levels
     impl_->params_.numLevels = gaussPyramid.NumLevels();
@@ -918,22 +632,31 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
 
     for (int32_t level = 0; level < gaussPyramid.NumLevels(); ++level) {
         const auto& pyramidLevel = gaussPyramid.GetLevel(level);
-        // Use fused version: Sobel + Mag + Dir + Quantize in one pass
-        if (!impl_->BuildLevelFused(pyramidLevel.data, pyramidLevel.width, pyramidLevel.height,
-                                    level, scale)) {
+        if (!impl_->BuildLevel(pyramidLevel.data, pyramidLevel.width, pyramidLevel.height,
+                               level, scale)) {
             Clear();
             return false;
         }
         scale *= 0.5;
     }
 
-    // Extract edge points for each level (can be parallelized across levels)
-    // But levels are typically few (4-5), so parallel within each level is better
+    // Extract edge points for each level
+    t0 = Clock::now();
     for (int32_t level = 0; level < static_cast<int32_t>(impl_->levels_.size()); ++level) {
         impl_->ExtractEdgePointsForLevel(level);
     }
+    t1 = Clock::now();
+    if (params.enableTiming) {
+        impl_->timing_.extractEdgeMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    }
 
     impl_->valid_ = true;
+
+    // Calculate total time
+    if (params.enableTiming) {
+        impl_->timing_.totalMs = std::chrono::duration<double, std::milli>(Clock::now() - totalStart).count();
+    }
+
     return true;
 }
 
@@ -966,6 +689,10 @@ int32_t AnglePyramid::OriginalHeight() const {
 
 const AnglePyramidParams& AnglePyramid::GetParams() const {
     return impl_->params_;
+}
+
+const AnglePyramidTiming& AnglePyramid::GetTiming() const {
+    return impl_->timing_;
 }
 
 const PyramidLevelData& AnglePyramid::GetLevel(int32_t level) const {
@@ -1191,48 +918,13 @@ std::vector<EdgePoint> AnglePyramid::ExtractEdgePoints(int32_t level,
     int32_t dirStride = levelData.gradDir.Stride() / sizeof(float);
     int32_t binStride = levelData.angleBinImage.Stride() / sizeof(int16_t);
 
-    const bool useParallel = ShouldUseOpenMP(levelData.width, levelData.height);
-
-#ifdef _OPENMP
-    if (useParallel) {
-        // Use OpenMP with thread-local vectors
-        #pragma omp parallel
-        {
-            std::vector<EdgePoint> localPoints;
-            localPoints.reserve(1000);
-
-            #pragma omp for schedule(static) nowait
-            for (int32_t y = y0; y < y1; ++y) {
-                for (int32_t x = x0; x < x1; ++x) {
-                    float mag = magData[y * magStride + x];
-
-                    if (mag >= threshold) {
-                        float dir = dirData[y * dirStride + x];
-                        int16_t bin = binData[y * binStride + x];
-
-                        localPoints.emplace_back(
-                            static_cast<double>(x),
-                            static_cast<double>(y),
-                            static_cast<double>(dir),
-                            static_cast<double>(mag),
-                            static_cast<int32_t>(bin)
-                        );
-                    }
-                }
-            }
-
-            #pragma omp critical
-            {
-                result.insert(result.end(), localPoints.begin(), localPoints.end());
-            }
-        }
-    } else
-#endif
+    // Use OpenMP with thread-local vectors
+    #pragma omp parallel
     {
-        // 小图: 单线程执行
-        (void)useParallel;
-        result.reserve(1000);
+        std::vector<EdgePoint> localPoints;
+        localPoints.reserve(1000);
 
+        #pragma omp for schedule(static) nowait
         for (int32_t y = y0; y < y1; ++y) {
             for (int32_t x = x0; x < x1; ++x) {
                 float mag = magData[y * magStride + x];
@@ -1241,7 +933,7 @@ std::vector<EdgePoint> AnglePyramid::ExtractEdgePoints(int32_t level,
                     float dir = dirData[y * dirStride + x];
                     int16_t bin = binData[y * binStride + x];
 
-                    result.emplace_back(
+                    localPoints.emplace_back(
                         static_cast<double>(x),
                         static_cast<double>(y),
                         static_cast<double>(dir),
@@ -1250,6 +942,11 @@ std::vector<EdgePoint> AnglePyramid::ExtractEdgePoints(int32_t level,
                     );
                 }
             }
+        }
+
+        #pragma omp critical
+        {
+            result.insert(result.end(), localPoints.begin(), localPoints.end());
         }
     }
 
@@ -1325,30 +1022,15 @@ QImage ComputeGradientDirection(const QImage& gradX, const QImage& gradY) {
     int32_t outStride = result.Stride() / sizeof(float);
 
     const float twoPi = static_cast<float>(2.0 * PI);
-    const bool useParallel = ShouldUseOpenMP(width, height);
 
-    auto processRow = [&](int32_t y) {
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < height; ++y) {
         for (int32_t x = 0; x < width; ++x) {
             float gx = gxData[y * gxStride + x];
             float gy = gyData[y * gyStride + x];
             float angle = std::atan2(gy, gx);
             if (angle < 0) angle += twoPi;
             outData[y * outStride + x] = angle;
-        }
-    };
-
-#ifdef _OPENMP
-    if (useParallel) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
-        }
-    } else
-#endif
-    {
-        (void)useParallel;
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
         }
     }
 
@@ -1377,10 +1059,9 @@ QImage ComputeGradientMagnitude(const QImage& gradX, const QImage& gradY) {
     int32_t gyStride = gradY.Stride() / sizeof(float);
     int32_t outStride = result.Stride() / sizeof(float);
 
-    const bool useParallel = ShouldUseOpenMP(width, height);
-
 #ifdef __AVX2__
-    auto processRow = [&](int32_t y) {
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < height; ++y) {
         const float* gxRow = gxData + y * gxStride;
         const float* gyRow = gyData + y * gyStride;
         float* outRow = outData + y * outStride;
@@ -1399,43 +1080,14 @@ QImage ComputeGradientMagnitude(const QImage& gradX, const QImage& gradY) {
             float gy = gyRow[x];
             outRow[x] = std::sqrt(gx * gx + gy * gy);
         }
-    };
-
-#ifdef _OPENMP
-    if (useParallel) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
-        }
-    } else
-#endif
-    {
-        (void)useParallel;
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
-        }
     }
 #else
-    auto processRow = [&](int32_t y) {
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < height; ++y) {
         for (int32_t x = 0; x < width; ++x) {
             float gx = gxData[y * gxStride + x];
             float gy = gyData[y * gyStride + x];
             outData[y * outStride + x] = std::sqrt(gx * gx + gy * gy);
-        }
-    };
-
-#ifdef _OPENMP
-    if (useParallel) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
-        }
-    } else
-#endif
-    {
-        (void)useParallel;
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
         }
     }
 #endif
@@ -1460,29 +1112,14 @@ QImage QuantizeGradientDirection(const QImage& gradDir, int32_t numBins) {
     int32_t outStride = result.Stride() / sizeof(int16_t);
 
     double binScale = numBins / (2.0 * PI);
-    const bool useParallel = ShouldUseOpenMP(width, height);
 
-    auto processRow = [&](int32_t y) {
+    #pragma omp parallel for schedule(static)
+    for (int32_t y = 0; y < height; ++y) {
         for (int32_t x = 0; x < width; ++x) {
             float angle = dirData[y * dirStride + x];
             int32_t bin = static_cast<int32_t>(angle * binScale);
             bin = std::clamp(bin, 0, numBins - 1);
             outData[y * outStride + x] = static_cast<int16_t>(bin);
-        }
-    };
-
-#ifdef _OPENMP
-    if (useParallel) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
-        }
-    } else
-#endif
-    {
-        (void)useParallel;
-        for (int32_t y = 0; y < height; ++y) {
-            processRow(y);
         }
     }
 

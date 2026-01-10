@@ -19,6 +19,7 @@
 #include <QiVision/Core/Types.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <vector>
 
@@ -75,6 +76,7 @@ struct AnglePyramidParams {
     double minContrast = DEFAULT_MIN_CONTRAST;  ///< Minimum gradient magnitude
     double smoothSigma = 0.5;           ///< Gaussian smoothing before gradient
     bool useSubpixel = true;            ///< Use subpixel gradient interpolation
+    bool enableTiming = false;          ///< Enable detailed timing statistics
 
     // Builder pattern
     AnglePyramidParams& SetNumLevels(int32_t n) { numLevels = n; return *this; }
@@ -82,6 +84,34 @@ struct AnglePyramidParams {
     AnglePyramidParams& SetMinContrast(double v) { minContrast = v; return *this; }
     AnglePyramidParams& SetSmoothSigma(double v) { smoothSigma = v; return *this; }
     AnglePyramidParams& SetSubpixel(bool v) { useSubpixel = v; return *this; }
+    AnglePyramidParams& SetEnableTiming(bool v) { enableTiming = v; return *this; }
+};
+
+/**
+ * @brief Detailed timing statistics for AnglePyramid::Build
+ */
+struct AnglePyramidTiming {
+    double totalMs = 0.0;               ///< Total build time
+    double toFloatMs = 0.0;             ///< Convert to float
+    double gaussPyramidMs = 0.0;        ///< Build Gaussian pyramid (blur + downsample)
+    double sobelMs = 0.0;               ///< Sobel gradient (Gx, Gy)
+    double sqrtMs = 0.0;                ///< sqrt for magnitude
+    double atan2Ms = 0.0;               ///< atan2 for direction
+    double quantizeMs = 0.0;            ///< Quantize to bins
+    double extractEdgeMs = 0.0;         ///< Extract edge points
+    double copyMs = 0.0;                ///< Memory copy operations
+
+    void Print() const {
+        std::printf("[AnglePyramid Timing] Total: %.2fms\n", totalMs);
+        std::printf("  ToFloat:      %6.2fms (%4.1f%%)\n", toFloatMs, 100.0 * toFloatMs / totalMs);
+        std::printf("  GaussPyramid: %6.2fms (%4.1f%%)\n", gaussPyramidMs, 100.0 * gaussPyramidMs / totalMs);
+        std::printf("  Sobel:        %6.2fms (%4.1f%%)\n", sobelMs, 100.0 * sobelMs / totalMs);
+        std::printf("  Sqrt(mag):    %6.2fms (%4.1f%%)\n", sqrtMs, 100.0 * sqrtMs / totalMs);
+        std::printf("  Atan2(dir):   %6.2fms (%4.1f%%)\n", atan2Ms, 100.0 * atan2Ms / totalMs);
+        std::printf("  Quantize:     %6.2fms (%4.1f%%)\n", quantizeMs, 100.0 * quantizeMs / totalMs);
+        std::printf("  ExtractEdge:  %6.2fms (%4.1f%%)\n", extractEdgeMs, 100.0 * extractEdgeMs / totalMs);
+        std::printf("  Copy:         %6.2fms (%4.1f%%)\n", copyMs, 100.0 * copyMs / totalMs);
+    }
 };
 
 // =============================================================================
@@ -166,6 +196,12 @@ public:
     int32_t OriginalWidth() const;
     int32_t OriginalHeight() const;
     const AnglePyramidParams& GetParams() const;
+
+    /**
+     * @brief Get timing statistics from last Build() call
+     * @note Only valid if enableTiming was set in params
+     */
+    const AnglePyramidTiming& GetTiming() const;
 
     // =========================================================================
     // Level Access

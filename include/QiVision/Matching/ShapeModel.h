@@ -30,11 +30,73 @@
 #include <QiVision/Core/Types.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <vector>
 #include <string>
 
 namespace Qi::Vision::Matching {
+
+// =============================================================================
+// Timing Structures
+// =============================================================================
+
+/**
+ * @brief Detailed timing for ShapeModel::Create()
+ */
+struct ShapeModelCreateTiming {
+    double totalMs = 0.0;               ///< Total Create time
+    double pyramidBuildMs = 0.0;        ///< AnglePyramid::Build time
+    double contrastAutoMs = 0.0;        ///< Auto contrast detection time
+    double extractPointsMs = 0.0;       ///< Extract model points time
+    double optimizeMs = 0.0;            ///< Model optimization time
+    double buildSoAMs = 0.0;            ///< Build SoA data for SIMD
+
+    void Print() const {
+        std::printf("[ShapeModel Create Timing] Total: %.2fms\n", totalMs);
+        std::printf("  PyramidBuild:   %6.2fms (%4.1f%%)\n", pyramidBuildMs, 100.0 * pyramidBuildMs / totalMs);
+        std::printf("  ContrastAuto:   %6.2fms (%4.1f%%)\n", contrastAutoMs, 100.0 * contrastAutoMs / totalMs);
+        std::printf("  ExtractPoints:  %6.2fms (%4.1f%%)\n", extractPointsMs, 100.0 * extractPointsMs / totalMs);
+        std::printf("  Optimize:       %6.2fms (%4.1f%%)\n", optimizeMs, 100.0 * optimizeMs / totalMs);
+        std::printf("  BuildSoA:       %6.2fms (%4.1f%%)\n", buildSoAMs, 100.0 * buildSoAMs / totalMs);
+    }
+};
+
+/**
+ * @brief Detailed timing for ShapeModel::Find()
+ */
+struct ShapeModelFindTiming {
+    double totalMs = 0.0;               ///< Total Find time
+    double pyramidBuildMs = 0.0;        ///< AnglePyramid::Build time (for target image)
+    double coarseSearchMs = 0.0;        ///< Coarse search at top level
+    double pyramidRefineMs = 0.0;       ///< Pyramid refinement through levels
+    double subpixelRefineMs = 0.0;      ///< Subpixel refinement
+    double nmsMs = 0.0;                 ///< Non-maximum suppression
+    int32_t numCoarseCandidates = 0;    ///< Number of coarse candidates found
+    int32_t numFinalMatches = 0;        ///< Number of final matches
+
+    void Print() const {
+        std::printf("[ShapeModel Find Timing] Total: %.2fms\n", totalMs);
+        std::printf("  PyramidBuild:   %6.2fms (%4.1f%%)\n", pyramidBuildMs, 100.0 * pyramidBuildMs / totalMs);
+        std::printf("  CoarseSearch:   %6.2fms (%4.1f%%) - %d candidates\n",
+                    coarseSearchMs, 100.0 * coarseSearchMs / totalMs, numCoarseCandidates);
+        std::printf("  PyramidRefine:  %6.2fms (%4.1f%%)\n", pyramidRefineMs, 100.0 * pyramidRefineMs / totalMs);
+        std::printf("  SubpixelRefine: %6.2fms (%4.1f%%)\n", subpixelRefineMs, 100.0 * subpixelRefineMs / totalMs);
+        std::printf("  NMS:            %6.2fms (%4.1f%%) - %d matches\n",
+                    nmsMs, 100.0 * nmsMs / totalMs, numFinalMatches);
+    }
+};
+
+/**
+ * @brief Parameters for enabling timing in ShapeModel
+ */
+struct ShapeModelTimingParams {
+    bool enableTiming = false;          ///< Enable detailed timing statistics
+    bool printTiming = false;           ///< Print timing to stderr after each operation
+
+    ShapeModelTimingParams& SetEnableTiming(bool v) { enableTiming = v; return *this; }
+    ShapeModelTimingParams& SetPrintTiming(bool v) { printTiming = v; return *this; }
+};
 
 // Forward declarations
 namespace Internal {
@@ -252,6 +314,28 @@ public:
      */
     bool RefineMatch(const QImage& image, MatchResult& match,
                      SubpixelMethod method = SubpixelMethod::LeastSquares) const;
+
+    // =========================================================================
+    // Timing (Performance Profiling)
+    // =========================================================================
+
+    /**
+     * @brief Enable or disable timing collection
+     * @param params Timing parameters
+     */
+    void SetTimingParams(const ShapeModelTimingParams& params);
+
+    /**
+     * @brief Get timing from last Create() call
+     * @note Only valid if timing was enabled before Create()
+     */
+    const ShapeModelCreateTiming& GetCreateTiming() const;
+
+    /**
+     * @brief Get timing from last Find() call
+     * @note Only valid if timing was enabled before Find()
+     */
+    const ShapeModelFindTiming& GetFindTiming() const;
 
 private:
     std::unique_ptr<Internal::ShapeModelImpl> impl_;
