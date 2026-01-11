@@ -30,6 +30,25 @@
 namespace Qi::Vision::Internal {
 
 // =============================================================================
+// OpenMP 初始化
+// =============================================================================
+
+#ifdef _OPENMP
+namespace {
+/// 自动设置 OpenMP 线程数（只执行一次）
+struct OpenMPInitializer {
+    OpenMPInitializer() {
+        // 获取可用核心数，使用一半（避免超线程开销）
+        int numProcs = omp_get_num_procs();
+        int optimalThreads = std::max(1, std::min(numProcs / 2, 8));
+        omp_set_num_threads(optimalThreads);
+    }
+};
+static OpenMPInitializer g_ompInit;
+}
+#endif
+
+// =============================================================================
 // OpenMP 阈值控制
 // =============================================================================
 
