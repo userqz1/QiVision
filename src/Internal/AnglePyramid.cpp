@@ -15,6 +15,7 @@
 #include <QiVision/Core/Constants.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -158,6 +159,7 @@ public:
     int32_t originalWidth_ = 0;
     int32_t originalHeight_ = 0;
     bool valid_ = false;
+    AnglePyramidTiming timing_;  // Timing statistics
 
     bool BuildLevel(const std::vector<float>& srcData, int32_t width, int32_t height,
                     int32_t level, double scale);
@@ -838,6 +840,10 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
         return false;
     }
 
+    // Reset timing
+    impl_->timing_ = AnglePyramidTiming();
+    auto tTotal = std::chrono::high_resolution_clock::now();
+
     // Validate parameters
     impl_->params_ = params;
     impl_->params_.numLevels = std::clamp(params.numLevels, 1, ANGLE_PYRAMID_MAX_LEVELS);
@@ -854,6 +860,7 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
     }
 
     // Convert to float for processing (with conditional OpenMP)
+    auto tToFloat = std::chrono::high_resolution_clock::now();
     QImage floatImage;
     if (image.Type() == PixelType::Float32) {
         floatImage = grayImage;
@@ -888,6 +895,10 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
             }
         }
     }
+    if (params.enableTiming) {
+        impl_->timing_.toFloatMs = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - tToFloat).count();
+    }
 
     // Build Gaussian pyramid using the existing Pyramid module
     PyramidParams pyramidParams;
@@ -896,6 +907,7 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
     pyramidParams.minDimension = 16;
 
     // Extract float data from the float QImage (handle stride correctly)
+    auto tCopy = std::chrono::high_resolution_clock::now();
     int32_t floatWidth = floatImage.Width();
     int32_t floatHeight = floatImage.Height();
     int32_t floatStride = floatImage.Stride() / sizeof(float);
@@ -923,15 +935,25 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
             }
         }
     }
+    if (params.enableTiming) {
+        impl_->timing_.copyMs = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - tCopy).count();
+    }
 
     // Use the float overload of BuildGaussianPyramid
+    auto tGaussPyramid = std::chrono::high_resolution_clock::now();
     ImagePyramid gaussPyramid = BuildGaussianPyramid(floatContiguous.data(),
                                                       floatWidth, floatHeight, pyramidParams);
+    if (params.enableTiming) {
+        impl_->timing_.gaussPyramidMs = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - tGaussPyramid).count();
+    }
 
     // Update actual number of levels
     impl_->params_.numLevels = gaussPyramid.NumLevels();
 
     // Build angle pyramid for each level
+    auto tSobel = std::chrono::high_resolution_clock::now();
     impl_->levels_.reserve(gaussPyramid.NumLevels());
     double scale = 1.0;
 
@@ -945,11 +967,23 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
         }
         scale *= 0.5;
     }
+    if (params.enableTiming) {
+        impl_->timing_.sobelMs = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - tSobel).count();
+    }
 
-    // Extract edge points for each level (can be parallelized across levels)
-    // But levels are typically few (4-5), so parallel within each level is better
-    for (int32_t level = 0; level < static_cast<int32_t>(impl_->levels_.size()); ++level) {
-        impl_->ExtractEdgePointsForLevel(level);
+    // Extract edge points for each level (only if needed, e.g., for model creation)
+    auto tExtractEdge = std::chrono::high_resolution_clock::now();
+    if (params.extractEdgePoints) {
+        for (int32_t level = 0; level < static_cast<int32_t>(impl_->levels_.size()); ++level) {
+            impl_->ExtractEdgePointsForLevel(level);
+        }
+    }
+    if (params.enableTiming) {
+        impl_->timing_.extractEdgeMs = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - tExtractEdge).count();
+        impl_->timing_.totalMs = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - tTotal).count();
     }
 
     impl_->valid_ = true;
@@ -985,6 +1019,10 @@ int32_t AnglePyramid::OriginalHeight() const {
 
 const AnglePyramidParams& AnglePyramid::GetParams() const {
     return impl_->params_;
+}
+
+const AnglePyramidTiming& AnglePyramid::GetTiming() const {
+    return impl_->timing_;
 }
 
 const PyramidLevelData& AnglePyramid::GetLevel(int32_t level) const {

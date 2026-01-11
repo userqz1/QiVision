@@ -1758,12 +1758,14 @@ std::vector<MatchResult> ShapeModel::Find(const QImage& image,
         : impl_->params_.contrastHigh * 0.5;
     pyramidParams.minContrast = searchContrast;
     pyramidParams.smoothSigma = 0.5;
+    pyramidParams.extractEdgePoints = false;  // Not needed for search pyramid
 
     auto tPyramid = std::chrono::high_resolution_clock::now();
     AnglePyramid targetPyramid;
     if (!targetPyramid.Build(image, pyramidParams)) {
         return {};
     }
+
     if (impl_->timingParams_.enableTiming) {
         impl_->findTiming_.pyramidBuildMs = std::chrono::duration<double, std::milli>(
             std::chrono::high_resolution_clock::now() - tPyramid).count();

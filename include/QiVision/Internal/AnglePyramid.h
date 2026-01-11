@@ -77,6 +77,7 @@ struct AnglePyramidParams {
     double smoothSigma = 0.5;           ///< Gaussian smoothing before gradient
     bool useSubpixel = true;            ///< Use subpixel gradient interpolation
     bool enableTiming = false;          ///< Enable detailed timing statistics
+    bool extractEdgePoints = true;      ///< Extract edge points (false for search pyramid)
 
     // Builder pattern
     AnglePyramidParams& SetNumLevels(int32_t n) { numLevels = n; return *this; }
@@ -85,6 +86,7 @@ struct AnglePyramidParams {
     AnglePyramidParams& SetSmoothSigma(double v) { smoothSigma = v; return *this; }
     AnglePyramidParams& SetSubpixel(bool v) { useSubpixel = v; return *this; }
     AnglePyramidParams& SetEnableTiming(bool v) { enableTiming = v; return *this; }
+    AnglePyramidParams& SetExtractEdgePoints(bool v) { extractEdgePoints = v; return *this; }
 };
 
 /**
