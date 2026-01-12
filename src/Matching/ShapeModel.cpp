@@ -1,6 +1,6 @@
 /**
  * @file ShapeModel.cpp
- * @brief Implementation of shape-based template matching
+ * @brief Public API implementation for ShapeModel
  *
  * Performance: 86-407ms for 360° search on 640×512 images
  *
@@ -8,2135 +8,17 @@
  *       docs/design/ShapeModel_Optimization_Notes.md
  */
 
-#include <QiVision/Matching/ShapeModel.h>
-#include <QiVision/Internal/AnglePyramid.h>
-#include <QiVision/Internal/ResponseMap.h>
-#include <QiVision/Internal/Pyramid.h>
-#include <QiVision/Internal/Interpolate.h>
+#include "ShapeModelImpl.h"
 #include <QiVision/Platform/FileIO.h>
-#include <QiVision/Core/Constants.h>
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <limits>
-#include <queue>
-#include <set>
-#include <stdexcept>
-#include <unordered_map>
-
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-
-// SIMD intrinsics
-#if defined(__AVX2__)
-#include <immintrin.h>
-#define HAVE_AVX2 1
-#elif defined(__SSE4_1__)
-#include <smmintrin.h>
-#define HAVE_SSE4 1
-#endif
 
 namespace Qi::Vision::Matching {
 
-// Import Internal types
-using Qi::Vision::Internal::AnglePyramid;
-using Qi::Vision::Internal::AnglePyramidParams;
-using Qi::Vision::Internal::PyramidLevelData;
-using Qi::Vision::Internal::EdgePoint;
-using Qi::Vision::Internal::ResponseMap;
-using Qi::Vision::Internal::RotatedResponseModel;
-
 // =============================================================================
-// Implementation Class
-// =============================================================================
-
-namespace Internal {
-
-/**
- * @brief Model data for a single pyramid level
- *
- * Halcon-style dual block storage:
- * - Block 1 (points/soaX,Y...): Subpixel edge points for high-precision matching
- * - Block 2 (gridPoints/gridSoaX,Y...): Integer grid samples for fast coarse search
- *
- * Usage strategy:
- * - Coarse search (top pyramid levels): Use gridPoints (faster, integer positions)
- * - Fine refinement (level 0): Use points (subpixel accuracy)
- */
-struct LevelModel {
-    // Block 1: Subpixel edge points (from edge detection, irregular positions)
-    std::vector<ModelPoint> points;
-
-    // Block 2: Integer grid sample points (regular positions, faster for coarse search)
-    std::vector<ModelPoint> gridPoints;
-
-    int32_t width = 0;
-    int32_t height = 0;
-    double scale = 1.0;
-
-    // SoA for Block 1 (subpixel points)
-    std::vector<float> soaX;
-    std::vector<float> soaY;
-    std::vector<float> soaCosAngle;
-    std::vector<float> soaSinAngle;
-    std::vector<float> soaWeight;
-    std::vector<int16_t> soaAngleBin;  // Quantized angle bin index
-
-    // SoA for Block 2 (grid points)
-    std::vector<float> gridSoaX;
-    std::vector<float> gridSoaY;
-    std::vector<float> gridSoaCosAngle;
-    std::vector<float> gridSoaSinAngle;
-    std::vector<float> gridSoaWeight;
-    std::vector<int16_t> gridSoaAngleBin;  // Quantized angle bin index
-
-    void BuildSoA() {
-        // Regenerate gridPoints from points if empty (e.g., after loading from file)
-        if (gridPoints.empty() && !points.empty()) {
-            RegenerateGridPoints();
-        }
-
-        // Build SoA for Block 1 (subpixel points)
-        BuildSoAForPoints(points, soaX, soaY, soaCosAngle, soaSinAngle, soaWeight, soaAngleBin);
-
-        // Build SoA for Block 2 (grid points)
-        BuildSoAForPoints(gridPoints, gridSoaX, gridSoaY, gridSoaCosAngle, gridSoaSinAngle, gridSoaWeight, gridSoaAngleBin);
-    }
-
-    void RegenerateGridPoints() {
-        std::set<std::pair<int32_t, int32_t>> uniqueGridCoords;
-        gridPoints.clear();
-        gridPoints.reserve(points.size());
-
-        for (const auto& pt : points) {
-            int32_t gx = static_cast<int32_t>(std::round(pt.x));
-            int32_t gy = static_cast<int32_t>(std::round(pt.y));
-
-            auto key = std::make_pair(gx, gy);
-            if (uniqueGridCoords.find(key) == uniqueGridCoords.end()) {
-                uniqueGridCoords.insert(key);
-                gridPoints.emplace_back(static_cast<double>(gx), static_cast<double>(gy),
-                                       pt.angle, pt.magnitude, pt.angleBin, pt.weight);
-            }
-        }
-
-        // Sort by Y then X
-        std::sort(gridPoints.begin(), gridPoints.end(),
-            [](const ModelPoint& a, const ModelPoint& b) {
-                if (static_cast<int32_t>(a.y) != static_cast<int32_t>(b.y))
-                    return a.y < b.y;
-                return a.x < b.x;
-            });
-    }
-
-private:
-    static void BuildSoAForPoints(const std::vector<ModelPoint>& pts,
-                                   std::vector<float>& x, std::vector<float>& y,
-                                   std::vector<float>& cosA, std::vector<float>& sinA,
-                                   std::vector<float>& w, std::vector<int16_t>& bins) {
-        const size_t n = pts.size();
-        const size_t paddedN = (n + 7) & ~7;  // Pad to multiple of 8 for AVX2
-
-        x.resize(paddedN, 0.0f);
-        y.resize(paddedN, 0.0f);
-        cosA.resize(paddedN, 1.0f);
-        sinA.resize(paddedN, 0.0f);
-        w.resize(paddedN, 0.0f);
-        bins.resize(paddedN, 0);
-
-        for (size_t i = 0; i < n; ++i) {
-            x[i] = static_cast<float>(pts[i].x);
-            y[i] = static_cast<float>(pts[i].y);
-            cosA[i] = static_cast<float>(pts[i].cosAngle);
-            sinA[i] = static_cast<float>(pts[i].sinAngle);
-            w[i] = static_cast<float>(pts[i].weight);
-            bins[i] = static_cast<int16_t>(pts[i].angleBin);
-        }
-    }
-};
-
-/**
- * @brief Precomputed data for angle search
- */
-struct AngleData {
-    double angle = 0.0;
-    double cosA = 1.0;
-    double sinA = 0.0;
-};
-
-/**
- * @brief Precomputed rotated model point for fast score computation
- */
-struct RotatedPoint {
-    double offsetX;      // cosA * pt.x - sinA * pt.y
-    double offsetY;      // sinA * pt.x + cosA * pt.y
-    double expectedAngle; // pt.angle + angle
-    double weight;
-};
-
-/**
- * @brief Fast cosine lookup table for angle difference computation
- * Optimized with O(1) angle normalization instead of while loops
- */
-class FastCosTable {
-public:
-    static constexpr int TABLE_SIZE = 2048;
-    static constexpr int TABLE_MASK = TABLE_SIZE - 1;
-    static constexpr double TABLE_SCALE = TABLE_SIZE / (2.0 * PI);
-    static constexpr double INV_2PI = 1.0 / (2.0 * PI);
-    static constexpr double INV_PI = 1.0 / PI;
-
-    FastCosTable() {
-        for (int i = 0; i < TABLE_SIZE; ++i) {
-            double angle = (i * 2.0 * PI) / TABLE_SIZE;
-            table_[i] = static_cast<float>(std::cos(angle));
-        }
-    }
-
-    // Fast cosine with angle in radians - O(1) normalization
-    float FastCos(double angle) const {
-        // Fast normalization to [0, 2*PI) using floor
-        angle = angle - std::floor(angle * INV_2PI) * (2.0 * PI);
-        int idx = static_cast<int>(angle * TABLE_SCALE) & TABLE_MASK;
-        return table_[idx];
-    }
-
-    // Fast abs(cos) for symmetric similarity - O(1) normalization
-    // cos(x) has period 2π, |cos(x)| has period π
-    float FastAbsCos(double angleDiff) const {
-        // Fast normalization: |cos(x)| = |cos(x mod π)|
-        // Use fabs first, then normalize to [0, PI)
-        angleDiff = std::fabs(angleDiff);
-        angleDiff = angleDiff - std::floor(angleDiff * INV_PI) * PI;
-        int idx = static_cast<int>(angleDiff * TABLE_SCALE) & TABLE_MASK;
-        return std::fabs(table_[idx]);
-    }
-
-private:
-    float table_[TABLE_SIZE];
-};
-
-// Global cosine lookup table
-static const FastCosTable g_cosTable;
-
-// =============================================================================
-// Shape Model Implementation Class
-// =============================================================================
-
-class ShapeModelImpl {
-public:
-    // Model data
-    std::vector<LevelModel> levels_;
-    ModelParams params_;
-    Point2d origin_;
-    Size2i templateSize_;
-    bool valid_ = false;
-
-    // Timing configuration and results
-    ShapeModelTimingParams timingParams_;
-    ShapeModelCreateTiming createTiming_;
-    mutable ShapeModelFindTiming findTiming_;  // mutable for const Find()
-
-    // Model bounding box (cached)
-    double modelMinX_ = 0, modelMaxX_ = 0;
-    double modelMinY_ = 0, modelMaxY_ = 0;
-
-    // Precomputed angle data for common angles
-    std::vector<std::vector<AngleData>> angleCache_;
-
-    // Direction quantization lookup table for fast scoring
-    // cosLUT_[i] = |cos(i * 2π / numBins)| for i = 0..numBins-1
-    std::vector<float> cosLUT_;
-    int32_t numAngleBins_ = 0;  // Number of angle bins (same as AnglePyramid)
-
-    void BuildCosLUT(int32_t numBins);  // Build cos lookup table
-
-    // Methods
-    bool CreateModel(const QImage& image, const Rect2i& roi, const Point2d& origin);
-    void ExtractModelPoints(const AnglePyramid& pyramid);
-    void OptimizeModel();
-    void BuildAngleCache(double angleStart, double angleExtent, double angleStep);
-    void ComputeModelBounds();
-
-    std::vector<MatchResult> SearchPyramid(const AnglePyramid& targetPyramid,
-                                            const SearchParams& params) const;
-
-    // NEW: Fast search using Response Map
-    std::vector<MatchResult> SearchPyramidWithResponseMap(
-        const AnglePyramid& targetPyramid,
-        const ResponseMap& responseMap,
-        const SearchParams& params) const;
-
-    std::vector<MatchResult> SearchLevel(const AnglePyramid& targetPyramid,
-                                          int32_t level,
-                                          const std::vector<MatchResult>& candidates,
-                                          const SearchParams& params,
-                                          int32_t positionRadius = -1,   // -1 = auto
-                                          double angleRadiusDeg = -1) const;  // -1 = auto
-
-    // Score computation with optional grid points selection
-    // useGridPoints: true = use Block 2 (gridPoints) for fast coarse search
-    //                false = use Block 1 (points) for precise matching
-    double ComputeScoreAtPosition(const AnglePyramid& pyramid, int32_t level,
-                                   double x, double y, double angle, double scale,
-                                   double greediness, double* outCoverage = nullptr,
-                                   bool useGridPoints = false) const;
-
-    // Fast scoring for coarse levels - uses direct array access, no bilinear interpolation
-    double ComputeScoreAtPositionFast(const AnglePyramid& pyramid, int32_t level,
-                                       int32_t x, int32_t y, double angle, double scale,
-                                       double* outCoverage = nullptr) const;
-
-    // Optimized bilinear with direct pointer access + periodic early termination
-    double ComputeScoreBilinearScalar(const AnglePyramid& pyramid, int32_t level,
-                                       double x, double y, double angle, double scale,
-                                       double greediness, double* outCoverage = nullptr,
-                                       bool useGridPoints = false) const;
-
-    // SSE optimized scalar: keeps finest-grained greediness, uses SSE for math (rsqrt)
-    double ComputeScoreBilinearSSE(const AnglePyramid& pyramid, int32_t level,
-                                    double x, double y, double angle, double scale,
-                                    double greediness, double* outCoverage = nullptr,
-                                    bool useGridPoints = false) const;
-
-    // SSE optimized with precomputed sin/cos (for coarse search optimization)
-    double ComputeScoreWithSinCos(const AnglePyramid& pyramid, int32_t level,
-                                   double x, double y, float cosR, float sinR, double scale,
-                                   double greediness, double* outCoverage = nullptr,
-                                   bool useGridPoints = false) const;
-
-    // Direction-quantized scoring with lookup table (fastest for coarse search)
-    // Uses precomputed angle bins and cosine LUT to avoid sin/cos calculations
-    double ComputeScoreQuantized(const AnglePyramid& pyramid, int32_t level,
-                                  double x, double y, float cosR, float sinR, int32_t rotationBin,
-                                  double greediness, double* outCoverage = nullptr,
-                                  bool useGridPoints = false) const;
-
-    void RefinePosition(const AnglePyramid& pyramid, MatchResult& match,
-                        SubpixelMethod method) const;
-
-    // Helper to compute rotated bounds
-    static void ComputeRotatedBounds(const std::vector<ModelPoint>& points, double angle,
-                                     double& minX, double& maxX, double& minY, double& maxY);
-};
-
-bool ShapeModelImpl::CreateModel(const QImage& image, const Rect2i& roi, const Point2d& origin) {
-    // Reset timing
-    createTiming_ = ShapeModelCreateTiming();
-    auto tTotal = std::chrono::high_resolution_clock::now();
-    auto tStep = tTotal;
-
-    auto elapsedMs = [](auto start) {
-        return std::chrono::duration<double, std::milli>(
-            std::chrono::high_resolution_clock::now() - start).count();
-    };
-
-    // Build angle pyramid for template
-    AnglePyramidParams pyramidParams;
-
-    // Auto pyramid levels if not specified (Halcon: 'auto')
-    if (params_.numLevels <= 0) {
-        // Estimate based on template size
-        int32_t templateSize = std::max(roi.width > 0 ? roi.width : image.Width(),
-                                        roi.height > 0 ? roi.height : image.Height());
-        pyramidParams.numLevels = EstimateOptimalLevels(image.Width(), image.Height(),
-                                                         templateSize, templateSize);
-    } else {
-        pyramidParams.numLevels = params_.numLevels;
-    }
-    pyramidParams.smoothSigma = 0.5;
-
-    // For contrast auto-detection, use a very low initial threshold to get all gradients
-    bool needAutoContrast = (params_.contrastMode == ContrastMode::Auto ||
-                             params_.contrastMode == ContrastMode::AutoHysteresis ||
-                             params_.contrastMode == ContrastMode::AutoMinSize);
-
-    if (needAutoContrast) {
-        pyramidParams.minContrast = 1.0;  // Capture all gradients for analysis
-    } else {
-        // Manual mode: use contrastLow if hysteresis, otherwise contrastHigh
-        pyramidParams.minContrast = (params_.contrastLow > 0) ? params_.contrastLow : params_.contrastHigh;
-    }
-
-    // Extract ROI if specified
-    QImage templateImg;
-    if (roi.width > 0 && roi.height > 0) {
-        templateImg = image.SubImage(roi.x, roi.y, roi.width, roi.height);
-        templateSize_ = Size2i{roi.width, roi.height};
-    } else {
-        templateImg = image;
-        templateSize_ = Size2i{image.Width(), image.Height()};
-    }
-
-    if (templateImg.Empty()) {
-        return false;
-    }
-
-    // Build pyramid (with timing)
-    tStep = std::chrono::high_resolution_clock::now();
-    AnglePyramid pyramid;
-    if (!pyramid.Build(templateImg, pyramidParams)) {
-        return false;
-    }
-    if (timingParams_.enableTiming) {
-        createTiming_.pyramidBuildMs = elapsedMs(tStep);
-    }
-
-    // Auto-detect contrast threshold if requested (Halcon: 'auto_contrast', 'auto_contrast_hyst')
-    tStep = std::chrono::high_resolution_clock::now();
-    if (needAutoContrast) {
-        const auto& edgePoints = pyramid.GetEdgePoints(0);
-        if (!edgePoints.empty()) {
-            // Collect magnitudes and sort (ascending for Otsu)
-            std::vector<double> magnitudes;
-            magnitudes.reserve(edgePoints.size());
-            for (const auto& ep : edgePoints) {
-                magnitudes.push_back(ep.magnitude);
-            }
-            std::sort(magnitudes.begin(), magnitudes.end());
-
-            double minMag = magnitudes.front();
-            double maxMag = magnitudes.back();
-
-            // Estimate target point count based on template area
-            int32_t templateArea = templateSize_.width * templateSize_.height;
-            int32_t targetPoints;
-            if (templateArea < 2500) {           // < 50x50
-                targetPoints = std::min(300, static_cast<int32_t>(magnitudes.size() / 4));
-            } else if (templateArea < 10000) {   // < 100x100
-                targetPoints = std::min(800, static_cast<int32_t>(magnitudes.size() / 4));
-            } else if (templateArea < 40000) {   // < 200x200
-                targetPoints = std::min(1500, static_cast<int32_t>(magnitudes.size() / 5));
-            } else {
-                targetPoints = std::min(2500, static_cast<int32_t>(magnitudes.size() / 6));
-            }
-
-            // Helper: Compute Otsu threshold
-            auto computeOtsu = [&]() -> double {
-                const int32_t numBins = 256;
-                double range = maxMag - minMag;
-                if (range < 1e-6) return minMag;
-
-                // Build histogram
-                std::vector<int32_t> hist(numBins, 0);
-                for (double val : magnitudes) {
-                    int32_t bin = static_cast<int32_t>((val - minMag) / range * (numBins - 1));
-                    bin = std::clamp(bin, 0, numBins - 1);
-                    hist[bin]++;
-                }
-
-                // Otsu algorithm
-                int32_t total = static_cast<int32_t>(magnitudes.size());
-                double sumAll = 0.0;
-                for (int32_t i = 0; i < numBins; ++i) {
-                    sumAll += i * hist[i];
-                }
-
-                double sumBg = 0.0;
-                int32_t weightBg = 0;
-                double maxVariance = 0.0;
-                int32_t bestThreshold = 0;
-
-                for (int32_t t = 0; t < numBins; ++t) {
-                    weightBg += hist[t];
-                    if (weightBg == 0) continue;
-
-                    int32_t weightFg = total - weightBg;
-                    if (weightFg == 0) break;
-
-                    sumBg += t * hist[t];
-                    double meanBg = sumBg / weightBg;
-                    double meanFg = (sumAll - sumBg) / weightFg;
-
-                    double variance = static_cast<double>(weightBg) * weightFg *
-                                      (meanBg - meanFg) * (meanBg - meanFg);
-
-                    if (variance > maxVariance) {
-                        maxVariance = variance;
-                        bestThreshold = t;
-                    }
-                }
-
-                return minMag + (bestThreshold + 0.5) * range / numBins;
-            };
-
-            if (params_.contrastMode == ContrastMode::Auto) {
-                // Method A: Percentile based on target points
-                size_t targetIdx = (magnitudes.size() > static_cast<size_t>(targetPoints))
-                    ? magnitudes.size() - targetPoints : 0;
-                double percentileThreshold = magnitudes[targetIdx];
-
-                // Method B: Otsu threshold
-                double otsuThreshold = computeOtsu();
-
-                // Combine: use weighted average favoring the more conservative threshold
-                params_.contrastHigh = std::max(percentileThreshold, otsuThreshold) * 0.6 +
-                                       std::min(percentileThreshold, otsuThreshold) * 0.4;
-
-                // Boundary protection
-                params_.contrastHigh = std::clamp(params_.contrastHigh, 5.0, maxMag * 0.9);
-                params_.contrastLow = 0.0;  // No hysteresis for Auto mode
-            }
-            else if (params_.contrastMode == ContrastMode::AutoHysteresis) {
-                // High threshold: based on Otsu or top percentile
-                double otsuThreshold = computeOtsu();
-                size_t highIdx = magnitudes.size() * 3 / 4;  // 75th percentile
-                double percentileHigh = magnitudes[highIdx];
-
-                params_.contrastHigh = std::max(otsuThreshold, percentileHigh);
-                params_.contrastHigh = std::clamp(params_.contrastHigh, 8.0, maxMag * 0.85);
-
-                // Low threshold: 30-50% of high, based on gradient distribution
-                size_t lowIdx = magnitudes.size() / 2;  // 50th percentile (median)
-                double medianMag = magnitudes[lowIdx];
-
-                // Low = max(median * 0.6, high * 0.35)
-                params_.contrastLow = std::max(medianMag * 0.6, params_.contrastHigh * 0.35);
-                params_.contrastLow = std::clamp(params_.contrastLow, 3.0, params_.contrastHigh * 0.7);
-            }
-            else if (params_.contrastMode == ContrastMode::AutoMinSize) {
-                // Use Otsu with adjustment for small components
-                double otsuThreshold = computeOtsu();
-                params_.contrastHigh = std::clamp(otsuThreshold * 0.8, 5.0, maxMag * 0.9);
-                params_.contrastLow = 0.0;
-            }
-        } else {
-            params_.contrastHigh = 10.0;  // Default fallback
-            params_.contrastLow = 0.0;
-        }
-    }
-    if (timingParams_.enableTiming) {
-        createTiming_.contrastAutoMs = elapsedMs(tStep);
-    }
-
-    // Set origin
-    origin_ = origin;
-    if (origin_.x == 0 && origin_.y == 0) {
-        // Default: center of template
-        origin_.x = templateSize_.width / 2.0;
-        origin_.y = templateSize_.height / 2.0;
-    }
-
-    // Extract model points from pyramid
-    tStep = std::chrono::high_resolution_clock::now();
-    ExtractModelPoints(pyramid);
-    if (timingParams_.enableTiming) {
-        createTiming_.extractPointsMs = elapsedMs(tStep);
-    }
-
-    if (levels_.empty() || levels_[0].points.empty()) {
-        return false;
-    }
-
-    // Apply optimization (point reduction) based on mode
-    tStep = std::chrono::high_resolution_clock::now();
-    if (params_.optimization != OptimizationMode::None) {
-        OptimizeModel();
-    }
-    if (timingParams_.enableTiming) {
-        createTiming_.optimizeMs = elapsedMs(tStep);
-    }
-
-    // Compute model bounding box for search constraints
-    ComputeModelBounds();
-
-    // Build SoA data for SIMD optimization
-    tStep = std::chrono::high_resolution_clock::now();
-    for (auto& level : levels_) {
-        level.BuildSoA();
-    }
-
-    // Build cosine lookup table for direction-quantized scoring
-    // Get numBins from pyramid (default is 64)
-    const int16_t* binData;
-    int32_t w, h, s, numBins;
-    if (pyramid.GetAngleBinData(0, binData, w, h, s, numBins)) {
-        BuildCosLUT(numBins);
-    } else {
-        BuildCosLUT(64);  // Default fallback
-    }
-
-    if (timingParams_.enableTiming) {
-        createTiming_.buildSoAMs = elapsedMs(tStep);
-        createTiming_.totalMs = elapsedMs(tTotal);
-
-        if (timingParams_.printTiming) {
-            createTiming_.Print();
-        }
-    }
-
-    valid_ = true;
-    return true;
-}
-
-void ShapeModelImpl::ExtractModelPoints(const AnglePyramid& pyramid) {
-    levels_.clear();
-    levels_.resize(pyramid.NumLevels());
-
-    // Get contrast thresholds from parameters
-    double contrastHigh = params_.contrastHigh;
-    double contrastLow = (params_.contrastLow > 0) ? params_.contrastLow : contrastHigh;
-    double contrastMax = params_.contrastMax;
-    bool useHysteresis = (params_.contrastLow > 0 && params_.contrastLow < params_.contrastHigh);
-
-    for (int32_t level = 0; level < pyramid.NumLevels(); ++level) {
-        const auto& levelData = pyramid.GetLevel(level);
-        auto& levelModel = levels_[level];
-
-        levelModel.width = levelData.width;
-        levelModel.height = levelData.height;
-        levelModel.scale = levelData.scale;
-
-        // Scale origin and thresholds to this level
-        double levelOriginX = origin_.x * levelData.scale;
-        double levelOriginY = origin_.y * levelData.scale;
-        double levelScale = levelData.scale;  // e.g., 0.5 for level 1, 0.25 for level 2
-
-        // Scale contrast thresholds for pyramid level (gradients are weaker at coarser levels)
-        // Gradient magnitude scales with image resolution
-        double levelContrastHigh = contrastHigh * levelScale;
-        double levelContrastLow = contrastLow * levelScale;
-        double levelContrastMax = contrastMax * levelScale;
-
-        // Ensure minimum thresholds
-        levelContrastHigh = std::max(2.0, levelContrastHigh);
-        levelContrastLow = std::max(1.0, levelContrastLow);
-
-        // Extract edge points with sufficient contrast
-        const auto& edgePoints = pyramid.GetEdgePoints(level);
-
-        // Collect all valid points
-        std::vector<ModelPoint> allPoints;
-        allPoints.reserve(edgePoints.size());
-
-        if (useHysteresis) {
-            // Hysteresis thresholding with BFS propagation (like Canny):
-            // 1. Classify points into strong/weak/discard
-            // 2. BFS from strong points to connect adjacent weak points
-            // 3. Connected weak points are kept, isolated weak points are discarded
-
-            const double gridSize = 1.5;  // Connectivity radius
-            const double gridSizeSq = gridSize * gridSize;
-
-            // Classify edge points
-            std::vector<int32_t> strongIndices;
-            std::vector<int32_t> weakIndices;
-            std::vector<ModelPoint> allCandidates;
-
-            for (size_t i = 0; i < edgePoints.size(); ++i) {
-                const auto& ep = edgePoints[i];
-                if (ep.magnitude > levelContrastMax) continue;
-
-                double relX = ep.x - levelOriginX;
-                double relY = ep.y - levelOriginY;
-
-                if (ep.magnitude >= levelContrastHigh) {
-                    strongIndices.push_back(static_cast<int32_t>(allCandidates.size()));
-                    allCandidates.emplace_back(relX, relY, ep.angle, ep.magnitude, ep.angleBin, 1.0);
-                } else if (ep.magnitude >= levelContrastLow) {
-                    weakIndices.push_back(static_cast<int32_t>(allCandidates.size()));
-                    allCandidates.emplace_back(relX, relY, ep.angle, ep.magnitude, ep.angleBin, 1.0);
-                }
-                // magnitude < levelContrastLow: discard
-            }
-
-            // Keep flag: 0=unvisited, 1=keep
-            std::vector<int8_t> keepFlag(allCandidates.size(), 0);
-
-            // All strong points are kept
-            for (int32_t idx : strongIndices) {
-                keepFlag[idx] = 1;
-            }
-
-            // Build spatial hash grid for weak points (accelerate neighbor search)
-            std::unordered_map<int64_t, std::vector<int32_t>> weakGrid;
-            auto toGridKey = [gridSize](double x, double y) -> int64_t {
-                int32_t gx = static_cast<int32_t>(std::floor(x / gridSize));
-                int32_t gy = static_cast<int32_t>(std::floor(y / gridSize));
-                return (static_cast<int64_t>(gx) << 32) | static_cast<uint32_t>(gy);
-            };
-
-            for (int32_t idx : weakIndices) {
-                int64_t key = toGridKey(allCandidates[idx].x, allCandidates[idx].y);
-                weakGrid[key].push_back(idx);
-            }
-
-            // BFS propagation from strong points
-            std::queue<int32_t> bfsQueue;
-            for (int32_t idx : strongIndices) {
-                bfsQueue.push(idx);
-            }
-
-            while (!bfsQueue.empty()) {
-                int32_t currentIdx = bfsQueue.front();
-                bfsQueue.pop();
-
-                const auto& currentPt = allCandidates[currentIdx];
-                int32_t gx = static_cast<int32_t>(std::floor(currentPt.x / gridSize));
-                int32_t gy = static_cast<int32_t>(std::floor(currentPt.y / gridSize));
-
-                // Check 3x3 neighboring grid cells
-                for (int32_t dy = -1; dy <= 1; ++dy) {
-                    for (int32_t dx = -1; dx <= 1; ++dx) {
-                        int64_t neighborKey = (static_cast<int64_t>(gx + dx) << 32) |
-                                               static_cast<uint32_t>(gy + dy);
-
-                        auto it = weakGrid.find(neighborKey);
-                        if (it == weakGrid.end()) continue;
-
-                        for (int32_t weakIdx : it->second) {
-                            if (keepFlag[weakIdx] != 0) continue;  // Already processed
-
-                            // Check distance
-                            double ddx = allCandidates[weakIdx].x - currentPt.x;
-                            double ddy = allCandidates[weakIdx].y - currentPt.y;
-                            if (ddx * ddx + ddy * ddy <= gridSizeSq) {
-                                keepFlag[weakIdx] = 1;  // Keep this weak point
-                                bfsQueue.push(weakIdx);  // Continue propagation
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Collect all kept points
-            for (size_t i = 0; i < allCandidates.size(); ++i) {
-                if (keepFlag[i] == 1) {
-                    allPoints.push_back(allCandidates[i]);
-                }
-            }
-        } else {
-            // Single threshold: simple magnitude check
-            for (const auto& ep : edgePoints) {
-                if (ep.magnitude >= levelContrastHigh && ep.magnitude <= levelContrastMax) {
-                    double relX = ep.x - levelOriginX;
-                    double relY = ep.y - levelOriginY;
-                    allPoints.emplace_back(relX, relY, ep.angle, ep.magnitude, ep.angleBin, 1.0);
-                }
-            }
-        }
-
-        // Determine maximum points based on optimization mode
-        int32_t maxPoints;
-        switch (params_.optimization) {
-            case OptimizationMode::None:
-                maxPoints = 100000;  // Essentially unlimited
-                break;
-            case OptimizationMode::PointReductionLow:
-                maxPoints = (level == 0) ? 3000 : (level == 1) ? 600 : 200;
-                break;
-            case OptimizationMode::PointReductionMedium:
-                maxPoints = (level == 0) ? 2000 : (level == 1) ? 400 : 150;
-                break;
-            case OptimizationMode::PointReductionHigh:
-                maxPoints = (level == 0) ? 1000 : (level == 1) ? 200 : 80;
-                break;
-            case OptimizationMode::Auto:
-            default:
-                // Auto: based on template size
-                int32_t templateDim = std::max(templateSize_.width, templateSize_.height);
-                if (templateDim <= 100) {
-                    maxPoints = (level == 0) ? 500 : (level == 1) ? 150 : 50;
-                } else if (templateDim <= 300) {
-                    maxPoints = (level == 0) ? 1500 : (level == 1) ? 300 : 100;
-                } else {
-                    maxPoints = (level == 0) ? 2500 : (level == 1) ? 500 : 180;
-                }
-                break;
-        }
-
-        if (static_cast<int32_t>(allPoints.size()) > maxPoints) {
-            // Sort by magnitude (keep strongest)
-            std::sort(allPoints.begin(), allPoints.end(),
-                [](const ModelPoint& a, const ModelPoint& b) {
-                    return a.magnitude > b.magnitude;
-                });
-            allPoints.resize(maxPoints);
-        }
-
-        // Block 1: Subpixel edge points (original positions)
-        levelModel.points = allPoints;
-
-        // Block 2: Integer grid sample points (Halcon-style)
-        // Generate points at integer grid positions for fast coarse search
-        // This is done by rounding subpixel positions to nearest integer and deduplicating
-        {
-            std::set<std::pair<int32_t, int32_t>> uniqueGridCoords;
-            std::vector<ModelPoint> gridPts;
-            gridPts.reserve(allPoints.size() * 2);
-
-            for (const auto& pt : allPoints) {
-                // Round to nearest integer grid position
-                int32_t gx = static_cast<int32_t>(std::round(pt.x));
-                int32_t gy = static_cast<int32_t>(std::round(pt.y));
-
-                auto key = std::make_pair(gx, gy);
-                if (uniqueGridCoords.find(key) == uniqueGridCoords.end()) {
-                    uniqueGridCoords.insert(key);
-                    // Create grid point with integer coordinates but same gradient direction
-                    gridPts.emplace_back(static_cast<double>(gx), static_cast<double>(gy),
-                                        pt.angle, pt.magnitude, pt.angleBin, pt.weight);
-                }
-            }
-
-            // Sort grid points by Y then X (Halcon-style ordering)
-            std::sort(gridPts.begin(), gridPts.end(),
-                [](const ModelPoint& a, const ModelPoint& b) {
-                    if (static_cast<int32_t>(a.y) != static_cast<int32_t>(b.y))
-                        return a.y < b.y;
-                    return a.x < b.x;
-                });
-
-            levelModel.gridPoints = std::move(gridPts);
-        }
-    }
-}
-
-void ShapeModelImpl::OptimizeModel() {
-    // Determine minimum point spacing based on optimization mode
-    double minSpacing = 1.0;
-    switch (params_.optimization) {
-        case OptimizationMode::None:
-            minSpacing = 0.0;  // No spacing filter
-            break;
-        case OptimizationMode::PointReductionLow:
-            minSpacing = 1.5;
-            break;
-        case OptimizationMode::PointReductionMedium:
-            minSpacing = 2.0;
-            break;
-        case OptimizationMode::PointReductionHigh:
-            minSpacing = 3.0;
-            break;
-        case OptimizationMode::Auto:
-        default:
-            // Auto spacing based on template size
-            int32_t templateDim = std::max(templateSize_.width, templateSize_.height);
-            if (templateDim <= 100) {
-                minSpacing = 1.5;
-            } else if (templateDim <= 300) {
-                minSpacing = 2.0;
-            } else {
-                minSpacing = 2.5;
-            }
-            break;
-    }
-
-    // Apply minimum spacing filter
-    if (minSpacing > 0.5) {
-        double minDistSq = minSpacing * minSpacing;
-
-        for (auto& level : levels_) {
-            if (level.points.empty()) continue;
-
-            std::vector<ModelPoint> filtered;
-            filtered.reserve(level.points.size());
-
-            // Sort by magnitude first (keep strongest)
-            std::sort(level.points.begin(), level.points.end(),
-                [](const ModelPoint& a, const ModelPoint& b) {
-                    return a.magnitude > b.magnitude;
-                });
-
-            for (const auto& pt : level.points) {
-                bool tooClose = false;
-                for (const auto& kept : filtered) {
-                    double dx = pt.x - kept.x;
-                    double dy = pt.y - kept.y;
-                    if (dx * dx + dy * dy < minDistSq) {
-                        tooClose = true;
-                        break;
-                    }
-                }
-                if (!tooClose) {
-                    filtered.push_back(pt);
-                }
-            }
-
-            level.points = std::move(filtered);
-        }
-    }
-
-    // Normalize weights
-    for (auto& level : levels_) {
-        if (level.points.empty()) continue;
-
-        double totalWeight = 0.0;
-        for (const auto& pt : level.points) {
-            totalWeight += pt.weight;
-        }
-        if (totalWeight > 0) {
-            for (auto& pt : level.points) {
-                pt.weight /= totalWeight;
-            }
-        }
-    }
-}
-
-void ShapeModelImpl::BuildCosLUT(int32_t numBins) {
-    numAngleBins_ = numBins;
-    cosLUT_.resize(numBins);
-
-    // cosLUT_[i] = |cos(i * 2π / numBins)|
-    // For matching: similarity = cosLUT_[(modelBin + rotationBin - imageBin) & (numBins-1)]
-    const double step = 2.0 * PI / numBins;
-    for (int32_t i = 0; i < numBins; ++i) {
-        cosLUT_[i] = static_cast<float>(std::fabs(std::cos(i * step)));
-    }
-}
-
-void ShapeModelImpl::BuildAngleCache(double angleStart, double angleExtent, double angleStep) {
-    angleCache_.clear();
-
-    if (angleStep <= 0) {
-        // Auto-compute angle step based on model size
-        int32_t modelSize = std::max(templateSize_.width, templateSize_.height);
-        angleStep = EstimateAngleStep(modelSize);
-    }
-
-    int32_t numAngles = static_cast<int32_t>(std::ceil(angleExtent / angleStep)) + 1;
-    angleCache_.resize(levels_.size());
-
-    for (size_t level = 0; level < levels_.size(); ++level) {
-        angleCache_[level].resize(numAngles);
-
-        for (int32_t i = 0; i < numAngles; ++i) {
-            double angle = angleStart + i * angleStep;
-            angleCache_[level][i].angle = angle;
-            angleCache_[level][i].cosA = std::cos(angle);
-            angleCache_[level][i].sinA = std::sin(angle);
-        }
-    }
-}
-
-void ShapeModelImpl::ComputeModelBounds() {
-    if (levels_.empty() || levels_[0].points.empty()) {
-        modelMinX_ = modelMaxX_ = modelMinY_ = modelMaxY_ = 0;
-        return;
-    }
-
-    modelMinX_ = modelMinY_ = std::numeric_limits<double>::max();
-    modelMaxX_ = modelMaxY_ = std::numeric_limits<double>::lowest();
-
-    for (const auto& pt : levels_[0].points) {
-        modelMinX_ = std::min(modelMinX_, pt.x);
-        modelMaxX_ = std::max(modelMaxX_, pt.x);
-        modelMinY_ = std::min(modelMinY_, pt.y);
-        modelMaxY_ = std::max(modelMaxY_, pt.y);
-    }
-}
-
-void ShapeModelImpl::ComputeRotatedBounds(const std::vector<ModelPoint>& points, double angle,
-                                          double& minX, double& maxX, double& minY, double& maxY) {
-    if (points.empty()) {
-        minX = maxX = minY = maxY = 0;
-        return;
-    }
-
-    double cosA = std::cos(angle);
-    double sinA = std::sin(angle);
-
-    minX = minY = std::numeric_limits<double>::max();
-    maxX = maxY = std::numeric_limits<double>::lowest();
-
-    for (const auto& pt : points) {
-        double rx = cosA * pt.x - sinA * pt.y;
-        double ry = sinA * pt.x + cosA * pt.y;
-        minX = std::min(minX, rx);
-        maxX = std::max(maxX, rx);
-        minY = std::min(minY, ry);
-        maxY = std::max(maxY, ry);
-    }
-}
-
-std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
-    const AnglePyramid& targetPyramid,
-    const SearchParams& params) const
-{
-    if (!valid_ || levels_.empty()) {
-        return {};
-    }
-
-    // Performance timing
-    auto t0 = std::chrono::high_resolution_clock::now();
-    auto t1 = t0, t2 = t0, t3 = t0, t4 = t0;
-
-    // Start from coarsest level
-    int32_t startLevel = std::min(static_cast<int32_t>(levels_.size()) - 1,
-                                   targetPyramid.NumLevels() - 1);
-
-    // Initialize candidates at top level (search all positions)
-    std::vector<MatchResult> candidates;
-
-    // =========================================================================
-    // TWO-PHASE ANGLE SEARCH STRATEGY
-    // =========================================================================
-    // Problem: Fine angle step (0.6°) leads to 720 angles for 360° search → SLOW
-    // Solution: Coarse angle search (6°) → 60 angles, then refine best candidates
-    //
-    // Phase 1 (Coarse): Search with 6° step at top pyramid level
-    // Phase 2 (Fine):   Refine each candidate ±6° with 0.5° step in SearchLevel
-    // =========================================================================
-
-    // Fine angle step for final refinement (used in SearchLevel)
-    double fineAngleStep = params.angleStep;
-    if (fineAngleStep <= 0) {
-        fineAngleStep = EstimateAngleStep(std::max(templateSize_.width, templateSize_.height));
-    }
-
-    // COARSE angle step for top-level search: 6° = ~0.1 radians
-    // This reduces angles from 720 to 60 for 360° search (12× speedup!)
-    // Note: 12° step missed matches - 6° is the safe limit
-    constexpr double COARSE_ANGLE_STEP = 0.1;  // ~6 degrees
-    double coarseAngleStep = std::max(fineAngleStep, COARSE_ANGLE_STEP);
-
-    // Coarse search at top level
-    const auto& topLevel = levels_[startLevel];
-    int32_t targetWidth = targetPyramid.GetWidth(startLevel);
-    int32_t targetHeight = targetPyramid.GetHeight(startLevel);
-
-    // Search grid at top level
-    // Step 2: ~1280 positions for 80×64 image
-    int32_t stepSize = 2;
-
-    // Build COARSE angle list for parallel processing
-    std::vector<double> angles;
-    for (double angle = params.angleStart;
-         angle <= params.angleStart + params.angleExtent;
-         angle += coarseAngleStep) {
-        angles.push_back(angle);
-    }
-
-    // OpenMP parallelization over angles (coarse-grained parallelism)
-    #pragma omp parallel
-    {
-        std::vector<MatchResult> localCandidates;
-
-        #pragma omp for schedule(dynamic)
-        for (size_t ai = 0; ai < angles.size(); ++ai) {
-            const double angle = angles[ai];
-
-            // Precompute sin/cos once per angle (optimization: avoid repeated trig calls)
-            const float cosR = static_cast<float>(std::cos(angle));
-            const float sinR = static_cast<float>(std::sin(angle));
-
-            // Compute rotation bin for quantized scoring
-            // angle -> bin: (angle / 2π) * numBins, normalized to [0, 2π)
-            double normAngle = angle - std::floor(angle / (2.0 * PI)) * (2.0 * PI);
-            int32_t rotationBin = (numAngleBins_ > 0) ?
-                static_cast<int32_t>(normAngle * numAngleBins_ / (2.0 * PI)) % numAngleBins_ : 0;
-
-            // Compute rotated model bounds
-            double rMinX, rMaxX, rMinY, rMaxY;
-            ComputeRotatedBounds(topLevel.points, angle, rMinX, rMaxX, rMinY, rMaxY);
-
-            // Valid search region: ensure all model points stay inside image
-            int32_t searchXMin = static_cast<int32_t>(std::ceil(-rMinX));
-            int32_t searchXMax = static_cast<int32_t>(std::floor(targetWidth - 1 - rMaxX));
-            int32_t searchYMin = static_cast<int32_t>(std::ceil(-rMinY));
-            int32_t searchYMax = static_cast<int32_t>(std::floor(targetHeight - 1 - rMaxY));
-
-            // Clamp to valid range
-            searchXMin = std::max(0, searchXMin);
-            searchYMin = std::max(0, searchYMin);
-            searchXMax = std::min(targetWidth - 1, searchXMax);
-            searchYMax = std::min(targetHeight - 1, searchYMax);
-
-            // Skip if no valid search region
-            if (searchXMin > searchXMax || searchYMin > searchYMax) {
-                continue;
-            }
-
-            for (int32_t y = searchYMin; y <= searchYMax; y += stepSize) {
-                for (int32_t x = searchXMin; x <= searchXMax; x += stepSize) {
-                    double coverage = 0.0;
-                    // Use precomputed sin/cos for faster scoring
-                    // (Quantized scoring with LUT was tested but showed no improvement due to
-                    //  random memory access patterns causing cache misses)
-                    double score = ComputeScoreWithSinCos(targetPyramid, startLevel,
-                                                           x, y, cosR, sinR, 1.0, params.greediness, &coverage,
-                                                           false);
-
-                    // Require good coverage (at least 70% of model points visible)
-                    // Use 0.7 * minScore as coarse threshold (was 0.5, too many false candidates)
-                    if (score >= params.minScore * 0.7 && coverage >= 0.7) {
-                        MatchResult result;
-                        result.x = x;
-                        result.y = y;
-                        result.angle = angle;
-                        result.score = score;
-                        result.pyramidLevel = startLevel;
-                        localCandidates.push_back(result);
-                    }
-                }
-            }
-        }
-
-        // Merge local results into global candidates
-        #pragma omp critical
-        {
-            candidates.insert(candidates.end(), localCandidates.begin(), localCandidates.end());
-        }
-    }
-
-    // Sort candidates by score
-    std::sort(candidates.begin(), candidates.end());
-
-    t1 = std::chrono::high_resolution_clock::now();
-    size_t coarseCandidates = candidates.size();
-
-    // Record coarse search timing
-    if (timingParams_.enableTiming) {
-        findTiming_.coarseSearchMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-        findTiming_.numCoarseCandidates = static_cast<int32_t>(coarseCandidates);
-    }
-
-    // Limit candidates for efficiency (tighter limit for speed)
-    if (candidates.size() > 200) {
-        candidates.resize(200);
-    }
-
-    // Refine through pyramid levels
-    // HALCON-style angle index passing: gradually narrow angle search range
-    for (int32_t level = startLevel - 1; level >= 0; --level) {
-        // Angle radius: ±6° at top, halving each level down to ±1° at bottom
-        double angleRadiusDeg = 6.0 / (1 << (startLevel - 1 - level));
-        angleRadiusDeg = std::max(1.0, angleRadiusDeg);  // Minimum ±1°
-
-        candidates = SearchLevel(targetPyramid, level, candidates, params, -1, angleRadiusDeg);
-
-        // Re-sort and limit
-        std::sort(candidates.begin(), candidates.end());
-        size_t limit = (level == 0) ? 50 : 100;
-        if (candidates.size() > limit) {
-            candidates.resize(limit);
-        }
-    }
-
-    t2 = std::chrono::high_resolution_clock::now();
-
-    // Record pyramid refinement timing
-    if (timingParams_.enableTiming) {
-        findTiming_.pyramidRefineMs = std::chrono::duration<double, std::milli>(t2 - t1).count();
-    }
-
-    // Final refinement at level 0
-    for (auto& match : candidates) {
-        if (params.subpixelMethod != SubpixelMethod::None) {
-            RefinePosition(targetPyramid, match, params.subpixelMethod);
-        }
-
-        // Scale coordinates back to original image
-        double scale = levels_[0].scale;
-        if (scale != 1.0) {
-            match.x /= scale;
-            match.y /= scale;
-        }
-    }
-
-    t3 = std::chrono::high_resolution_clock::now();
-
-    // Record subpixel refinement timing
-    if (timingParams_.enableTiming) {
-        findTiming_.subpixelRefineMs = std::chrono::duration<double, std::milli>(t3 - t2).count();
-    }
-
-    // Filter by final score threshold
-    std::vector<MatchResult> results;
-    for (const auto& match : candidates) {
-        if (match.score >= params.minScore) {
-            results.push_back(match);
-        }
-    }
-
-    // Apply non-maximum suppression
-    results = NonMaxSuppression(results, 10.0);
-
-    // Limit results
-    if (params.maxMatches > 0 && static_cast<int32_t>(results.size()) > params.maxMatches) {
-        results.resize(params.maxMatches);
-    }
-
-    t4 = std::chrono::high_resolution_clock::now();
-
-    // Record NMS timing (for struct-based timing, stderr print is kept for backward compatibility)
-    if (timingParams_.enableTiming) {
-        findTiming_.nmsMs = std::chrono::duration<double, std::milli>(t4 - t3).count();
-    }
-
-    // Print timing breakdown when explicitly requested
-    if (timingParams_.printTiming) {
-        auto ms = [](auto start, auto end) {
-            return std::chrono::duration<double, std::milli>(end - start).count();
-        };
-        fprintf(stderr, "[Timing] Coarse: %.1fms (%zu candidates), Refine: %.1fms, SubPix: %.1fms, NMS: %.1fms | Total: %.1fms\n",
-                ms(t0, t1), coarseCandidates, ms(t1, t2), ms(t2, t3), ms(t3, t4), ms(t0, t4));
-    }
-
-    return results;
-}
-
-// =============================================================================
-// Response Map Based Fast Search
-// =============================================================================
-
-std::vector<MatchResult> ShapeModelImpl::SearchPyramidWithResponseMap(
-    const AnglePyramid& targetPyramid,
-    const ResponseMap& responseMap,
-    const SearchParams& params) const
-{
-    if (!valid_ || levels_.empty()) {
-        return {};
-    }
-
-    // Start from coarsest level
-    int32_t startLevel = std::min(static_cast<int32_t>(levels_.size()) - 1,
-                                   targetPyramid.NumLevels() - 1);
-    startLevel = std::min(startLevel, responseMap.NumLevels() - 1);
-
-    // Build angle search list
-    double angleStep = params.angleStep;
-    if (angleStep <= 0) {
-        angleStep = EstimateAngleStep(std::max(templateSize_.width, templateSize_.height));
-    }
-
-    // Precompute rotated models for all angles
-    const auto& topLevelModel = levels_[startLevel];
-    auto rotatedModels = ResponseMap::PrepareAllRotations(
-        topLevelModel.points, params.angleStart, params.angleExtent, angleStep);
-
-#ifdef QIVISION_DEBUG
-    fprintf(stderr, "[SearchRM] startLevel=%d, model levels=%zu, model points=%zu\n",
-            startLevel, levels_.size(), topLevelModel.points.size());
-    fprintf(stderr, "[SearchRM] angleStart=%.3f, angleExtent=%.3f, angleStep=%.4f, numAngles=%zu\n",
-            params.angleStart, params.angleExtent, angleStep, rotatedModels.size());
-#endif
-
-    // Coarse search at top level using Response Map with O(1) lookups
-    std::vector<MatchResult> candidates;
-    int32_t targetWidth = responseMap.GetWidth(startLevel);
-    int32_t targetHeight = responseMap.GetHeight(startLevel);
-
-    // Search grid (every 2 pixels at top level)
-    int32_t stepSize = 2;
-
-    // OpenMP parallelization over angles (same as original SearchPyramid)
-    #pragma omp parallel
-    {
-        std::vector<MatchResult> localCandidates;
-
-        #pragma omp for schedule(dynamic)
-        for (size_t angleIdx = 0; angleIdx < rotatedModels.size(); ++angleIdx) {
-            const auto& rotatedModel = rotatedModels[angleIdx];
-
-            // Valid search region based on bounding box
-            int32_t searchXMin = std::max(0, -static_cast<int32_t>(rotatedModel.minX));
-            int32_t searchXMax = std::min(targetWidth - 1,
-                                           targetWidth - 1 - static_cast<int32_t>(rotatedModel.maxX));
-            int32_t searchYMin = std::max(0, -static_cast<int32_t>(rotatedModel.minY));
-            int32_t searchYMax = std::min(targetHeight - 1,
-                                           targetHeight - 1 - static_cast<int32_t>(rotatedModel.maxY));
-
-            // Skip if no valid search region
-            if (searchXMin > searchXMax || searchYMin > searchYMax) {
-                continue;
-            }
-
-            for (int32_t y = searchYMin; y <= searchYMax; y += stepSize) {
-                for (int32_t x = searchXMin; x <= searchXMax; x += stepSize) {
-                    double coverage = 0.0;
-                    double score = responseMap.ComputeScore(rotatedModel, startLevel,
-                                                            x, y, &coverage);
-
-                    // Use same thresholds as original SearchPyramid
-                    if (score >= params.minScore * 0.5 && coverage >= 0.7) {
-                        MatchResult result;
-                        result.x = x;
-                        result.y = y;
-                        result.angle = rotatedModel.angle;
-                        result.score = score;
-                        result.pyramidLevel = startLevel;
-                        localCandidates.push_back(result);
-                    }
-                }
-            }
-        }
-
-        // Merge local results into global candidates
-        #pragma omp critical
-        {
-            candidates.insert(candidates.end(), localCandidates.begin(), localCandidates.end());
-        }
-    }
-
-    // Sort candidates by score
-    std::sort(candidates.begin(), candidates.end());
-
-    // Limit candidates for efficiency (same as original)
-    if (candidates.size() > 1000) {
-        candidates.resize(1000);
-    }
-
-#ifdef QIVISION_DEBUG
-    if (!candidates.empty()) {
-        fprintf(stderr, "[SearchRM] Best candidate: score=%.4f at (%.1f, %.1f) angle=%.3f\n",
-                candidates[0].score, candidates[0].x, candidates[0].y, candidates[0].angle);
-    }
-#endif
-
-    // Refine through pyramid levels using PRECISE scoring (bilinear interpolation)
-    // Response Map is O(1) but lacks subpixel precision - use only for coarse search
-    for (int32_t level = startLevel - 1; level >= 0; --level) {
-        std::vector<MatchResult> refined;
-        refined.reserve(candidates.size());
-
-        double scaleFactor = 2.0;
-        int32_t searchRadius = 2;
-        double angleRadius = 0.1;
-
-        int32_t levelWidth = targetPyramid.GetWidth(level);
-        int32_t levelHeight = targetPyramid.GetHeight(level);
-
-        for (const auto& candidate : candidates) {
-            double baseX = candidate.x * scaleFactor;
-            double baseY = candidate.y * scaleFactor;
-            double baseAngle = candidate.angle;
-
-            MatchResult bestMatch;
-            bestMatch.score = -1.0;
-            double bestCoverage = 0.0;
-
-            // Local search around candidate using PRECISE bilinear interpolation
-            for (int32_t dy = -searchRadius; dy <= searchRadius; ++dy) {
-                for (int32_t dx = -searchRadius; dx <= searchRadius; ++dx) {
-                    double px = baseX + dx;
-                    double py = baseY + dy;
-
-                    if (px < 0 || px >= levelWidth || py < 0 || py >= levelHeight) {
-                        continue;
-                    }
-
-                    // Angle refinement
-                    for (double dAngle = -angleRadius; dAngle <= angleRadius; dAngle += 0.02) {
-                        double angle = baseAngle + dAngle;
-                        double coverage = 0.0;
-                        double score = ComputeScoreAtPosition(targetPyramid, level,
-                                                              px, py, angle, 1.0,
-                                                              params.greediness, &coverage);
-
-                        if (coverage >= 0.7 && score > bestMatch.score) {
-                            bestMatch.x = px;
-                            bestMatch.y = py;
-                            bestMatch.angle = angle;
-                            bestMatch.score = score;
-                            bestMatch.pyramidLevel = level;
-                            bestCoverage = coverage;
-                        }
-                    }
-                }
-            }
-
-            if (bestMatch.score >= params.minScore * 0.5 && bestCoverage >= 0.6) {
-                refined.push_back(bestMatch);
-            }
-        }
-
-        candidates = std::move(refined);
-
-        // Re-sort and limit
-        std::sort(candidates.begin(), candidates.end());
-        if (candidates.size() > 500) {
-            candidates.resize(500);
-        }
-    }
-
-    // Final precise refinement at level 0
-    for (auto& match : candidates) {
-        // Re-score with precise method
-        double coverage = 0.0;
-        match.score = ComputeScoreAtPosition(targetPyramid, 0,
-                                              match.x, match.y, match.angle, 1.0,
-                                              0.0, &coverage);
-
-        // Subpixel refinement
-        if (params.subpixelMethod != SubpixelMethod::None) {
-            RefinePosition(targetPyramid, match, params.subpixelMethod);
-        }
-
-        // Scale coordinates back to original image
-        double scale = levels_[0].scale;
-        if (scale != 1.0) {
-            match.x /= scale;
-            match.y /= scale;
-        }
-    }
-
-    // Filter by final score threshold
-    std::vector<MatchResult> results;
-    for (const auto& match : candidates) {
-        if (match.score >= params.minScore) {
-            results.push_back(match);
-        }
-    }
-
-    // Apply non-maximum suppression
-    results = NonMaxSuppression(results, 10.0);
-
-    // Limit results
-    if (params.maxMatches > 0 && static_cast<int32_t>(results.size()) > params.maxMatches) {
-        results.resize(params.maxMatches);
-    }
-
-    return results;
-}
-
-std::vector<MatchResult> ShapeModelImpl::SearchLevel(
-    const AnglePyramid& targetPyramid,
-    int32_t level,
-    const std::vector<MatchResult>& candidates,
-    const SearchParams& params,
-    int32_t positionRadius,
-    double angleRadiusDeg) const
-{
-    std::vector<MatchResult> refined;
-    refined.reserve(candidates.size());
-
-    // Scale factor between levels
-    double scaleFactor = 2.0;
-
-    // HALCON-style position passing: use provided radius or default
-    // Default: level 0 = ±2, others = ±1
-    int32_t searchRadius = (positionRadius >= 0) ? positionRadius : ((level == 0) ? 2 : 1);
-
-    // HALCON-style angle index passing: use provided radius or default
-    // Default: level 0 = ±2°, others = ±6°
-    double angleRadius, angleStep;
-    if (angleRadiusDeg >= 0) {
-        // Use provided angle radius (in degrees), convert to radians
-        angleRadius = angleRadiusDeg * PI / 180.0;
-        // Step size: radius / 3 (about 7 steps total)
-        angleStep = std::max(0.005, angleRadius / 3.0);
-    } else {
-        // Default behavior
-        angleRadius = (level == 0) ? 0.035 : 0.1;  // ±2° at level 0, ±6° at higher levels
-        angleStep = (level == 0) ? 0.01 : 0.035;   // 0.5° at level 0, 2° at higher levels
-    }
-
-    int32_t targetWidth = targetPyramid.GetWidth(level);
-    int32_t targetHeight = targetPyramid.GetHeight(level);
-
-    // Simple scalar loop - no Pipe8
-    // Pipe8 was slower for refinement due to:
-    // 1. Spatial waste: computing 8 positions when only 5 needed (37.5% waste)
-    // 2. Lane dragging: good lanes prevent early exit for bad lanes
-    // SSE scalar version maintains finest-grained greediness for best performance
-    for (const auto& candidate : candidates) {
-        double baseX = candidate.x * scaleFactor;
-        double baseY = candidate.y * scaleFactor;
-        double baseAngle = candidate.angle;
-
-        MatchResult bestMatch;
-        bestMatch.score = -1.0;
-        bestMatch.x = baseX;
-        bestMatch.y = baseY;
-        bestMatch.pyramidLevel = level;
-
-        // Local search around candidate
-        for (int32_t dy = -searchRadius; dy <= searchRadius; ++dy) {
-            for (int32_t dx = -searchRadius; dx <= searchRadius; ++dx) {
-                double x = baseX + dx;
-                double y = baseY + dy;
-
-                // Skip if outside image bounds
-                if (x < 0 || x >= targetWidth || y < 0 || y >= targetHeight) {
-                    continue;
-                }
-
-                // Angle refinement with level-dependent step
-                for (double dAngle = -angleRadius; dAngle <= angleRadius; dAngle += angleStep) {
-                    double angle = baseAngle + dAngle;
-
-                    double coverage = 0.0;
-                    // Halcon-style: use subpixel points (Block 1) for pyramid refinement
-                    // gridPoints (Block 2) is only for initial coarse search at top level
-                    double score = ComputeScoreAtPosition(targetPyramid, level,
-                                                           x, y, angle, 1.0, params.greediness, &coverage,
-                                                           false);  // useGridPoints = false for refinement
-
-                    // Require good coverage
-                    if (coverage >= 0.7 && score > bestMatch.score) {
-                        bestMatch.x = x;
-                        bestMatch.y = y;
-                        bestMatch.angle = angle;
-                        bestMatch.score = score;
-                    }
-                }
-            }
-        }
-
-        if (bestMatch.score >= params.minScore * 0.7) {
-            refined.push_back(bestMatch);
-        }
-    }
-
-    return refined;
-}
-
-double ShapeModelImpl::ComputeScoreAtPosition(
-    const AnglePyramid& pyramid, int32_t level,
-    double x, double y, double angle, double scale,
-    double greediness, double* outCoverage, bool useGridPoints) const
-{
-    // Fast path: use SSE optimized scalar version for common cases
-    // SSE scalar maintains finest-grained greediness (critical for performance!)
-    // while using SSE for fast math (rsqrt instead of sqrt)
-    if (params_.metric == MetricMode::IgnoreLocalPolarity ||
-        params_.metric == MetricMode::IgnoreColorPolarity) {
-        return ComputeScoreBilinearSSE(pyramid, level, x, y, angle, scale, greediness, outCoverage, useGridPoints);
-    }
-
-    // Slow path: handle UsePolarity and IgnoreGlobalPolarity with original logic
-    if (level < 0 || level >= static_cast<int32_t>(levels_.size())) {
-        if (outCoverage) *outCoverage = 0.0;
-        return 0.0;
-    }
-
-    const auto& levelModel = levels_[level];
-
-    // Select point set based on useGridPoints flag
-    // Block 1 (points): Subpixel edge points for precise matching
-    // Block 2 (gridPoints): Integer grid points for fast coarse search
-    const auto& pts = useGridPoints ? levelModel.gridPoints : levelModel.points;
-    if (pts.empty()) {
-        if (outCoverage) *outCoverage = 0.0;
-        return 0.0;
-    }
-
-    // Get raw pointers for direct access
-    const float* gxData;
-    const float* gyData;
-    int32_t width, height, stride;
-    if (!pyramid.GetGradientData(level, gxData, gyData, width, height, stride)) {
-        if (outCoverage) *outCoverage = 0.0;
-        return 0.0;
-    }
-
-    const float cosR = static_cast<float>(std::cos(angle));
-    const float sinR = static_cast<float>(std::sin(angle));
-    const float scalef = static_cast<float>(scale);
-    const float xf = static_cast<float>(x);
-    const float yf = static_cast<float>(y);
-
-    // Select SoA data based on useGridPoints flag
-    const float* soaX = useGridPoints ? levelModel.gridSoaX.data() : levelModel.soaX.data();
-    const float* soaY = useGridPoints ? levelModel.gridSoaY.data() : levelModel.soaY.data();
-    const float* soaCos = useGridPoints ? levelModel.gridSoaCosAngle.data() : levelModel.soaCosAngle.data();
-    const float* soaSin = useGridPoints ? levelModel.gridSoaSinAngle.data() : levelModel.soaSinAngle.data();
-    const float* soaWeight = useGridPoints ? levelModel.gridSoaWeight.data() : levelModel.soaWeight.data();
-
-    float totalScore = 0.0f;
-    float totalWeight = 0.0f;
-    int32_t matchedCount = 0;
-    const size_t numPoints = pts.size();
-
-    // For IgnoreGlobalPolarity
-    float totalScoreInverted = 0.0f;
-    float totalWeightInverted = 0.0f;
-    int32_t matchedCountInverted = 0;
-
-    const float earlyTermThreshold = static_cast<float>(greediness * numPoints);
-    const int32_t maxX = width - 2;
-    const int32_t maxY = height - 2;
-
-    for (size_t i = 0; i < numPoints; ++i) {
-        float rotX = cosR * soaX[i] - sinR * soaY[i];
-        float rotY = sinR * soaX[i] + cosR * soaY[i];
-        float imgX = xf + scalef * rotX;
-        float imgY = yf + scalef * rotY;
-
-        int32_t ix = static_cast<int32_t>(imgX);
-        int32_t iy = static_cast<int32_t>(imgY);
-        if (imgX < 0) ix--;
-        if (imgY < 0) iy--;
-
-        if (ix >= 0 && ix <= maxX && iy >= 0 && iy <= maxY) {
-            float fx = imgX - ix;
-            float fy = imgY - iy;
-            float w00 = (1.0f - fx) * (1.0f - fy);
-            float w10 = fx * (1.0f - fy);
-            float w01 = (1.0f - fx) * fy;
-            float w11 = fx * fy;
-
-            int32_t idx = iy * stride + ix;
-            float gx = w00 * gxData[idx] + w10 * gxData[idx + 1] +
-                       w01 * gxData[idx + stride] + w11 * gxData[idx + stride + 1];
-            float gy = w00 * gyData[idx] + w10 * gyData[idx + 1] +
-                       w01 * gyData[idx + stride] + w11 * gyData[idx + stride + 1];
-
-            float magSq = gx * gx + gy * gy;
-            if (magSq >= 25.0f) {
-                float rotCos = soaCos[i] * cosR - soaSin[i] * sinR;
-                float rotSin = soaSin[i] * cosR + soaCos[i] * sinR;
-                float dot = rotCos * gx + rotSin * gy;
-                float mag = std::sqrt(magSq);
-
-                if (params_.metric == MetricMode::UsePolarity) {
-                    float similarity = std::max(0.0f, dot / mag);
-                    totalScore += soaWeight[i] * similarity;
-                    totalWeight += soaWeight[i];
-                    matchedCount++;
-                } else { // IgnoreGlobalPolarity
-                    float similarity = dot / mag;
-                    totalScore += soaWeight[i] * std::max(0.0f, similarity);
-                    totalWeight += soaWeight[i];
-                    matchedCount++;
-
-                    totalScoreInverted += soaWeight[i] * std::max(0.0f, -similarity);
-                    totalWeightInverted += soaWeight[i];
-                    matchedCountInverted++;
-                }
-            }
-        }
-
-        // Periodic early termination
-        if (greediness > 0.0f && ((i + 1) & 15) == 0 && totalWeight > 0) {
-            float currentAvg = totalScore / totalWeight;
-            if (currentAvg * numPoints < earlyTermThreshold) {
-                if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
-                return 0.0;
-            }
-        }
-    }
-
-    // For IgnoreGlobalPolarity, select the better polarity
-    if (params_.metric == MetricMode::IgnoreGlobalPolarity) {
-        float scoreNormal = (totalWeight > 0) ? totalScore / totalWeight : 0.0f;
-        float scoreInverted = (totalWeightInverted > 0) ? totalScoreInverted / totalWeightInverted : 0.0f;
-
-        if (scoreInverted > scoreNormal) {
-            if (outCoverage) *outCoverage = static_cast<double>(matchedCountInverted) / numPoints;
-            return static_cast<double>(scoreInverted);
-        } else {
-            if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
-            return static_cast<double>(scoreNormal);
-        }
-    }
-
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
-    if (totalWeight <= 0) return 0.0;
-
-    return static_cast<double>(totalScore) / totalWeight;
-}
-
-// =============================================================================
-// ComputeScoreBilinearSSE: SSE optimized scalar version
-// =============================================================================
-// Strategy: Keep scalar loop structure (finest-grained greediness), but use
-// SSE instructions to accelerate core math (especially rsqrt instead of sqrt)
-//
-// Advantages:
-// - Retains single-position early termination (most important for performance!)
-// - Uses _mm_rsqrt_ss for fast 1/sqrt approximation
-// - Avoids expensive float/int conversions
-// - No wasted computation on unneeded positions
-// =============================================================================
-double ShapeModelImpl::ComputeScoreBilinearSSE(
-    const AnglePyramid& pyramid, int32_t level,
-    double x, double y, double angle, double scale,
-    double greediness, double* outCoverage, bool useGridPoints) const
-{
-    const auto& levelModel = levels_[level];
-
-    // Select point set based on useGridPoints flag
-    // Block 1 (points): Subpixel edge points for precise matching
-    // Block 2 (gridPoints): Integer grid points for fast coarse search
-    const auto& pts = useGridPoints ? levelModel.gridPoints : levelModel.points;
-    const size_t numPoints = pts.size();
-    if (numPoints == 0) {
-        if (outCoverage) *outCoverage = 0.0;
-        return 0.0;
-    }
-
-    const float* gxData;
-    const float* gyData;
-    int32_t width, height, stride;
-    if (!pyramid.GetGradientData(level, gxData, gyData, width, height, stride)) {
-        if (outCoverage) *outCoverage = 0.0;
-        return 0.0;
-    }
-
-    // Precompute rotation parameters
-    const float cosR = static_cast<float>(std::cos(angle));
-    const float sinR = static_cast<float>(std::sin(angle));
-    const float scalef = static_cast<float>(scale);
-    const float xf = static_cast<float>(x);
-    const float yf = static_cast<float>(y);
-
-    // SSE constants
-    const __m128 vMinMagSq = _mm_set_ss(25.0f);
-    const __m128 vSignMask = _mm_set_ss(-0.0f); // For abs()
-
-    float totalScore = 0.0f;
-    float totalWeight = 0.0f;
-    int32_t matchedCount = 0;
-
-    // Greediness parameters
-    const float earlyTermThreshold = static_cast<float>(greediness * numPoints);
-    const int32_t checkInterval = 8; // Check more frequently than AVX2 version
-
-    // Select SoA data based on useGridPoints flag
-    const float* soaX = useGridPoints ? levelModel.gridSoaX.data() : levelModel.soaX.data();
-    const float* soaY = useGridPoints ? levelModel.gridSoaY.data() : levelModel.soaY.data();
-    const float* soaCos = useGridPoints ? levelModel.gridSoaCosAngle.data() : levelModel.soaCosAngle.data();
-    const float* soaSin = useGridPoints ? levelModel.gridSoaSinAngle.data() : levelModel.soaSinAngle.data();
-    const float* soaWeight = useGridPoints ? levelModel.gridSoaWeight.data() : levelModel.soaWeight.data();
-
-    const int32_t maxX = width - 2;
-    const int32_t maxY = height - 2;
-
-    for (size_t i = 0; i < numPoints; ++i) {
-        // --- Coordinate transformation (Scalar) ---
-        float rotX = cosR * soaX[i] - sinR * soaY[i];
-        float rotY = sinR * soaX[i] + cosR * soaY[i];
-        float imgX = xf + scalef * rotX;
-        float imgY = yf + scalef * rotY;
-
-        // Fast floor (handle negative values correctly)
-        int32_t ix = static_cast<int32_t>(imgX);
-        int32_t iy = static_cast<int32_t>(imgY);
-        if (imgX < 0) ix--;
-        if (imgY < 0) iy--;
-
-        if (ix >= 0 && ix <= maxX && iy >= 0 && iy <= maxY) {
-            float fx = imgX - ix;
-            float fy = imgY - iy;
-
-            // --- Bilinear interpolation (Scalar optimized) ---
-            float w00 = (1.0f - fx) * (1.0f - fy);
-            float w10 = fx * (1.0f - fy);
-            float w01 = (1.0f - fx) * fy;
-            float w11 = fx * fy;
-
-            int32_t idx = iy * stride + ix;
-
-            // Unroll to reduce index calculations
-            float g00 = gxData[idx];     float g10 = gxData[idx + 1];
-            float g01 = gxData[idx + stride]; float g11 = gxData[idx + stride + 1];
-            float gx = w00 * g00 + w10 * g10 + w01 * g01 + w11 * g11;
-
-            float h00 = gyData[idx];     float h10 = gyData[idx + 1];
-            float h01 = gyData[idx + stride]; float h11 = gyData[idx + stride + 1];
-            float gy = w00 * h00 + w10 * h10 + w01 * h01 + w11 * h11;
-
-            // --- Similarity computation (SSE Scalar) ---
-            // Use SSE scalar instructions (_mm_..._ss) for faster rsqrt
-            __m128 vGx = _mm_set_ss(gx);
-            __m128 vGy = _mm_set_ss(gy);
-            __m128 vMagSq = _mm_add_ss(_mm_mul_ss(vGx, vGx), _mm_mul_ss(vGy, vGy));
-
-            // if (magSq >= 25.0f)
-            if (_mm_comige_ss(vMagSq, vMinMagSq)) {
-                float rotCos = soaCos[i] * cosR - soaSin[i] * sinR;
-                float rotSin = soaSin[i] * cosR + soaCos[i] * sinR;
-
-                // dot = rotCos * gx + rotSin * gy
-                float dot = rotCos * gx + rotSin * gy;
-
-                // rsqrtss (approximate 1/sqrt, precision sufficient for scoring)
-                __m128 vInvMag = _mm_rsqrt_ss(vMagSq);
-
-                // score = abs(dot) * invMag
-                __m128 vDot = _mm_set_ss(dot);
-                __m128 vAbsDot = _mm_andnot_ps(vSignMask, vDot);
-                __m128 vScore = _mm_mul_ss(vAbsDot, vInvMag);
-
-                float score;
-                _mm_store_ss(&score, vScore);
-
-                totalScore += soaWeight[i] * score;
-                totalWeight += soaWeight[i];
-                matchedCount++;
-            }
-        }
-
-        // --- High-frequency greediness check ---
-        // Scalar code has no SIMD overhead, can check more frequently
-        if (greediness > 0.0 && ((i + 1) & (checkInterval - 1)) == 0) {
-            if (totalWeight > 0) {
-                // Simple average score prediction
-                if ((totalScore / totalWeight) * numPoints < earlyTermThreshold * 0.85f) {
-                    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
-                    return 0.0;
-                }
-            }
-        }
-    }
-
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
-    if (totalWeight <= 0) return 0.0;
-
-    return static_cast<double>(totalScore) / totalWeight;
-}
-
-// NOTE: AVX2 optimization functions removed
-// Using SSE version (ComputeScoreBilinearSSE) which provides good performance
-// across all x86-64 platforms. AVX2 versions showed minimal improvement
-// due to memory-bound nature of the algorithm.
-
-// =============================================================================
-// ComputeScoreWithSinCos: Same as ComputeScoreBilinearSSE but with precomputed sin/cos
-// =============================================================================
-// This eliminates redundant sin/cos calculations when the same angle is used
-// for multiple positions in coarse search
-// =============================================================================
-double ShapeModelImpl::ComputeScoreWithSinCos(
-    const AnglePyramid& pyramid, int32_t level,
-    double x, double y, float cosR, float sinR, double scale,
-    double greediness, double* outCoverage, bool useGridPoints) const
-{
-    const auto& levelModel = levels_[level];
-
-    const auto& pts = useGridPoints ? levelModel.gridPoints : levelModel.points;
-    const size_t numPoints = pts.size();
-    if (numPoints == 0) {
-        if (outCoverage) *outCoverage = 0.0;
-        return 0.0;
-    }
-
-    const float* gxData;
-    const float* gyData;
-    int32_t width, height, stride;
-    if (!pyramid.GetGradientData(level, gxData, gyData, width, height, stride)) {
-        if (outCoverage) *outCoverage = 0.0;
-        return 0.0;
-    }
-
-    // Use precomputed sin/cos - no std::cos/sin calls here!
-    const float scalef = static_cast<float>(scale);
-    const float xf = static_cast<float>(x);
-    const float yf = static_cast<float>(y);
-
-    // SSE constants
-    const __m128 vMinMagSq = _mm_set_ss(25.0f);
-    const __m128 vSignMask = _mm_set_ss(-0.0f);
-
-    float totalScore = 0.0f;
-    float totalWeight = 0.0f;
-    int32_t matchedCount = 0;
-
-    const float earlyTermThreshold = static_cast<float>(greediness * numPoints);
-    const int32_t checkInterval = 8;
-
-    const float* soaX = useGridPoints ? levelModel.gridSoaX.data() : levelModel.soaX.data();
-    const float* soaY = useGridPoints ? levelModel.gridSoaY.data() : levelModel.soaY.data();
-    const float* soaCos = useGridPoints ? levelModel.gridSoaCosAngle.data() : levelModel.soaCosAngle.data();
-    const float* soaSin = useGridPoints ? levelModel.gridSoaSinAngle.data() : levelModel.soaSinAngle.data();
-    const float* soaWeight = useGridPoints ? levelModel.gridSoaWeight.data() : levelModel.soaWeight.data();
-
-    const int32_t maxX = width - 2;
-    const int32_t maxY = height - 2;
-
-    for (size_t i = 0; i < numPoints; ++i) {
-        float rotX = cosR * soaX[i] - sinR * soaY[i];
-        float rotY = sinR * soaX[i] + cosR * soaY[i];
-        float imgX = xf + scalef * rotX;
-        float imgY = yf + scalef * rotY;
-
-        int32_t ix = static_cast<int32_t>(imgX);
-        int32_t iy = static_cast<int32_t>(imgY);
-        if (imgX < 0) ix--;
-        if (imgY < 0) iy--;
-
-        if (ix >= 0 && ix <= maxX && iy >= 0 && iy <= maxY) {
-            float fx = imgX - ix;
-            float fy = imgY - iy;
-
-            float w00 = (1.0f - fx) * (1.0f - fy);
-            float w10 = fx * (1.0f - fy);
-            float w01 = (1.0f - fx) * fy;
-            float w11 = fx * fy;
-
-            int32_t idx = iy * stride + ix;
-
-            float g00 = gxData[idx];     float g10 = gxData[idx + 1];
-            float g01 = gxData[idx + stride]; float g11 = gxData[idx + stride + 1];
-            float gx = w00 * g00 + w10 * g10 + w01 * g01 + w11 * g11;
-
-            float h00 = gyData[idx];     float h10 = gyData[idx + 1];
-            float h01 = gyData[idx + stride]; float h11 = gyData[idx + stride + 1];
-            float gy = w00 * h00 + w10 * h10 + w01 * h01 + w11 * h11;
-
-            __m128 vGx = _mm_set_ss(gx);
-            __m128 vGy = _mm_set_ss(gy);
-            __m128 vMagSq = _mm_add_ss(_mm_mul_ss(vGx, vGx), _mm_mul_ss(vGy, vGy));
-
-            if (_mm_comige_ss(vMagSq, vMinMagSq)) {
-                float rotCos = soaCos[i] * cosR - soaSin[i] * sinR;
-                float rotSin = soaSin[i] * cosR + soaCos[i] * sinR;
-                float dot = rotCos * gx + rotSin * gy;
-
-                __m128 vInvMag = _mm_rsqrt_ss(vMagSq);
-                __m128 vDot = _mm_set_ss(dot);
-                __m128 vAbsDot = _mm_andnot_ps(vSignMask, vDot);
-                __m128 vScore = _mm_mul_ss(vAbsDot, vInvMag);
-
-                float score;
-                _mm_store_ss(&score, vScore);
-
-                totalScore += soaWeight[i] * score;
-                totalWeight += soaWeight[i];
-                matchedCount++;
-            }
-        }
-
-        if (greediness > 0.0 && ((i + 1) & (checkInterval - 1)) == 0) {
-            if (totalWeight > 0) {
-                if ((totalScore / totalWeight) * numPoints < earlyTermThreshold * 0.85f) {
-                    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
-                    return 0.0;
-                }
-            }
-        }
-    }
-
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
-    if (totalWeight <= 0) return 0.0;
-
-    return static_cast<double>(totalScore) / totalWeight;
-}
-
-// =============================================================================
-// ComputeScoreQuantized: Direction-quantized scoring with lookup table
-// =============================================================================
-// Uses precomputed angle bins from AnglePyramid and cosine LUT
-// Fastest method for coarse search: no trigonometric calculations in inner loop
-// =============================================================================
-double ShapeModelImpl::ComputeScoreQuantized(
-    const AnglePyramid& pyramid, int32_t level,
-    double x, double y, float cosR, float sinR, int32_t rotationBin,
-    double greediness, double* outCoverage, bool useGridPoints) const
-{
-    if (cosLUT_.empty() || numAngleBins_ <= 0) {
-        // Fallback to sin/cos method if LUT not built
-        return ComputeScoreWithSinCos(pyramid, level, x, y, cosR, sinR, 1.0, greediness, outCoverage, useGridPoints);
-    }
-
-    const auto& levelModel = levels_[level];
-    const auto& pts = useGridPoints ? levelModel.gridPoints : levelModel.points;
-    const size_t numPoints = pts.size();
-    if (numPoints == 0) {
-        if (outCoverage) *outCoverage = 0.0;
-        return 0.0;
-    }
-
-    // Get gradient and bin data
-    const float* gxData;
-    const float* gyData;
-    int32_t width, height, stride;
-    if (!pyramid.GetGradientData(level, gxData, gyData, width, height, stride)) {
-        if (outCoverage) *outCoverage = 0.0;
-        return 0.0;
-    }
-
-    const int16_t* binData;
-    int32_t binWidth, binHeight, binStride, numBins;
-    if (!pyramid.GetAngleBinData(level, binData, binWidth, binHeight, binStride, numBins)) {
-        // Fallback to sin/cos method
-        return ComputeScoreWithSinCos(pyramid, level, x, y, cosR, sinR, 1.0, greediness, outCoverage, useGridPoints);
-    }
-
-    const float scalef = 1.0f;
-    const float xf = static_cast<float>(x);
-    const float yf = static_cast<float>(y);
-
-    // Select SoA data
-    const float* soaX = useGridPoints ? levelModel.gridSoaX.data() : levelModel.soaX.data();
-    const float* soaY = useGridPoints ? levelModel.gridSoaY.data() : levelModel.soaY.data();
-    const int16_t* soaBin = useGridPoints ? levelModel.gridSoaAngleBin.data() : levelModel.soaAngleBin.data();
-    const float* soaWeight = useGridPoints ? levelModel.gridSoaWeight.data() : levelModel.soaWeight.data();
-
-    // Precompute LUT pointer and mask for fast modulo
-    const float* cosLUT = cosLUT_.data();
-    const int32_t binMask = numAngleBins_ - 1;  // Assumes numAngleBins_ is power of 2
-
-    float totalScore = 0.0f;
-    float totalWeight = 0.0f;
-    int32_t matchedCount = 0;
-
-    const float earlyTermThreshold = static_cast<float>(greediness * numPoints);
-    const int32_t checkInterval = 8;
-    const float minMagSq = 25.0f;
-
-    const int32_t maxX = width - 2;
-    const int32_t maxY = height - 2;
-
-    for (size_t i = 0; i < numPoints; ++i) {
-        float rotX = cosR * soaX[i] - sinR * soaY[i];
-        float rotY = sinR * soaX[i] + cosR * soaY[i];
-        float imgX = xf + scalef * rotX;
-        float imgY = yf + scalef * rotY;
-
-        int32_t ix = static_cast<int32_t>(imgX);
-        int32_t iy = static_cast<int32_t>(imgY);
-        if (imgX < 0) ix--;
-        if (imgY < 0) iy--;
-
-        if (ix >= 0 && ix <= maxX && iy >= 0 && iy <= maxY) {
-            float fx = imgX - ix;
-            float fy = imgY - iy;
-
-            // Bilinear interpolation for gradient magnitude check
-            float w00 = (1.0f - fx) * (1.0f - fy);
-            float w10 = fx * (1.0f - fy);
-            float w01 = (1.0f - fx) * fy;
-            float w11 = fx * fy;
-
-            int32_t idx = iy * stride + ix;
-            float gx = w00 * gxData[idx] + w10 * gxData[idx + 1] +
-                       w01 * gxData[idx + stride] + w11 * gxData[idx + stride + 1];
-            float gy = w00 * gyData[idx] + w10 * gyData[idx + 1] +
-                       w01 * gyData[idx + stride] + w11 * gyData[idx + stride + 1];
-
-            float magSq = gx * gx + gy * gy;
-            if (magSq >= minMagSq) {
-                // Use nearest neighbor for angle bin (sufficient for coarse search)
-                int32_t nearestX = static_cast<int32_t>(imgX + 0.5f);
-                int32_t nearestY = static_cast<int32_t>(imgY + 0.5f);
-                nearestX = std::max(0, std::min(binWidth - 1, nearestX));
-                nearestY = std::max(0, std::min(binHeight - 1, nearestY));
-
-                int16_t imageBin = binData[nearestY * binStride + nearestX];
-                int16_t modelBin = soaBin[i];
-
-                // Direction difference: (modelBin + rotationBin - imageBin) mod numBins
-                int32_t binDiff = (modelBin + rotationBin - imageBin) & binMask;
-
-                // Lookup cosine of angle difference
-                float score = cosLUT[binDiff];
-
-                totalScore += soaWeight[i] * score;
-                totalWeight += soaWeight[i];
-                matchedCount++;
-            }
-        }
-
-        // Greediness check
-        if (greediness > 0.0 && ((i + 1) & (checkInterval - 1)) == 0) {
-            if (totalWeight > 0) {
-                if ((totalScore / totalWeight) * numPoints < earlyTermThreshold * 0.85f) {
-                    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
-                    return 0.0;
-                }
-            }
-        }
-    }
-
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
-    if (totalWeight <= 0) return 0.0;
-
-    return static_cast<double>(totalScore) / totalWeight;
-}
-
-void ShapeModelImpl::RefinePosition(
-    const AnglePyramid& pyramid, MatchResult& match,
-    SubpixelMethod method) const
-{
-    if (method == SubpixelMethod::None) {
-        return;
-    }
-
-    int32_t level = 0;  // Finest level
-
-    if (method == SubpixelMethod::Parabolic) {
-        // Parabolic fitting in 3x3 neighborhood
-        double scores[3][3];
-
-        for (int32_t dy = -1; dy <= 1; ++dy) {
-            for (int32_t dx = -1; dx <= 1; ++dx) {
-                scores[dy + 1][dx + 1] = ComputeScoreAtPosition(
-                    pyramid, level, match.x + dx * 0.5, match.y + dy * 0.5,
-                    match.angle, 1.0, 0.0);
-            }
-        }
-
-        // Parabolic interpolation in X
-        double denom = 2.0 * (scores[1][0] - 2.0 * scores[1][1] + scores[1][2]);
-        if (std::abs(denom) > 1e-10) {
-            double dx = (scores[1][0] - scores[1][2]) / denom;
-            match.x += dx * 0.5;
-        }
-
-        // Parabolic interpolation in Y
-        denom = 2.0 * (scores[0][1] - 2.0 * scores[1][1] + scores[2][1]);
-        if (std::abs(denom) > 1e-10) {
-            double dy = (scores[0][1] - scores[2][1]) / denom;
-            match.y += dy * 0.5;
-        }
-
-        // Recompute score
-        match.score = ComputeScoreAtPosition(pyramid, level, match.x, match.y,
-                                              match.angle, 1.0, 0.0);
-    }
-    else if (method == SubpixelMethod::LeastSquares) {
-        // Gradient descent optimization
-        const int32_t maxIter = 10;
-        const double stepSize = 0.1;
-        const double tolerance = 0.001;
-
-        double bestScore = match.score;
-        double bestX = match.x;
-        double bestY = match.y;
-        double bestAngle = match.angle;
-
-        for (int32_t iter = 0; iter < maxIter; ++iter) {
-            // Compute gradient numerically
-            double eps = 0.1;
-            double scoreX1 = ComputeScoreAtPosition(pyramid, level, match.x + eps, match.y,
-                                                     match.angle, 1.0, 0.0);
-            double scoreX0 = ComputeScoreAtPosition(pyramid, level, match.x - eps, match.y,
-                                                     match.angle, 1.0, 0.0);
-            double scoreY1 = ComputeScoreAtPosition(pyramid, level, match.x, match.y + eps,
-                                                     match.angle, 1.0, 0.0);
-            double scoreY0 = ComputeScoreAtPosition(pyramid, level, match.x, match.y - eps,
-                                                     match.angle, 1.0, 0.0);
-
-            double gradX = (scoreX1 - scoreX0) / (2.0 * eps);
-            double gradY = (scoreY1 - scoreY0) / (2.0 * eps);
-
-            // Update position
-            match.x += stepSize * gradX;
-            match.y += stepSize * gradY;
-
-            double newScore = ComputeScoreAtPosition(pyramid, level, match.x, match.y,
-                                                      match.angle, 1.0, 0.0);
-
-            if (newScore > bestScore) {
-                bestScore = newScore;
-                bestX = match.x;
-                bestY = match.y;
-                bestAngle = match.angle;
-            }
-
-            if (std::abs(gradX) < tolerance && std::abs(gradY) < tolerance) {
-                break;
-            }
-        }
-
-        match.x = bestX;
-        match.y = bestY;
-        match.angle = bestAngle;
-        match.score = bestScore;
-    }
-
-    match.refined = true;
-}
-
-} // namespace Internal
-
-// =============================================================================
-// ShapeModel Implementation
+// ShapeModel Public API Implementation
 // =============================================================================
 
 ShapeModel::ShapeModel() : impl_(std::make_unique<Internal::ShapeModelImpl>()) {}
@@ -2156,6 +38,10 @@ ShapeModel& ShapeModel::operator=(const ShapeModel& other) {
 }
 
 ShapeModel& ShapeModel::operator=(ShapeModel&& other) noexcept = default;
+
+// =============================================================================
+// Model Creation
+// =============================================================================
 
 bool ShapeModel::Create(const QImage& templateImage, const ModelParams& params) {
     impl_->params_ = params;
@@ -2183,6 +69,10 @@ bool ShapeModel::IsValid() const {
     return impl_->valid_;
 }
 
+// =============================================================================
+// Searching
+// =============================================================================
+
 std::vector<MatchResult> ShapeModel::Find(const QImage& image,
                                            const SearchParams& params) const {
     if (!impl_->valid_) {
@@ -2194,19 +84,18 @@ std::vector<MatchResult> ShapeModel::Find(const QImage& image,
     auto tTotal = std::chrono::high_resolution_clock::now();
 
     // Build angle pyramid for target image
-    AnglePyramidParams pyramidParams;
+    Internal::AnglePyramidParams pyramidParams;
     pyramidParams.numLevels = static_cast<int32_t>(impl_->levels_.size());
 
-    // Use minContrast if specified, otherwise use 50% of contrastHigh
     double searchContrast = (impl_->params_.minContrast > 0)
         ? impl_->params_.minContrast
         : impl_->params_.contrastHigh * 0.5;
     pyramidParams.minContrast = searchContrast;
     pyramidParams.smoothSigma = 0.5;
-    pyramidParams.extractEdgePoints = false;  // Not needed for search pyramid
+    pyramidParams.extractEdgePoints = false;
 
     auto tPyramid = std::chrono::high_resolution_clock::now();
-    AnglePyramid targetPyramid;
+    Internal::AnglePyramid targetPyramid;
     if (!targetPyramid.Build(image, pyramidParams)) {
         return {};
     }
@@ -2216,12 +105,8 @@ std::vector<MatchResult> ShapeModel::Find(const QImage& image,
             std::chrono::high_resolution_clock::now() - tPyramid).count();
     }
 
-    // Use traditional pyramid search with bilinear interpolation
-    // Response Map was tested but adds overhead without improving performance
-    // for this image size range (640x512) due to ResponseMap build cost
     auto results = impl_->SearchPyramid(targetPyramid, params);
 
-    // Finalize total timing
     if (impl_->timingParams_.enableTiming) {
         impl_->findTiming_.totalMs = std::chrono::duration<double, std::milli>(
             std::chrono::high_resolution_clock::now() - tTotal).count();
@@ -2249,6 +134,10 @@ std::vector<MatchResult> ShapeModel::FindInROI(const QImage& image, const Rect2i
     modifiedParams.searchROI = roi;
     return Find(image, modifiedParams);
 }
+
+// =============================================================================
+// Model Properties
+// =============================================================================
 
 ModelStats ShapeModel::GetStats() const {
     ModelStats stats;
@@ -2319,6 +208,10 @@ const ModelParams& ShapeModel::GetParams() const {
     return impl_->params_;
 }
 
+// =============================================================================
+// Timing
+// =============================================================================
+
 void ShapeModel::SetTimingParams(const ShapeModelTimingParams& params) {
     impl_->timingParams_ = params;
 }
@@ -2330,6 +223,10 @@ const ShapeModelCreateTiming& ShapeModel::GetCreateTiming() const {
 const ShapeModelFindTiming& ShapeModel::GetFindTiming() const {
     return impl_->findTiming_;
 }
+
+// =============================================================================
+// Visualization
+// =============================================================================
 
 std::vector<Point2d> ShapeModel::GetModelContour(int32_t level) const {
     std::vector<Point2d> contour;
@@ -2359,6 +256,10 @@ std::vector<Point2d> ShapeModel::GetMatchContour(const MatchResult& match) const
     return transformed;
 }
 
+// =============================================================================
+// Serialization
+// =============================================================================
+
 bool ShapeModel::Save(const std::string& filename) const {
     if (!impl_ || !impl_->valid_) {
         return false;
@@ -2371,12 +272,12 @@ bool ShapeModel::Save(const std::string& filename) const {
     }
 
     // Magic number and version
-    const uint32_t MAGIC = 0x4D495351;  // "QISM" - QiVision Shape Model
-    const uint32_t VERSION = 3;         // v3: Halcon-compatible parameters
+    const uint32_t MAGIC = 0x4D495351;  // "QISM"
+    const uint32_t VERSION = 3;
     writer.Write(MAGIC);
     writer.Write(VERSION);
 
-    // Model parameters - v3 format (Halcon-compatible)
+    // Model parameters - v3 format
     writer.Write(static_cast<int32_t>(impl_->params_.contrastMode));
     writer.Write(impl_->params_.contrastHigh);
     writer.Write(impl_->params_.contrastLow);
@@ -2412,12 +313,10 @@ bool ShapeModel::Save(const std::string& filename) const {
     writer.Write(numLevels);
 
     for (const auto& level : impl_->levels_) {
-        // Level metadata
         writer.Write(level.width);
         writer.Write(level.height);
         writer.Write(level.scale);
 
-        // Model points
         uint32_t numPoints = static_cast<uint32_t>(level.points.size());
         writer.Write(numPoints);
 
@@ -2444,25 +343,20 @@ bool ShapeModel::Load(const std::string& filename) {
         return false;
     }
 
-    // Check magic number
     const uint32_t MAGIC = 0x4D495351;
     uint32_t magic = reader.Read<uint32_t>();
     if (magic != MAGIC) {
-        return false;  // Not a valid shape model file
+        return false;
     }
 
-    // Check version (support v1, v2, v3)
     uint32_t version = reader.Read<uint32_t>();
     if (version < 1 || version > 3) {
-        return false;  // Unsupported version
+        return false;
     }
 
-    // Create new implementation
     impl_ = std::make_unique<Internal::ShapeModelImpl>();
 
-    // Model parameters - version-dependent format
     if (version >= 3) {
-        // v3: Halcon-compatible parameters
         impl_->params_.contrastMode = static_cast<ContrastMode>(reader.Read<int32_t>());
         impl_->params_.contrastHigh = reader.Read<double>();
         impl_->params_.contrastLow = reader.Read<double>();
@@ -2481,7 +375,7 @@ bool ShapeModel::Load(const std::string& filename) {
         impl_->params_.scaleMax = reader.Read<double>();
         impl_->params_.polarity = static_cast<MatchPolarity>(reader.Read<int32_t>());
     } else {
-        // v1/v2: Legacy format - convert to new format
+        // v1/v2: Legacy format
         double minContrast = reader.Read<double>();
         double hysteresisContrast = 0.0;
         if (version >= 2) {
@@ -2489,9 +383,7 @@ bool ShapeModel::Load(const std::string& filename) {
         }
         double maxContrast = reader.Read<double>();
 
-        // Convert to new format
-        impl_->params_.contrastMode = (hysteresisContrast > 0)
-            ? ContrastMode::Manual : ContrastMode::Manual;
+        impl_->params_.contrastMode = ContrastMode::Manual;
         impl_->params_.contrastHigh = minContrast;
         impl_->params_.contrastLow = hysteresisContrast;
         impl_->params_.contrastMax = maxContrast;
@@ -2505,44 +397,36 @@ bool ShapeModel::Load(const std::string& filename) {
         impl_->params_.scaleMax = reader.Read<double>();
 
         bool optimizeModel = reader.Read<bool>();
-        int32_t maxModelPoints = reader.Read<int32_t>();
-        double modelPointSpacing = reader.Read<double>();
-        (void)maxModelPoints;
-        (void)modelPointSpacing;
+        (void)reader.Read<int32_t>();  // maxModelPoints
+        (void)reader.Read<double>();   // modelPointSpacing
 
-        // Convert optimization flag to mode
         impl_->params_.optimization = optimizeModel
             ? OptimizationMode::Auto : OptimizationMode::None;
 
         impl_->params_.polarity = static_cast<MatchPolarity>(reader.Read<int32_t>());
-        impl_->params_.metric = MetricMode::UsePolarity;  // Default
+        impl_->params_.metric = MetricMode::UsePolarity;
     }
 
-    // Origin and template size
     impl_->origin_.x = reader.Read<double>();
     impl_->origin_.y = reader.Read<double>();
     impl_->templateSize_.width = reader.Read<int32_t>();
     impl_->templateSize_.height = reader.Read<int32_t>();
 
-    // Model bounds
     impl_->modelMinX_ = reader.Read<double>();
     impl_->modelMaxX_ = reader.Read<double>();
     impl_->modelMinY_ = reader.Read<double>();
     impl_->modelMaxY_ = reader.Read<double>();
 
-    // Pyramid levels
     uint32_t numLevels = reader.Read<uint32_t>();
     impl_->levels_.resize(numLevels);
 
     for (uint32_t i = 0; i < numLevels; ++i) {
         auto& level = impl_->levels_[i];
 
-        // Level metadata
         level.width = reader.Read<int32_t>();
         level.height = reader.Read<int32_t>();
         level.scale = reader.Read<double>();
 
-        // Model points
         uint32_t numPoints = reader.Read<uint32_t>();
         level.points.resize(numPoints);
 
@@ -2558,13 +442,16 @@ bool ShapeModel::Load(const std::string& filename) {
             pt.sinAngle = reader.Read<double>();
         }
 
-        // Rebuild SoA data for SIMD
         level.BuildSoA();
     }
 
     impl_->valid_ = true;
     return true;
 }
+
+// =============================================================================
+// Advanced
+// =============================================================================
 
 double ShapeModel::ComputeScore(const QImage& image,
                                  double x, double y,
@@ -2573,17 +460,15 @@ double ShapeModel::ComputeScore(const QImage& image,
         return 0.0;
     }
 
-    // Build angle pyramid for target
-    AnglePyramidParams params;
+    Internal::AnglePyramidParams params;
     params.numLevels = 1;
 
-    // Use minContrast if specified, otherwise use 50% of contrastHigh
     double searchContrast = (impl_->params_.minContrast > 0)
         ? impl_->params_.minContrast
         : impl_->params_.contrastHigh * 0.5;
     params.minContrast = searchContrast;
 
-    AnglePyramid pyramid;
+    Internal::AnglePyramid pyramid;
     if (!pyramid.Build(image, params)) {
         return 0.0;
     }
@@ -2597,16 +482,15 @@ bool ShapeModel::RefineMatch(const QImage& image, MatchResult& match,
         return false;
     }
 
-    AnglePyramidParams params;
+    Internal::AnglePyramidParams params;
     params.numLevels = 1;
 
-    // Use minContrast if specified, otherwise use 50% of contrastHigh
     double searchContrast = (impl_->params_.minContrast > 0)
         ? impl_->params_.minContrast
         : impl_->params_.contrastHigh * 0.5;
     params.minContrast = searchContrast;
 
-    AnglePyramid pyramid;
+    Internal::AnglePyramid pyramid;
     if (!pyramid.Build(image, params)) {
         return false;
     }
@@ -2641,22 +525,11 @@ int32_t EstimateOptimalLevels(int32_t imageWidth, int32_t imageHeight,
 }
 
 double EstimateAngleStep(int32_t modelSize) {
-    // Halcon formula: angle_step = 2 * asin(1 / (2 * max_radius))
-    // This ensures the outermost edge point moves < 0.5 pixel per angle step
-    //
-    // Derivation: For a point at distance r from center, rotating by angle θ
-    // causes arc displacement = r * θ ≈ r * sin(θ) for small θ
-    // To ensure displacement < 0.5: r * sin(θ/2) * 2 < 0.5
-    // => sin(θ/2) < 0.25/r => θ/2 < asin(0.25/r) => θ < 2*asin(1/(4r))
-    // Halcon uses 2*asin(1/(2r)) which gives ~1px displacement (more conservative)
-
     double maxRadius = modelSize / 2.0;
     if (maxRadius < 1.0) maxRadius = 1.0;
 
-    // Halcon's exact formula for <0.5px displacement at outermost edge
     double step = 2.0 * std::asin(1.0 / (2.0 * maxRadius));
 
-    // Clamp to reasonable range [0.5°, 10°]
     return std::clamp(step, 0.0087, 0.175);
 }
 
