@@ -1,18 +1,19 @@
 /**
  * @file 07_shape_match_draw.cpp
- * @brief Demonstrates shape matching with result visualization
+ * @brief Demonstrates shape matching with Halcon-style API
  *
  * Shows how to:
  * 1. Load images from files
- * 2. Create shape model from template
- * 3. Save/Load model to/from file
- * 4. Find matches in search images
+ * 2. Create shape model using CreateShapeModel()
+ * 3. Save/Load model using WriteShapeModel()/ReadShapeModel()
+ * 4. Find matches using FindShapeModel()
  * 5. Draw results and save visualization
  */
 
 #include <QiVision/Core/QImage.h>
 #include <QiVision/Core/Draw.h>
 #include <QiVision/Matching/ShapeModel.h>
+#include <QiVision/Matching/MatchTypes.h>
 #include <QiVision/Platform/Timer.h>
 #include <QiVision/Platform/FileIO.h>
 
@@ -49,7 +50,7 @@ QImage ToGray(const QImage& color) {
 }
 
 int main() {
-    std::cout << "=== QiVision Shape Matching Demo ===" << std::endl;
+    std::cout << "=== QiVision Shape Matching Demo (Halcon-style API) ===" << std::endl;
 
     // Define paths
     std::string dataDir = "tests/data/matching/image1/";
@@ -68,31 +69,56 @@ int main() {
     Timer timer;
     Rect2i modelROI;
 
+    // Model parameters
+    int32_t numLevels = 4;
+    double modelWidth = 0, modelHeight = 0;
+
     // =========================================================================
     // Part 1: Create or Load Model
     // =========================================================================
 
     if (FileExists(modelFile)) {
-        // Load existing model
+        // Load existing model using Halcon-style API
         std::cout << "\n1. Loading existing model from: " << modelFile << std::endl;
         timer.Start();
-        if (!model.Load(modelFile)) {
+        model = ReadShapeModel(modelFile);
+        if (!model.IsValid()) {
             std::cerr << "   Failed to load model!" << std::endl;
             return 1;
         }
         std::cout << "   Model loaded in " << timer.ElapsedMs() << " ms" << std::endl;
 
-        // Get model info
-        auto stats = model.GetStats();
-        std::cout << "   Model points: " << stats.numPoints << std::endl;
-        std::cout << "   Pyramid levels: " << stats.numLevels << std::endl;
-        std::cout << "   Model size: " << stats.Width() << " x " << stats.Height() << std::endl;
+        // Get model parameters using Halcon-style API
+        int32_t outNumLevels;
+        double outAngleStart, outAngleExtent, outAngleStep;
+        double outScaleMin, outScaleMax, outScaleStep;
+        std::string outMetric;
+        GetShapeModelParams(model, outNumLevels, outAngleStart, outAngleExtent, outAngleStep,
+                           outScaleMin, outScaleMax, outScaleStep, outMetric);
+        std::cout << "   Pyramid levels: " << outNumLevels << std::endl;
 
-        // Use stats for ROI visualization
-        modelROI.x = 0;
-        modelROI.y = 0;
-        modelROI.width = static_cast<int32_t>(stats.Width());
-        modelROI.height = static_cast<int32_t>(stats.Height());
+        // Get contours to estimate model size
+        std::vector<double> contourRows, contourCols;
+        GetShapeModelContours(model, 1, contourRows, contourCols);
+        std::cout << "   Model points: " << contourRows.size() << std::endl;
+
+        // Compute bounding box
+        if (!contourRows.empty()) {
+            double minR = contourRows[0], maxR = contourRows[0];
+            double minC = contourCols[0], maxC = contourCols[0];
+            for (size_t i = 1; i < contourRows.size(); ++i) {
+                if (contourRows[i] < minR) minR = contourRows[i];
+                if (contourRows[i] > maxR) maxR = contourRows[i];
+                if (contourCols[i] < minC) minC = contourCols[i];
+                if (contourCols[i] > maxC) maxC = contourCols[i];
+            }
+            modelWidth = maxC - minC;
+            modelHeight = maxR - minR;
+            std::cout << "   Model size: " << modelWidth << " x " << modelHeight << std::endl;
+        }
+
+        modelROI.width = static_cast<int32_t>(modelWidth);
+        modelROI.height = static_cast<int32_t>(modelHeight);
 
     } else {
         // Create new model from first image
@@ -111,41 +137,40 @@ int main() {
         modelROI.y = 100;
         modelROI.width = 390 - 180;   // 210
         modelROI.height = 170 - 100;  // 70
+        modelWidth = modelROI.width;
+        modelHeight = modelROI.height;
         std::cout << "   ROI: (" << modelROI.x << "," << modelROI.y << ") "
                   << modelROI.width << "x" << modelROI.height << std::endl;
 
-        // Create model with auto hysteresis contrast detection
-        // Uses Otsu + percentile + BFS propagation for better weak edge extraction
-        ModelParams modelParams;
-        modelParams.SetContrastAutoHysteresis();  // Auto-detect with hysteresis thresholds
-        modelParams.SetNumLevels(4);
-
+        // Create model using Halcon-style API
         timer.Start();
-        if (!model.Create(templateGray, modelROI, modelParams)) {
+        model = CreateShapeModel(
+            templateGray,
+            modelROI,
+            numLevels,                  // numLevels
+            0, RAD(360), 0,             // angleStart, angleExtent, angleStep (0=auto)
+            "auto",                     // optimization
+            "use_polarity",             // metric
+            30, 10                      // contrast, minContrast
+        );
+
+        if (!model.IsValid()) {
             std::cerr << "   Failed to create model!" << std::endl;
             return 1;
         }
         double createTime = timer.ElapsedMs();
         std::cout << "   Model created in " << createTime << " ms" << std::endl;
 
-        // Show model statistics
-        auto stats = model.GetStats();
-        std::cout << "   Model points: " << stats.numPoints << std::endl;
-        std::cout << "   Points per level: ";
-        for (size_t i = 0; i < stats.pointsPerLevel.size(); ++i) {
-            std::cout << stats.pointsPerLevel[i];
-            if (i < stats.pointsPerLevel.size() - 1) std::cout << ", ";
-        }
-        std::cout << std::endl;
+        // Get model info
+        std::vector<double> contourRows, contourCols;
+        GetShapeModelContours(model, 1, contourRows, contourCols);
+        std::cout << "   Model points: " << contourRows.size() << std::endl;
 
-        // Save model for future use
+        // Save model using Halcon-style API
         std::cout << "\n2. Saving model to: " << modelFile << std::endl;
         timer.Start();
-        if (model.Save(modelFile)) {
-            std::cout << "   Model saved in " << timer.ElapsedMs() << " ms" << std::endl;
-        } else {
-            std::cerr << "   Failed to save model!" << std::endl;
-        }
+        WriteShapeModel(model, modelFile);
+        std::cout << "   Model saved in " << timer.ElapsedMs() << " ms" << std::endl;
 
         // Save template visualization with ROI
         QImage templateVis = Draw::PrepareForDrawing(templateGray);
@@ -155,20 +180,17 @@ int main() {
         std::cout << "   Saved: " << roiPath << std::endl;
 
         // Save model edge points visualization
-        // Draw extracted edge points on template image
         QImage modelVis = Draw::PrepareForDrawing(templateGray);
-        auto modelPoints = model.GetModelPoints(0);  // Level 0 (finest)
-        std::cout << "   Drawing " << modelPoints.size() << " model points..." << std::endl;
+        std::cout << "   Drawing " << contourRows.size() << " model points..." << std::endl;
 
         // Model points are relative to ROI center, need to offset
         double centerX = modelROI.x + modelROI.width / 2.0;
         double centerY = modelROI.y + modelROI.height / 2.0;
 
-        for (const auto& pt : modelPoints) {
-            int32_t px = static_cast<int32_t>(centerX + pt.x + 0.5);
-            int32_t py = static_cast<int32_t>(centerY + pt.y + 0.5);
+        for (size_t i = 0; i < contourRows.size(); ++i) {
+            int32_t px = static_cast<int32_t>(centerX + contourCols[i] + 0.5);
+            int32_t py = static_cast<int32_t>(centerY + contourRows[i] + 0.5);
             Draw::Pixel(modelVis, px, py, Color::Green());
-            // Also draw neighboring pixels for visibility
             Draw::Pixel(modelVis, px+1, py, Color::Green());
             Draw::Pixel(modelVis, px, py+1, Color::Green());
         }
@@ -185,16 +207,19 @@ int main() {
     std::cout << "\n3. Searching in images..." << std::endl;
 
     // Get model contour for visualization
-    auto modelContour = model.GetModelContour(0);
-    std::cout << "   Model contour has " << modelContour.size() << " points" << std::endl;
+    std::vector<double> modelContourRows, modelContourCols;
+    GetShapeModelContours(model, 1, modelContourRows, modelContourCols);
+    std::cout << "   Model contour has " << modelContourRows.size() << " points" << std::endl;
 
-    // Search parameters - full 360° rotation search
-    SearchParams searchParams;
-    searchParams.SetMinScore(0.5);
-    searchParams.SetMaxMatches(5);
-    searchParams.SetGreediness(0.9);
-    searchParams.SetAngleRange(0, 2.0 * M_PI);  // Full 360° search
-    searchParams.SetSubpixel(SubpixelMethod::LeastSquares);
+    // Search parameters (Halcon-style)
+    double searchAngleStart = 0;
+    double searchAngleExtent = RAD(360);
+    double minScore = 0.5;
+    int32_t maxMatches = 5;
+    double maxOverlap = 0.5;
+    std::string subPixel = "least_squares";
+    int32_t searchNumLevels = 0;  // 0 = use model levels
+    double greediness = 0.9;
 
     // Process each image
     for (size_t i = 0; i < imageFiles.size(); ++i) {
@@ -209,35 +234,46 @@ int main() {
         }
         QImage searchGray = ToGray(searchColor);
 
-        // Search
+        // Search using Halcon-style API
+        std::vector<double> rows, cols, angles, scores;
+
         timer.Reset();
         timer.Start();
-        auto results = model.Find(searchGray, searchParams);
+        FindShapeModel(searchGray, model, searchAngleStart, searchAngleExtent,
+                       minScore, maxMatches, maxOverlap, subPixel, searchNumLevels, greediness,
+                       rows, cols, angles, scores);
         double searchTime = timer.ElapsedMs();
         timer.Stop();
 
-        std::cout << "      Found " << results.size() << " matches in "
+        std::cout << "      Found " << rows.size() << " matches in "
                   << searchTime << " ms" << std::endl;
 
         // Draw results
         QImage resultImage = Draw::PrepareForDrawing(searchGray);
 
-        for (size_t j = 0; j < results.size(); ++j) {
-            const auto& match = results[j];
+        for (size_t j = 0; j < rows.size(); ++j) {
             std::cout << "      Match " << (j+1) << ": "
-                      << "pos=(" << match.x << "," << match.y << ") "
-                      << "angle=" << (match.angle * 180.0 / M_PI) << " deg "
-                      << "score=" << match.score << std::endl;
+                      << "pos=(" << cols[j] << "," << rows[j] << ") "
+                      << "angle=" << DEG(angles[j]) << " deg "
+                      << "score=" << scores[j] << std::endl;
+
+            double cosA = std::cos(angles[j]);
+            double sinA = std::sin(angles[j]);
 
             // Draw model contour at match position (green)
-            Draw::MatchResultWithContour(resultImage, match, modelContour, Color::Green(), 2);
+            for (size_t k = 0; k < modelContourRows.size(); ++k) {
+                double px = cols[j] + cosA * modelContourCols[k] - sinA * modelContourRows[k];
+                double py = rows[j] + sinA * modelContourCols[k] + cosA * modelContourRows[k];
+                int32_t ix = static_cast<int32_t>(px);
+                int32_t iy = static_cast<int32_t>(py);
+                if (ix >= 0 && ix < resultImage.Width() && iy >= 0 && iy < resultImage.Height()) {
+                    Draw::Pixel(resultImage, ix, iy, Color::Green());
+                }
+            }
 
             // Draw bounding box (red)
-            auto stats = model.GetStats();
-            double halfW = stats.Width() / 2.0;
-            double halfH = stats.Height() / 2.0;
-            double cosA = std::cos(match.angle);
-            double sinA = std::sin(match.angle);
+            double halfW = modelWidth / 2.0;
+            double halfH = modelHeight / 2.0;
 
             // Compute rotated corners
             double corners[4][2] = {
@@ -246,8 +282,8 @@ int main() {
             };
             int32_t px[4], py[4];
             for (int k = 0; k < 4; ++k) {
-                px[k] = static_cast<int32_t>(match.x + cosA * corners[k][0] - sinA * corners[k][1]);
-                py[k] = static_cast<int32_t>(match.y + sinA * corners[k][0] + cosA * corners[k][1]);
+                px[k] = static_cast<int32_t>(cols[j] + cosA * corners[k][0] - sinA * corners[k][1]);
+                py[k] = static_cast<int32_t>(rows[j] + sinA * corners[k][0] + cosA * corners[k][1]);
             }
             // Draw box edges
             Draw::Line(resultImage, px[0], py[0], px[1], py[1], Color::Red(), 2);
@@ -256,7 +292,7 @@ int main() {
             Draw::Line(resultImage, px[3], py[3], px[0], py[0], Color::Red(), 2);
 
             // Draw center cross
-            Draw::Cross(resultImage, match.x, match.y, 10, Color::Yellow(), 2);
+            Draw::Cross(resultImage, cols[j], rows[j], 10, Color::Yellow(), 2);
         }
 
         // Save result

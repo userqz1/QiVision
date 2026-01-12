@@ -1,6 +1,6 @@
 /**
  * @file test_shape_model.cpp
- * @brief Unit tests for ShapeModel template matching
+ * @brief Unit tests for ShapeModel template matching (Halcon-style API)
  */
 
 #include <QiVision/Matching/ShapeModel.h>
@@ -211,7 +211,7 @@ TEST_F(MatchTypesTest, FilterByScore) {
 }
 
 // =============================================================================
-// ShapeModel Tests
+// ShapeModel Tests (Halcon-style API)
 // =============================================================================
 
 class ShapeModelTest : public ::testing::Test {
@@ -222,15 +222,13 @@ protected:
 TEST_F(ShapeModelTest, DefaultConstruction) {
     ShapeModel model;
     EXPECT_FALSE(model.IsValid());
-    EXPECT_EQ(model.NumLevels(), 0);
 }
 
 TEST_F(ShapeModelTest, CreateFromEmptyImage) {
-    ShapeModel model;
     QImage empty;
 
-    bool success = model.Create(empty);
-    EXPECT_FALSE(success);
+    // Halcon-style: CreateShapeModel with empty image should return invalid model
+    ShapeModel model = CreateShapeModel(empty, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
     EXPECT_FALSE(model.IsValid());
 }
 
@@ -239,12 +237,10 @@ TEST_F(ShapeModelTest, CreateFromTemplateImage) {
     QImage templateImg = CreateTestImage(100, 100, 128);
     DrawRectangle(templateImg, 20, 20, 60, 60, 255);
 
-    ShapeModel model;
-    bool success = model.Create(templateImg, ModelParams().SetContrast(20));
+    // Halcon-style: CreateShapeModel
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
 
-    EXPECT_TRUE(success);
     EXPECT_TRUE(model.IsValid());
-    EXPECT_GT(model.NumLevels(), 0);
 }
 
 TEST_F(ShapeModelTest, CreateWithROI) {
@@ -254,85 +250,80 @@ TEST_F(ShapeModelTest, CreateWithROI) {
     DrawRectangle(image, 120, 120, 40, 40, 255); // Shape 2
 
     // Create model from ROI containing only Shape 1
-    ShapeModel model;
     Rect2i roi{10, 10, 60, 60};
-    bool success = model.Create(image, roi, ModelParams().SetContrast(20));
+    ShapeModel model = CreateShapeModel(image, roi, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
 
-    EXPECT_TRUE(success);
     EXPECT_TRUE(model.IsValid());
 }
 
-TEST_F(ShapeModelTest, GetModelStats) {
+TEST_F(ShapeModelTest, GetShapeModelParams) {
     QImage templateImg = CreateTestImage(100, 100, 128);
     DrawRectangle(templateImg, 20, 20, 60, 60, 255);
 
-    ShapeModel model;
-    model.Create(templateImg, ModelParams().SetContrast(20));
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
 
-    ModelStats stats = model.GetStats();
+    int32_t numLevels;
+    double angleStart, angleExtent, angleStep;
+    double scaleMin, scaleMax, scaleStep;
+    std::string metric;
 
-    EXPECT_GT(stats.numPoints, 0);
-    EXPECT_GT(stats.numLevels, 0);
-    EXPECT_GT(stats.meanContrast, 0.0);
+    GetShapeModelParams(model, numLevels, angleStart, angleExtent, angleStep,
+                       scaleMin, scaleMax, scaleStep, metric);
+
+    EXPECT_GT(numLevels, 0);
 }
 
-TEST_F(ShapeModelTest, GetModelPoints) {
+TEST_F(ShapeModelTest, GetShapeModelContours) {
     QImage templateImg = CreateTestImage(100, 100, 128);
     DrawRectangle(templateImg, 20, 20, 60, 60, 255);
 
-    ShapeModel model;
-    model.Create(templateImg, ModelParams().SetContrast(20));
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
 
-    auto points = model.GetModelPoints(0);  // Level 0
+    std::vector<double> contourRows, contourCols;
+    GetShapeModelContours(model, 1, contourRows, contourCols);
 
     // Should have some edge points from the rectangle
-    EXPECT_GT(points.size(), 0u);
+    EXPECT_GT(contourRows.size(), 0u);
+    EXPECT_EQ(contourRows.size(), contourCols.size());
 }
 
-TEST_F(ShapeModelTest, Clear) {
+TEST_F(ShapeModelTest, ClearShapeModel) {
     QImage templateImg = CreateTestImage(100, 100, 128);
     DrawRectangle(templateImg, 20, 20, 60, 60, 255);
 
-    ShapeModel model;
-    model.Create(templateImg, ModelParams().SetContrast(20));
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
 
     EXPECT_TRUE(model.IsValid());
 
-    model.Clear();
+    ClearShapeModel(model);
 
     EXPECT_FALSE(model.IsValid());
-    EXPECT_EQ(model.NumLevels(), 0);
 }
 
 TEST_F(ShapeModelTest, CopyConstruction) {
     QImage templateImg = CreateTestImage(100, 100, 128);
     DrawRectangle(templateImg, 20, 20, 60, 60, 255);
 
-    ShapeModel model1;
-    model1.Create(templateImg, ModelParams().SetContrast(20));
+    ShapeModel model1 = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
 
     ShapeModel model2(model1);
 
     EXPECT_TRUE(model2.IsValid());
-    EXPECT_EQ(model1.NumLevels(), model2.NumLevels());
 }
 
 TEST_F(ShapeModelTest, MoveConstruction) {
     QImage templateImg = CreateTestImage(100, 100, 128);
     DrawRectangle(templateImg, 20, 20, 60, 60, 255);
 
-    ShapeModel model1;
-    model1.Create(templateImg, ModelParams().SetContrast(20));
-    int32_t numLevels = model1.NumLevels();
+    ShapeModel model1 = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
 
     ShapeModel model2(std::move(model1));
 
     EXPECT_TRUE(model2.IsValid());
-    EXPECT_EQ(model2.NumLevels(), numLevels);
 }
 
 // =============================================================================
-// Search Tests
+// Search Tests (Halcon-style API)
 // =============================================================================
 
 class ShapeModelSearchTest : public ::testing::Test {
@@ -346,8 +337,8 @@ protected:
         targetImg_ = CreateTestImage(200, 200, 128);
         DrawRectangle(targetImg_, 75, 75, 30, 30, 255);  // Offset by (65, 65) from template origin
 
-        // Create model
-        model_.Create(templateImg_, ModelParams().SetContrast(20));
+        // Create model using Halcon-style API
+        model_ = CreateShapeModel(templateImg_, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
     }
 
     QImage templateImg_;
@@ -357,32 +348,44 @@ protected:
 
 TEST_F(ShapeModelSearchTest, FindInEmptyImage) {
     QImage empty;
-    auto results = model_.Find(empty);
+    std::vector<double> rows, cols, angles, scores;
 
-    EXPECT_TRUE(results.empty());
+    FindShapeModel(empty, model_, 0, RAD(360), 0.3, 0, 0.5, "least_squares", 0, 0.9,
+                   rows, cols, angles, scores);
+
+    EXPECT_TRUE(rows.empty());
 }
 
 TEST_F(ShapeModelSearchTest, FindWithInvalidModel) {
     ShapeModel invalidModel;
-    auto results = invalidModel.Find(targetImg_);
+    std::vector<double> rows, cols, angles, scores;
 
-    EXPECT_TRUE(results.empty());
+    FindShapeModel(targetImg_, invalidModel, 0, RAD(360), 0.3, 0, 0.5, "least_squares", 0, 0.9,
+                   rows, cols, angles, scores);
+
+    EXPECT_TRUE(rows.empty());
 }
 
-TEST_F(ShapeModelSearchTest, FindBestMatch) {
-    auto result = model_.FindBest(targetImg_, SearchParams().SetMinScore(0.3));
+TEST_F(ShapeModelSearchTest, FindShapeModelBasic) {
+    std::vector<double> rows, cols, angles, scores;
+
+    FindShapeModel(targetImg_, model_, 0, RAD(360), 0.3, 1, 0.5, "least_squares", 0, 0.9,
+                   rows, cols, angles, scores);
 
     // Should find the shape
     // Note: Exact position depends on implementation details
-    EXPECT_GE(result.score, 0.0);
+    EXPECT_GE(rows.size(), 0u);
 }
 
 TEST_F(ShapeModelSearchTest, FindWithLowThreshold) {
-    auto results = model_.Find(targetImg_, SearchParams().SetMinScore(0.1));
+    std::vector<double> rows, cols, angles, scores;
+
+    FindShapeModel(targetImg_, model_, 0, RAD(360), 0.1, 10, 0.5, "least_squares", 0, 0.9,
+                   rows, cols, angles, scores);
 
     // With low threshold, should find at least one match
     // (may find multiple candidates)
-    EXPECT_GE(results.size(), 0u);
+    EXPECT_GE(rows.size(), 0u);
 }
 
 // =============================================================================
@@ -415,8 +418,18 @@ TEST_F(UtilityFunctionsTest, EstimateAngleStep) {
     EXPECT_LT(step1, 0.5);
 }
 
+TEST_F(UtilityFunctionsTest, RADandDEG) {
+    EXPECT_NEAR(RAD(180), M_PI, 1e-10);
+    EXPECT_NEAR(RAD(90), M_PI / 2, 1e-10);
+    EXPECT_NEAR(RAD(360), 2 * M_PI, 1e-10);
+
+    EXPECT_NEAR(DEG(M_PI), 180.0, 1e-10);
+    EXPECT_NEAR(DEG(M_PI / 2), 90.0, 1e-10);
+    EXPECT_NEAR(DEG(2 * M_PI), 360.0, 1e-10);
+}
+
 // =============================================================================
-// Integration Tests
+// Integration Tests (Halcon-style API)
 // =============================================================================
 
 class ShapeModelIntegrationTest : public ::testing::Test {
@@ -433,17 +446,18 @@ TEST_F(ShapeModelIntegrationTest, FindCircleTemplate) {
     QImage targetImg = CreateTestImage(200, 200, 128);
     DrawCircle(targetImg, 100, 100, 20, 255);
 
-    ShapeModel model;
-    bool success = model.Create(templateImg, ModelParams().SetContrast(20));
-    EXPECT_TRUE(success);
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
+    EXPECT_TRUE(model.IsValid());
 
-    auto result = model.FindBest(targetImg, SearchParams().SetMinScore(0.3));
+    std::vector<double> rows, cols, angles, scores;
+    FindShapeModel(targetImg, model, 0, RAD(360), 0.3, 1, 0.5, "least_squares", 0, 0.9,
+                   rows, cols, angles, scores);
 
     // Circle should be found somewhere near (100, 100)
     // Allow for some tolerance due to subpixel positioning
-    if (result.score > 0) {
-        EXPECT_NEAR(result.x, 100.0, 30.0);
-        EXPECT_NEAR(result.y, 100.0, 30.0);
+    if (!rows.empty() && scores[0] > 0) {
+        EXPECT_NEAR(cols[0], 100.0, 30.0);
+        EXPECT_NEAR(rows[0], 100.0, 30.0);
     }
 }
 
@@ -458,13 +472,13 @@ TEST_F(ShapeModelIntegrationTest, MultipleMatches) {
     DrawRectangle(targetImg, 100, 50, 30, 30, 255);
     DrawRectangle(targetImg, 200, 100, 30, 30, 255);
 
-    ShapeModel model;
-    model.Create(templateImg, ModelParams().SetContrast(20));
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
 
-    auto results = model.Find(targetImg, SearchParams().SetMinScore(0.2).SetMaxMatches(10));
+    std::vector<double> rows, cols, angles, scores;
+    FindShapeModel(targetImg, model, 0, RAD(360), 0.2, 10, 0.5, "least_squares", 0, 0.9,
+                   rows, cols, angles, scores);
 
     // Should find multiple matches
     // Note: May not find all due to search algorithm limitations
-    EXPECT_GE(results.size(), 0u);
+    EXPECT_GE(rows.size(), 0u);
 }
-

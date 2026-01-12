@@ -581,4 +581,84 @@ inline std::vector<MatchResult> FilterByScore(
     return result;
 }
 
+// =============================================================================
+// Timing Parameters (for profiling/debugging)
+// =============================================================================
+
+/**
+ * @brief Timing parameters for shape model operations
+ */
+struct ShapeModelTimingParams {
+    bool enableTiming = false;      ///< Enable timing measurements
+    bool printTiming = false;       ///< Print timing info to stdout
+};
+
+/**
+ * @brief Timing results for model creation
+ */
+struct ShapeModelCreateTiming {
+    double pyramidBuildMs = 0.0;
+    double contrastAutoMs = 0.0;
+    double extractPointsMs = 0.0;
+    double optimizeMs = 0.0;
+    double buildSoAMs = 0.0;
+    double totalMs = 0.0;
+
+    void Print() const {
+        // Print timing info (can be customized)
+    }
+};
+
+/**
+ * @brief Timing results for model search
+ */
+struct ShapeModelFindTiming {
+    double pyramidBuildMs = 0.0;
+    double coarseSearchMs = 0.0;
+    double pyramidRefineMs = 0.0;
+    double subpixelRefineMs = 0.0;
+    double nmsMs = 0.0;
+    double totalMs = 0.0;
+    int32_t numCoarseCandidates = 0;
+    int32_t numFinalMatches = 0;
+};
+
+// =============================================================================
+// Helper Functions (Internal Use)
+// =============================================================================
+
+/**
+ * @brief Estimate optimal angle step based on model size
+ * @param modelSize Maximum dimension of model (max(width, height))
+ * @return Recommended angle step in radians
+ */
+inline double EstimateAngleStep(int32_t modelSize) {
+    // Smaller models need finer angle steps
+    // Rule: 1 pixel displacement at edge = arctan(1/r) where r = modelSize/2
+    double radius = modelSize * 0.5;
+    if (radius < 10) radius = 10;
+    return std::atan(1.0 / radius);  // ~1 pixel arc at edge
+}
+
+/**
+ * @brief Estimate optimal pyramid levels based on image and template size
+ * @param imageWidth Image width
+ * @param imageHeight Image height
+ * @param templateWidth Template width
+ * @param templateHeight Template height
+ * @return Recommended number of pyramid levels
+ */
+inline int32_t EstimateOptimalLevels(int32_t imageWidth, int32_t imageHeight,
+                                      int32_t templateWidth, int32_t templateHeight) {
+    // Find how many times we can halve the template while keeping it >= 8 pixels
+    int32_t minTemplateDim = std::min(templateWidth, templateHeight);
+    int32_t levels = 1;
+    while (minTemplateDim >= 16) {  // Minimum 8 pixels at coarsest level
+        minTemplateDim /= 2;
+        levels++;
+        if (levels >= 6) break;  // Max 6 levels
+    }
+    return levels;
+}
+
 } // namespace Qi::Vision::Matching

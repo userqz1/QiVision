@@ -2,129 +2,56 @@
 
 /**
  * @file ShapeModel.h
- * @brief Shape-based template matching using gradient direction similarity
+ * @brief Shape-based template matching (Halcon-style API)
  *
- * ShapeModel implements the gradient direction-based shape matching algorithm,
- * similar to Halcon's find_shape_model. Key features:
+ * Implements gradient direction-based shape matching algorithm,
+ * compatible with Halcon's shape model operators.
  *
- * - Uses gradient direction (not magnitude) for robustness to lighting changes
- * - Multi-scale pyramid search for efficiency
- * - Subpixel position, angle, and scale refinement
- * - Supports arbitrary rotation and uniform scaling
+ * API naming follows Halcon convention:
+ * - CreateShapeModel / CreateScaledShapeModel / CreateAnisoShapeModel
+ * - FindShapeModel / FindScaledShapeModel / FindAnisoShapeModel
+ * - GetShapeModelContours / GetShapeModelParams
+ * - SetShapeModelOrigin / SetShapeModelMetric
+ * - WriteShapeModel / ReadShapeModel
+ * - ClearShapeModel
  *
- * Algorithm Overview:
- * 1. Model Creation: Extract gradient directions from template, build pyramid
- * 2. Coarse Search: Start from top pyramid level, find candidate positions
- * 3. Refinement: Propagate candidates down pyramid, refine at each level
- * 4. Subpixel: Final least-squares refinement for subpixel accuracy
- *
- * Performance: O(N*M*A*S) where N,M=image size, A=angle steps, S=scale steps
- * With pyramid acceleration, typical speedup is 10-100x.
- *
- * @see AnglePyramid.h for gradient pyramid computation
- * @see MatchTypes.h for common types
+ * @see https://www.mvtec.com/doc/halcon/12/en/create_shape_model.html
  */
 
-#include <QiVision/Matching/MatchTypes.h>
 #include <QiVision/Core/QImage.h>
 #include <QiVision/Core/Types.h>
 
 #include <cstdint>
-#include <cstdio>
 #include <memory>
-#include <vector>
 #include <string>
+#include <vector>
 
 namespace Qi::Vision::Matching {
 
-// =============================================================================
-// Timing Structures
-// =============================================================================
-
-/**
- * @brief Detailed timing for ShapeModel::Create()
- */
-struct ShapeModelCreateTiming {
-    double totalMs = 0.0;               ///< Total Create time
-    double pyramidBuildMs = 0.0;        ///< AnglePyramid::Build time
-    double contrastAutoMs = 0.0;        ///< Auto contrast detection time
-    double extractPointsMs = 0.0;       ///< Extract model points time
-    double optimizeMs = 0.0;            ///< Model optimization time
-    double buildSoAMs = 0.0;            ///< Build SoA data for SIMD
-
-    void Print() const {
-        std::printf("[ShapeModel Create Timing] Total: %.2fms\n", totalMs);
-        std::printf("  PyramidBuild:   %6.2fms (%4.1f%%)\n", pyramidBuildMs, 100.0 * pyramidBuildMs / totalMs);
-        std::printf("  ContrastAuto:   %6.2fms (%4.1f%%)\n", contrastAutoMs, 100.0 * contrastAutoMs / totalMs);
-        std::printf("  ExtractPoints:  %6.2fms (%4.1f%%)\n", extractPointsMs, 100.0 * extractPointsMs / totalMs);
-        std::printf("  Optimize:       %6.2fms (%4.1f%%)\n", optimizeMs, 100.0 * optimizeMs / totalMs);
-        std::printf("  BuildSoA:       %6.2fms (%4.1f%%)\n", buildSoAMs, 100.0 * buildSoAMs / totalMs);
-    }
-};
-
-/**
- * @brief Detailed timing for ShapeModel::Find()
- */
-struct ShapeModelFindTiming {
-    double totalMs = 0.0;               ///< Total Find time
-    double pyramidBuildMs = 0.0;        ///< AnglePyramid::Build time (for target image)
-    double coarseSearchMs = 0.0;        ///< Coarse search at top level
-    double pyramidRefineMs = 0.0;       ///< Pyramid refinement through levels
-    double subpixelRefineMs = 0.0;      ///< Subpixel refinement
-    double nmsMs = 0.0;                 ///< Non-maximum suppression
-    int32_t numCoarseCandidates = 0;    ///< Number of coarse candidates found
-    int32_t numFinalMatches = 0;        ///< Number of final matches
-
-    void Print() const {
-        std::printf("[ShapeModel Find Timing] Total: %.2fms\n", totalMs);
-        std::printf("  PyramidBuild:   %6.2fms (%4.1f%%)\n", pyramidBuildMs, 100.0 * pyramidBuildMs / totalMs);
-        std::printf("  CoarseSearch:   %6.2fms (%4.1f%%) - %d candidates\n",
-                    coarseSearchMs, 100.0 * coarseSearchMs / totalMs, numCoarseCandidates);
-        std::printf("  PyramidRefine:  %6.2fms (%4.1f%%)\n", pyramidRefineMs, 100.0 * pyramidRefineMs / totalMs);
-        std::printf("  SubpixelRefine: %6.2fms (%4.1f%%)\n", subpixelRefineMs, 100.0 * subpixelRefineMs / totalMs);
-        std::printf("  NMS:            %6.2fms (%4.1f%%) - %d matches\n",
-                    nmsMs, 100.0 * nmsMs / totalMs, numFinalMatches);
-    }
-};
-
-/**
- * @brief Parameters for enabling timing in ShapeModel
- */
-struct ShapeModelTimingParams {
-    bool enableTiming = false;          ///< Enable detailed timing statistics
-    bool printTiming = false;           ///< Print timing to stderr after each operation
-
-    ShapeModelTimingParams& SetEnableTiming(bool v) { enableTiming = v; return *this; }
-    ShapeModelTimingParams& SetPrintTiming(bool v) { printTiming = v; return *this; }
-};
-
-// Forward declarations
+// Forward declaration
 namespace Internal {
 class ShapeModelImpl;
 }
 
 // =============================================================================
-// ShapeModel Class
+// ShapeModel Class (Model Handle)
 // =============================================================================
 
 /**
- * @brief Shape-based template matching model
+ * @brief Shape model handle (equivalent to Halcon's ModelID)
  *
- * Usage:
+ * This class holds the model data. Use the free functions to create and
+ * manipulate models.
+ *
  * @code
- * // Create model from template image
- * ShapeModel model;
- * model.Create(templateImage, ModelParams().SetContrast(30));
+ * // Create model
+ * ShapeModel model = CreateShapeModel(templateImage, 4, 0, RAD(360), 0,
+ *                                     "auto", "use_polarity", 30, 10);
  *
- * // Find matches in target image
- * auto results = model.Find(targetImage,
- *     SearchParams().SetMinScore(0.7).SetAngleRange(-0.5, 1.0));
- *
- * // Access results
- * for (const auto& match : results) {
- *     std::cout << "Found at (" << match.x << ", " << match.y
- *               << ") angle=" << match.angle << " score=" << match.score << "\n";
- * }
+ * // Find matches
+ * std::vector<double> rows, cols, angles, scores;
+ * FindShapeModel(searchImage, model, 0, RAD(360), 0.7, 0, 0.5,
+ *                "least_squares", 0, 0.9, rows, cols, angles, scores);
  * @endcode
  */
 class ShapeModel {
@@ -136,240 +63,383 @@ public:
     ShapeModel& operator=(const ShapeModel& other);
     ShapeModel& operator=(ShapeModel&& other) noexcept;
 
-    // =========================================================================
-    // Model Creation
-    // =========================================================================
-
-    /**
-     * @brief Create shape model from template image
-     * @param templateImage Grayscale template image
-     * @param params Model creation parameters
-     * @return true if model created successfully
-     *
-     * The template's center is used as the model origin.
-     * Model points are extracted based on gradient magnitude threshold.
-     */
-    bool Create(const QImage& templateImage, const ModelParams& params = ModelParams());
-
-    /**
-     * @brief Create shape model from template with ROI
-     * @param templateImage Source image
-     * @param roi Region of interest within the image
-     * @param params Model creation parameters
-     * @return true if model created successfully
-     */
-    bool Create(const QImage& templateImage, const Rect2i& roi,
-                const ModelParams& params = ModelParams());
-
-    /**
-     * @brief Create shape model with custom origin
-     * @param templateImage Template image
-     * @param origin Model origin point (in template coordinates)
-     * @param params Model creation parameters
-     * @return true if model created successfully
-     */
-    bool CreateWithOrigin(const QImage& templateImage, const Point2d& origin,
-                          const ModelParams& params = ModelParams());
-
-    /**
-     * @brief Clear the model
-     */
-    void Clear();
-
-    /**
-     * @brief Check if model is valid
-     */
+    /// Check if model is valid
     bool IsValid() const;
 
-    // =========================================================================
-    // Searching
-    // =========================================================================
-
-    /**
-     * @brief Find all matches in the target image
-     * @param image Target grayscale image
-     * @param params Search parameters
-     * @return Vector of match results, sorted by score (descending)
-     */
-    std::vector<MatchResult> Find(const QImage& image,
-                                   const SearchParams& params = SearchParams()) const;
-
-    /**
-     * @brief Find single best match
-     * @param image Target image
-     * @param params Search parameters
-     * @return Best match result, or empty result if not found
-     */
-    MatchResult FindBest(const QImage& image,
-                          const SearchParams& params = SearchParams()) const;
-
-    /**
-     * @brief Find matches in ROI
-     * @param image Target image
-     * @param roi Search region
-     * @param params Search parameters
-     * @return Vector of match results
-     */
-    std::vector<MatchResult> FindInROI(const QImage& image, const Rect2i& roi,
-                                        const SearchParams& params = SearchParams()) const;
-
-    // =========================================================================
-    // Model Properties
-    // =========================================================================
-
-    /**
-     * @brief Get model statistics
-     */
-    ModelStats GetStats() const;
-
-    /**
-     * @brief Get model points at specified level
-     * @param level Pyramid level (0 = finest)
-     * @return Vector of model points
-     */
-    std::vector<ModelPoint> GetModelPoints(int32_t level = 0) const;
-
-    /**
-     * @brief Get number of pyramid levels
-     */
-    int32_t NumLevels() const;
-
-    /**
-     * @brief Get model origin
-     */
-    Point2d GetOrigin() const;
-
-    /**
-     * @brief Get model size (width, height)
-     */
-    Size2i GetSize() const;
-
-    /**
-     * @brief Get creation parameters
-     */
-    const ModelParams& GetParams() const;
-
-    // =========================================================================
-    // Visualization
-    // =========================================================================
-
-    /**
-     * @brief Get model contour for visualization
-     * @param level Pyramid level
-     * @return Contour points representing the model shape
-     */
-    std::vector<Point2d> GetModelContour(int32_t level = 0) const;
-
-    /**
-     * @brief Transform model contour to match position
-     * @param match Match result
-     * @return Transformed contour points
-     */
-    std::vector<Point2d> GetMatchContour(const MatchResult& match) const;
-
-    // =========================================================================
-    // Serialization
-    // =========================================================================
-
-    /**
-     * @brief Save model to file
-     * @param filename Output file path
-     * @return true if saved successfully
-     */
-    bool Save(const std::string& filename) const;
-
-    /**
-     * @brief Load model from file
-     * @param filename Input file path
-     * @return true if loaded successfully
-     */
-    bool Load(const std::string& filename);
-
-    // =========================================================================
-    // Advanced
-    // =========================================================================
-
-    /**
-     * @brief Compute match score at specific position
-     * @param image Target image
-     * @param x X position
-     * @param y Y position
-     * @param angle Rotation angle (radians)
-     * @param scale Scale factor
-     * @return Match score [0, 1]
-     *
-     * Useful for verification or custom search strategies.
-     */
-    double ComputeScore(const QImage& image,
-                        double x, double y,
-                        double angle = 0.0,
-                        double scale = 1.0) const;
-
-    /**
-     * @brief Refine match position with subpixel accuracy
-     * @param image Target image
-     * @param match Initial match (will be refined in place)
-     * @param method Subpixel refinement method
-     * @return true if refinement successful
-     */
-    bool RefineMatch(const QImage& image, MatchResult& match,
-                     SubpixelMethod method = SubpixelMethod::LeastSquares) const;
-
-    // =========================================================================
-    // Timing (Performance Profiling)
-    // =========================================================================
-
-    /**
-     * @brief Enable or disable timing collection
-     * @param params Timing parameters
-     */
-    void SetTimingParams(const ShapeModelTimingParams& params);
-
-    /**
-     * @brief Get timing from last Create() call
-     * @note Only valid if timing was enabled before Create()
-     */
-    const ShapeModelCreateTiming& GetCreateTiming() const;
-
-    /**
-     * @brief Get timing from last Find() call
-     * @note Only valid if timing was enabled before Find()
-     */
-    const ShapeModelFindTiming& GetFindTiming() const;
+    /// Get internal implementation (for internal use only)
+    Internal::ShapeModelImpl* Impl() { return impl_.get(); }
+    const Internal::ShapeModelImpl* Impl() const { return impl_.get(); }
 
 private:
+    friend class Internal::ShapeModelImpl;
     std::unique_ptr<Internal::ShapeModelImpl> impl_;
 };
+
+// =============================================================================
+// Model Creation Functions
+// =============================================================================
+
+/**
+ * @brief Create a shape model for matching (rotation only)
+ *
+ * Equivalent to Halcon's create_shape_model operator.
+ *
+ * @param templateImage Template image (grayscale)
+ * @param numLevels     Number of pyramid levels (0 = auto)
+ * @param angleStart    Smallest rotation angle [rad]
+ * @param angleExtent   Extent of rotation angles [rad] (0 = all orientations)
+ * @param angleStep     Step length of angles [rad] (0 = auto, ~1 degree)
+ * @param optimization  Point reduction: "none", "auto", "point_reduction_low",
+ *                      "point_reduction_medium", "point_reduction_high"
+ * @param metric        Match metric: "use_polarity", "ignore_global_polarity",
+ *                      "ignore_local_polarity", "ignore_color_polarity"
+ * @param contrast      Threshold for edge extraction (or "auto")
+ * @param minContrast   Minimum contrast in search images
+ * @return Shape model handle
+ *
+ * @note The center of the template is used as the model origin.
+ *       Use SetShapeModelOrigin() to change it.
+ */
+ShapeModel CreateShapeModel(
+    const QImage& templateImage,
+    int32_t numLevels,
+    double angleStart,
+    double angleExtent,
+    double angleStep,
+    const std::string& optimization,
+    const std::string& metric,
+    double contrast,
+    double minContrast
+);
+
+/**
+ * @brief Create a shape model from ROI
+ *
+ * @param templateImage Source image
+ * @param roi           Region of interest
+ * @param numLevels     Number of pyramid levels (0 = auto)
+ * @param angleStart    Smallest rotation angle [rad]
+ * @param angleExtent   Extent of rotation angles [rad]
+ * @param angleStep     Step length of angles [rad] (0 = auto)
+ * @param optimization  Point reduction mode
+ * @param metric        Match metric
+ * @param contrast      Threshold for edge extraction
+ * @param minContrast   Minimum contrast in search images
+ * @return Shape model handle
+ */
+ShapeModel CreateShapeModel(
+    const QImage& templateImage,
+    const Rect2i& roi,
+    int32_t numLevels,
+    double angleStart,
+    double angleExtent,
+    double angleStep,
+    const std::string& optimization,
+    const std::string& metric,
+    double contrast,
+    double minContrast
+);
+
+/**
+ * @brief Create a shape model with scale search (isotropic)
+ *
+ * Equivalent to Halcon's create_scaled_shape_model operator.
+ *
+ * @param templateImage Template image
+ * @param numLevels     Number of pyramid levels (0 = auto)
+ * @param angleStart    Smallest rotation angle [rad]
+ * @param angleExtent   Extent of rotation angles [rad]
+ * @param angleStep     Step length of angles [rad] (0 = auto)
+ * @param scaleMin      Minimum scale factor
+ * @param scaleMax      Maximum scale factor
+ * @param scaleStep     Scale step (0 = auto)
+ * @param optimization  Point reduction mode
+ * @param metric        Match metric
+ * @param contrast      Threshold for edge extraction
+ * @param minContrast   Minimum contrast in search images
+ * @return Shape model handle
+ */
+ShapeModel CreateScaledShapeModel(
+    const QImage& templateImage,
+    int32_t numLevels,
+    double angleStart,
+    double angleExtent,
+    double angleStep,
+    double scaleMin,
+    double scaleMax,
+    double scaleStep,
+    const std::string& optimization,
+    const std::string& metric,
+    double contrast,
+    double minContrast
+);
+
+// =============================================================================
+// Model Search Functions
+// =============================================================================
+
+/**
+ * @brief Find instances of a shape model in an image
+ *
+ * Equivalent to Halcon's find_shape_model operator.
+ *
+ * @param image         Search image (grayscale)
+ * @param model         Shape model handle
+ * @param angleStart    Smallest rotation angle [rad]
+ * @param angleExtent   Extent of rotation angles [rad]
+ * @param minScore      Minimum score threshold [0..1]
+ * @param numMatches    Maximum number of matches (0 = all)
+ * @param maxOverlap    Maximum overlap between matches [0..1]
+ * @param subPixel      Subpixel accuracy: "none", "interpolation", "least_squares"
+ * @param numLevels     Number of pyramid levels (0 = use model levels)
+ * @param greediness    Search greediness [0..1] (higher = faster but may miss)
+ * @param rows          [out] Row coordinates of found instances
+ * @param cols          [out] Column coordinates of found instances
+ * @param angles        [out] Rotation angles of found instances [rad]
+ * @param scores        [out] Match scores of found instances [0..1]
+ */
+void FindShapeModel(
+    const QImage& image,
+    const ShapeModel& model,
+    double angleStart,
+    double angleExtent,
+    double minScore,
+    int32_t numMatches,
+    double maxOverlap,
+    const std::string& subPixel,
+    int32_t numLevels,
+    double greediness,
+    std::vector<double>& rows,
+    std::vector<double>& cols,
+    std::vector<double>& angles,
+    std::vector<double>& scores
+);
+
+/**
+ * @brief Find instances of a scaled shape model
+ *
+ * Equivalent to Halcon's find_scaled_shape_model operator.
+ *
+ * @param image         Search image
+ * @param model         Shape model handle (created with CreateScaledShapeModel)
+ * @param angleStart    Smallest rotation angle [rad]
+ * @param angleExtent   Extent of rotation angles [rad]
+ * @param scaleMin      Minimum scale factor
+ * @param scaleMax      Maximum scale factor
+ * @param minScore      Minimum score threshold [0..1]
+ * @param numMatches    Maximum number of matches (0 = all)
+ * @param maxOverlap    Maximum overlap between matches [0..1]
+ * @param subPixel      Subpixel accuracy mode
+ * @param numLevels     Number of pyramid levels (0 = use model levels)
+ * @param greediness    Search greediness [0..1]
+ * @param rows          [out] Row coordinates
+ * @param cols          [out] Column coordinates
+ * @param angles        [out] Rotation angles [rad]
+ * @param scales        [out] Scale factors
+ * @param scores        [out] Match scores [0..1]
+ */
+void FindScaledShapeModel(
+    const QImage& image,
+    const ShapeModel& model,
+    double angleStart,
+    double angleExtent,
+    double scaleMin,
+    double scaleMax,
+    double minScore,
+    int32_t numMatches,
+    double maxOverlap,
+    const std::string& subPixel,
+    int32_t numLevels,
+    double greediness,
+    std::vector<double>& rows,
+    std::vector<double>& cols,
+    std::vector<double>& angles,
+    std::vector<double>& scales,
+    std::vector<double>& scores
+);
+
+// =============================================================================
+// Model Property Functions
+// =============================================================================
+
+/**
+ * @brief Get the contour representation of a shape model
+ *
+ * Equivalent to Halcon's get_shape_model_contours operator.
+ *
+ * @param model         Shape model handle
+ * @param level         Pyramid level (1 = highest resolution)
+ * @param contourRows   [out] Row coordinates of contour points
+ * @param contourCols   [out] Column coordinates of contour points
+ */
+void GetShapeModelContours(
+    const ShapeModel& model,
+    int32_t level,
+    std::vector<double>& contourRows,
+    std::vector<double>& contourCols
+);
+
+/**
+ * @brief Get the parameters of a shape model
+ *
+ * Equivalent to Halcon's get_shape_model_params operator.
+ *
+ * @param model         Shape model handle
+ * @param numLevels     [out] Number of pyramid levels
+ * @param angleStart    [out] Smallest rotation angle [rad]
+ * @param angleExtent   [out] Extent of rotation angles [rad]
+ * @param angleStep     [out] Step length of angles [rad]
+ * @param scaleMin      [out] Minimum scale factor
+ * @param scaleMax      [out] Maximum scale factor
+ * @param scaleStep     [out] Scale step
+ * @param metric        [out] Match metric string
+ */
+void GetShapeModelParams(
+    const ShapeModel& model,
+    int32_t& numLevels,
+    double& angleStart,
+    double& angleExtent,
+    double& angleStep,
+    double& scaleMin,
+    double& scaleMax,
+    double& scaleStep,
+    std::string& metric
+);
+
+/**
+ * @brief Get the origin (reference point) of a shape model
+ *
+ * Equivalent to Halcon's get_shape_model_origin operator.
+ *
+ * @param model         Shape model handle
+ * @param row           [out] Row coordinate of origin
+ * @param col           [out] Column coordinate of origin
+ */
+void GetShapeModelOrigin(
+    const ShapeModel& model,
+    double& row,
+    double& col
+);
+
+/**
+ * @brief Set the origin (reference point) of a shape model
+ *
+ * Equivalent to Halcon's set_shape_model_origin operator.
+ *
+ * @param model         Shape model handle
+ * @param row           Row coordinate of new origin
+ * @param col           Column coordinate of new origin
+ */
+void SetShapeModelOrigin(
+    ShapeModel& model,
+    double row,
+    double col
+);
+
+// =============================================================================
+// Model I/O Functions
+// =============================================================================
+
+/**
+ * @brief Write a shape model to file
+ *
+ * Equivalent to Halcon's write_shape_model operator.
+ *
+ * @param model         Shape model handle
+ * @param filename      Output file path
+ */
+void WriteShapeModel(
+    const ShapeModel& model,
+    const std::string& filename
+);
+
+/**
+ * @brief Read a shape model from file
+ *
+ * Equivalent to Halcon's read_shape_model operator.
+ *
+ * @param filename      Input file path
+ * @return Shape model handle
+ */
+ShapeModel ReadShapeModel(
+    const std::string& filename
+);
+
+/**
+ * @brief Clear (release) a shape model
+ *
+ * Equivalent to Halcon's clear_shape_model operator.
+ *
+ * @param model         Shape model handle to clear
+ */
+void ClearShapeModel(
+    ShapeModel& model
+);
 
 // =============================================================================
 // Utility Functions
 // =============================================================================
 
 /**
- * @brief Create shape model from image file
- * @param filename Image file path
- * @param params Model parameters
- * @return Created model (check IsValid())
+ * @brief Determine optimal shape model parameters automatically
+ *
+ * Equivalent to Halcon's determine_shape_model_params operator.
+ *
+ * @param templateImage Template image
+ * @param roi           Region of interest (empty = full image)
+ * @param numLevels     [out] Recommended pyramid levels
+ * @param angleStart    [out] Recommended angle start
+ * @param angleExtent   [out] Recommended angle extent
+ * @param angleStep     [out] Recommended angle step
+ * @param scaleMin      [out] Recommended scale min
+ * @param scaleMax      [out] Recommended scale max
+ * @param scaleStep     [out] Recommended scale step
+ * @param contrast      [out] Recommended contrast threshold
+ * @param minContrast   [out] Recommended min contrast
  */
-ShapeModel CreateShapeModelFromFile(const std::string& filename,
-                                     const ModelParams& params = ModelParams());
+void DetermineShapeModelParams(
+    const QImage& templateImage,
+    const Rect2i& roi,
+    int32_t& numLevels,
+    double& angleStart,
+    double& angleExtent,
+    double& angleStep,
+    double& scaleMin,
+    double& scaleMax,
+    double& scaleStep,
+    double& contrast,
+    double& minContrast
+);
 
 /**
- * @brief Estimate optimal pyramid levels for image size
- * @param imageWidth Image width
- * @param imageHeight Image height
- * @param modelWidth Model width
- * @param modelHeight Model height
- * @return Recommended number of pyramid levels
+ * @brief Inspect a shape model (for debugging)
+ *
+ * Equivalent to Halcon's inspect_shape_model operator.
+ *
+ * @param model         Shape model handle
+ * @param level         Pyramid level to inspect
+ * @param contrastImage [out] Contrast/edge image at this level
+ * @param numPoints     [out] Number of model points
  */
-int32_t EstimateOptimalLevels(int32_t imageWidth, int32_t imageHeight,
-                               int32_t modelWidth, int32_t modelHeight);
+void InspectShapeModel(
+    const ShapeModel& model,
+    int32_t level,
+    QImage& contrastImage,
+    int32_t& numPoints
+);
 
-/**
- * @brief Estimate optimal angle step based on model size
- * @param modelSize Approximate model size in pixels
- * @return Recommended angle step in radians
- */
-double EstimateAngleStep(int32_t modelSize);
+// =============================================================================
+// Helper: Convert degrees to radians
+// =============================================================================
+
+/// Convert degrees to radians
+inline constexpr double RAD(double degrees) {
+    return degrees * 0.017453292519943295;  // PI / 180
+}
+
+/// Convert radians to degrees
+inline constexpr double DEG(double radians) {
+    return radians * 57.29577951308232;     // 180 / PI
+}
 
 } // namespace Qi::Vision::Matching

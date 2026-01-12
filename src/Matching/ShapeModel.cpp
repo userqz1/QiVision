@@ -1,11 +1,9 @@
 /**
  * @file ShapeModel.cpp
- * @brief Public API implementation for ShapeModel
+ * @brief Halcon-style ShapeModel API implementation
  *
- * Performance: 86-407ms for 360° search on 640×512 images
- *
- * @note For optimization attempts and results, see:
- *       docs/design/ShapeModel_Optimization_Notes.md
+ * Provides Halcon-compatible free functions that wrap the internal
+ * ShapeModelImpl class.
  */
 
 #include "ShapeModelImpl.h"
@@ -13,12 +11,57 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <limits>
+#include <stdexcept>
 
 namespace Qi::Vision::Matching {
 
 // =============================================================================
-// ShapeModel Public API Implementation
+// String to Enum Conversion Helpers
+// =============================================================================
+
+namespace {
+
+OptimizationMode ParseOptimization(const std::string& str) {
+    if (str == "none") return OptimizationMode::None;
+    if (str == "auto") return OptimizationMode::Auto;
+    if (str == "point_reduction_low") return OptimizationMode::PointReductionLow;
+    if (str == "point_reduction_medium") return OptimizationMode::PointReductionMedium;
+    if (str == "point_reduction_high") return OptimizationMode::PointReductionHigh;
+    if (str == "xld_contour") return OptimizationMode::XLDContour;
+    return OptimizationMode::Auto;  // default
+}
+
+MetricMode ParseMetric(const std::string& str) {
+    if (str == "use_polarity") return MetricMode::UsePolarity;
+    if (str == "ignore_global_polarity") return MetricMode::IgnoreGlobalPolarity;
+    if (str == "ignore_local_polarity") return MetricMode::IgnoreLocalPolarity;
+    if (str == "ignore_color_polarity") return MetricMode::IgnoreColorPolarity;
+    return MetricMode::UsePolarity;  // default
+}
+
+SubpixelMethod ParseSubpixel(const std::string& str) {
+    if (str == "none") return SubpixelMethod::None;
+    if (str == "interpolation") return SubpixelMethod::Parabolic;
+    if (str == "least_squares") return SubpixelMethod::LeastSquares;
+    return SubpixelMethod::LeastSquares;  // default
+}
+
+std::string MetricToString(MetricMode mode) {
+    switch (mode) {
+        case MetricMode::UsePolarity: return "use_polarity";
+        case MetricMode::IgnoreGlobalPolarity: return "ignore_global_polarity";
+        case MetricMode::IgnoreLocalPolarity: return "ignore_local_polarity";
+        case MetricMode::IgnoreColorPolarity: return "ignore_color_polarity";
+        default: return "use_polarity";
+    }
+}
+
+} // anonymous namespace
+
+// =============================================================================
+// ShapeModel Class (Handle)
 // =============================================================================
 
 ShapeModel::ShapeModel() : impl_(std::make_unique<Internal::ShapeModelImpl>()) {}
@@ -26,293 +69,365 @@ ShapeModel::ShapeModel() : impl_(std::make_unique<Internal::ShapeModelImpl>()) {
 ShapeModel::~ShapeModel() = default;
 
 ShapeModel::ShapeModel(const ShapeModel& other)
-    : impl_(std::make_unique<Internal::ShapeModelImpl>(*other.impl_)) {}
+    : impl_(other.impl_ ? std::make_unique<Internal::ShapeModelImpl>(*other.impl_) : nullptr) {}
 
 ShapeModel::ShapeModel(ShapeModel&& other) noexcept = default;
 
 ShapeModel& ShapeModel::operator=(const ShapeModel& other) {
     if (this != &other) {
-        impl_ = std::make_unique<Internal::ShapeModelImpl>(*other.impl_);
+        impl_ = other.impl_ ? std::make_unique<Internal::ShapeModelImpl>(*other.impl_) : nullptr;
     }
     return *this;
 }
 
 ShapeModel& ShapeModel::operator=(ShapeModel&& other) noexcept = default;
 
-// =============================================================================
-// Model Creation
-// =============================================================================
-
-bool ShapeModel::Create(const QImage& templateImage, const ModelParams& params) {
-    impl_->params_ = params;
-
-    // Use LINEMOD mode if requested
-    if (params.useLinemod) {
-        return impl_->CreateModelLinemod(templateImage, Rect2i{}, Point2d{0, 0});
-    }
-    return impl_->CreateModel(templateImage, Rect2i{}, Point2d{0, 0});
-}
-
-bool ShapeModel::Create(const QImage& templateImage, const Rect2i& roi,
-                         const ModelParams& params) {
-    impl_->params_ = params;
-
-    // Use LINEMOD mode if requested
-    if (params.useLinemod) {
-        return impl_->CreateModelLinemod(templateImage, roi, Point2d{0, 0});
-    }
-    return impl_->CreateModel(templateImage, roi, Point2d{0, 0});
-}
-
-bool ShapeModel::CreateWithOrigin(const QImage& templateImage, const Point2d& origin,
-                                   const ModelParams& params) {
-    impl_->params_ = params;
-
-    // Use LINEMOD mode if requested
-    if (params.useLinemod) {
-        return impl_->CreateModelLinemod(templateImage, Rect2i{}, origin);
-    }
-    return impl_->CreateModel(templateImage, Rect2i{}, origin);
-}
-
-void ShapeModel::Clear() {
-    impl_->levels_.clear();
-    impl_->valid_ = false;
-}
-
 bool ShapeModel::IsValid() const {
-    return impl_->valid_;
+    return impl_ && impl_->valid_;
 }
 
 // =============================================================================
-// Searching
+// Model Creation Functions
 // =============================================================================
 
-std::vector<MatchResult> ShapeModel::Find(const QImage& image,
-                                           const SearchParams& params) const {
-    if (!impl_->valid_) {
-        return {};
+ShapeModel CreateShapeModel(
+    const QImage& templateImage,
+    int32_t numLevels,
+    double angleStart,
+    double angleExtent,
+    double angleStep,
+    const std::string& optimization,
+    const std::string& metric,
+    double contrast,
+    double minContrast)
+{
+    return CreateShapeModel(templateImage, Rect2i{}, numLevels,
+                            angleStart, angleExtent, angleStep,
+                            optimization, metric, contrast, minContrast);
+}
+
+ShapeModel CreateShapeModel(
+    const QImage& templateImage,
+    const Rect2i& roi,
+    int32_t numLevels,
+    double angleStart,
+    double angleExtent,
+    double angleStep,
+    const std::string& optimization,
+    const std::string& metric,
+    double contrast,
+    double minContrast)
+{
+    ShapeModel model;
+
+    // Set up parameters
+    ModelParams params;
+    params.numLevels = numLevels;
+    params.angleStart = angleStart;
+    params.angleExtent = angleExtent;
+    params.angleStep = angleStep;
+    params.optimization = ParseOptimization(optimization);
+    params.metric = ParseMetric(metric);
+    params.contrastHigh = contrast;
+    params.minContrast = minContrast;
+    params.contrastMode = ContrastMode::Manual;
+
+    model.Impl()->params_ = params;
+
+    // Create model
+    Point2d origin{0, 0};
+    if (!model.Impl()->CreateModel(templateImage, roi, origin)) {
+        return ShapeModel();  // Return invalid model
     }
 
-    // Reset timing
-    impl_->findTiming_ = ShapeModelFindTiming();
-    auto tTotal = std::chrono::high_resolution_clock::now();
+    return model;
+}
+
+ShapeModel CreateScaledShapeModel(
+    const QImage& templateImage,
+    int32_t numLevels,
+    double angleStart,
+    double angleExtent,
+    double angleStep,
+    double scaleMin,
+    double scaleMax,
+    double scaleStep,
+    const std::string& optimization,
+    const std::string& metric,
+    double contrast,
+    double minContrast)
+{
+    ShapeModel model;
+
+    ModelParams params;
+    params.numLevels = numLevels;
+    params.angleStart = angleStart;
+    params.angleExtent = angleExtent;
+    params.angleStep = angleStep;
+    params.scaleMin = scaleMin;
+    params.scaleMax = scaleMax;
+    // params.scaleStep = scaleStep;  // TODO: Add to ModelParams if needed
+    (void)scaleStep;
+    params.optimization = ParseOptimization(optimization);
+    params.metric = ParseMetric(metric);
+    params.contrastHigh = contrast;
+    params.minContrast = minContrast;
+    params.contrastMode = ContrastMode::Manual;
+
+    model.Impl()->params_ = params;
+
+    Point2d origin{0, 0};
+    if (!model.Impl()->CreateModel(templateImage, Rect2i{}, origin)) {
+        return ShapeModel();
+    }
+
+    return model;
+}
+
+// =============================================================================
+// Model Search Functions
+// =============================================================================
+
+void FindShapeModel(
+    const QImage& image,
+    const ShapeModel& model,
+    double angleStart,
+    double angleExtent,
+    double minScore,
+    int32_t numMatches,
+    double maxOverlap,
+    const std::string& subPixel,
+    int32_t numLevels,
+    double greediness,
+    std::vector<double>& rows,
+    std::vector<double>& cols,
+    std::vector<double>& angles,
+    std::vector<double>& scores)
+{
+    // Clear outputs
+    rows.clear();
+    cols.clear();
+    angles.clear();
+    scores.clear();
+
+    if (!model.IsValid()) {
+        return;
+    }
+
+    auto* impl = model.Impl();
+
+    // Set up search parameters
+    SearchParams params;
+    params.angleStart = angleStart;
+    params.angleExtent = angleExtent;
+    params.minScore = minScore;
+    params.maxMatches = (numMatches == 0) ? 1000 : numMatches;
+    params.maxOverlap = maxOverlap;
+    params.subpixelMethod = ParseSubpixel(subPixel);
+    params.greediness = greediness;
+    // numLevels: 0 means use model levels
+    (void)numLevels;
+
+    // Build target pyramid
+    const bool useLinemod = impl->params_.useLinemod && !impl->linemodFeatures_.empty();
 
     std::vector<MatchResult> results;
 
-    // Check if LINEMOD mode is enabled (has LINEMOD features)
-    const bool useLinemod = impl_->params_.useLinemod && !impl_->linemodFeatures_.empty();
-
     if (useLinemod) {
-        // LINEMOD search path
         Internal::LinemodPyramidParams linemodParams;
-        linemodParams.numLevels = static_cast<int32_t>(impl_->linemodFeatures_.size());
-        linemodParams.minMagnitude = static_cast<float>(impl_->params_.contrastHigh);
+        linemodParams.numLevels = static_cast<int32_t>(impl->linemodFeatures_.size());
+        linemodParams.minMagnitude = static_cast<float>(impl->params_.contrastHigh);
         linemodParams.spreadT = 4;
         linemodParams.neighborThreshold = 5;
         linemodParams.smoothSigma = 1.0;
-        linemodParams.extractFeatures = false;  // Don't extract features for search image
+        linemodParams.extractFeatures = false;
 
-        auto tPyramid = std::chrono::high_resolution_clock::now();
         Internal::LinemodPyramid targetPyramid;
         if (!targetPyramid.Build(image, linemodParams)) {
-            return {};
+            return;
         }
 
-        if (impl_->timingParams_.enableTiming) {
-            impl_->findTiming_.pyramidBuildMs = std::chrono::duration<double, std::milli>(
-                std::chrono::high_resolution_clock::now() - tPyramid).count();
-        }
-
-        results = impl_->SearchPyramidLinemod(targetPyramid, params);
+        results = impl->SearchPyramidLinemod(targetPyramid, params);
     } else {
-        // Standard AnglePyramid search path
         Internal::AnglePyramidParams pyramidParams;
-        pyramidParams.numLevels = static_cast<int32_t>(impl_->levels_.size());
+        pyramidParams.numLevels = static_cast<int32_t>(impl->levels_.size());
 
-        double searchContrast = (impl_->params_.minContrast > 0)
-            ? impl_->params_.minContrast
-            : impl_->params_.contrastHigh * 0.5;
+        double searchContrast = (impl->params_.minContrast > 0)
+            ? impl->params_.minContrast
+            : impl->params_.contrastHigh * 0.5;
         pyramidParams.minContrast = searchContrast;
         pyramidParams.smoothSigma = 0.5;
         pyramidParams.extractEdgePoints = false;
 
-        auto tPyramid = std::chrono::high_resolution_clock::now();
         Internal::AnglePyramid targetPyramid;
         if (!targetPyramid.Build(image, pyramidParams)) {
-            return {};
+            return;
         }
 
-        if (impl_->timingParams_.enableTiming) {
-            impl_->findTiming_.pyramidBuildMs = std::chrono::duration<double, std::milli>(
-                std::chrono::high_resolution_clock::now() - tPyramid).count();
-        }
-
-        results = impl_->SearchPyramid(targetPyramid, params);
+        results = impl->SearchPyramid(targetPyramid, params);
     }
 
-    if (impl_->timingParams_.enableTiming) {
-        impl_->findTiming_.totalMs = std::chrono::duration<double, std::milli>(
-            std::chrono::high_resolution_clock::now() - tTotal).count();
-        impl_->findTiming_.numFinalMatches = static_cast<int32_t>(results.size());
+    // Convert results to output vectors
+    rows.reserve(results.size());
+    cols.reserve(results.size());
+    angles.reserve(results.size());
+    scores.reserve(results.size());
 
-        if (impl_->timingParams_.printTiming) {
-            impl_->findTiming_.Print();
-        }
+    for (const auto& r : results) {
+        rows.push_back(r.y);    // Halcon uses row (y) first
+        cols.push_back(r.x);    // then column (x)
+        angles.push_back(r.angle);
+        scores.push_back(r.score);
     }
-
-    return results;
 }
 
-MatchResult ShapeModel::FindBest(const QImage& image, const SearchParams& params) const {
-    auto results = Find(image, params);
-    if (results.empty()) {
-        return MatchResult{};
-    }
-    return results[0];
-}
+void FindScaledShapeModel(
+    const QImage& image,
+    const ShapeModel& model,
+    double angleStart,
+    double angleExtent,
+    double scaleMin,
+    double scaleMax,
+    double minScore,
+    int32_t numMatches,
+    double maxOverlap,
+    const std::string& subPixel,
+    int32_t numLevels,
+    double greediness,
+    std::vector<double>& rows,
+    std::vector<double>& cols,
+    std::vector<double>& angles,
+    std::vector<double>& scales,
+    std::vector<double>& scores)
+{
+    // For now, call FindShapeModel (scale search not fully implemented)
+    (void)scaleMin;
+    (void)scaleMax;
 
-std::vector<MatchResult> ShapeModel::FindInROI(const QImage& image, const Rect2i& roi,
-                                                const SearchParams& params) const {
-    SearchParams modifiedParams = params;
-    modifiedParams.searchROI = roi;
-    return Find(image, modifiedParams);
+    FindShapeModel(image, model, angleStart, angleExtent, minScore,
+                   numMatches, maxOverlap, subPixel, numLevels, greediness,
+                   rows, cols, angles, scores);
+
+    // Fill scales with 1.0
+    scales.resize(scores.size(), 1.0);
 }
 
 // =============================================================================
-// Model Properties
+// Model Property Functions
 // =============================================================================
 
-ModelStats ShapeModel::GetStats() const {
-    ModelStats stats;
+void GetShapeModelContours(
+    const ShapeModel& model,
+    int32_t level,
+    std::vector<double>& contourRows,
+    std::vector<double>& contourCols)
+{
+    contourRows.clear();
+    contourCols.clear();
 
-    if (!impl_->valid_ || impl_->levels_.empty()) {
-        return stats;
+    if (!model.IsValid()) {
+        return;
     }
 
-    stats.numLevels = static_cast<int32_t>(impl_->levels_.size());
-    stats.pointsPerLevel.resize(stats.numLevels);
+    auto* impl = model.Impl();
+    int32_t actualLevel = (level >= 1) ? level - 1 : 0;  // Halcon uses 1-based
 
-    stats.minX = std::numeric_limits<double>::max();
-    stats.maxX = std::numeric_limits<double>::lowest();
-    stats.minY = std::numeric_limits<double>::max();
-    stats.maxY = std::numeric_limits<double>::lowest();
-
-    double totalContrast = 0.0;
-    stats.minContrast = std::numeric_limits<double>::max();
-    stats.maxContrast = 0.0;
-
-    for (int32_t level = 0; level < stats.numLevels; ++level) {
-        const auto& levelModel = impl_->levels_[level];
-        stats.pointsPerLevel[level] = static_cast<int32_t>(levelModel.points.size());
-
-        if (level == 0) {
-            stats.numPoints = stats.pointsPerLevel[0];
-
-            for (const auto& pt : levelModel.points) {
-                stats.minX = std::min(stats.minX, pt.x);
-                stats.maxX = std::max(stats.maxX, pt.x);
-                stats.minY = std::min(stats.minY, pt.y);
-                stats.maxY = std::max(stats.maxY, pt.y);
-
-                totalContrast += pt.magnitude;
-                stats.minContrast = std::min(stats.minContrast, pt.magnitude);
-                stats.maxContrast = std::max(stats.maxContrast, pt.magnitude);
-            }
-
-            if (stats.numPoints > 0) {
-                stats.meanContrast = totalContrast / stats.numPoints;
-            }
-        }
+    if (actualLevel < 0 || actualLevel >= static_cast<int32_t>(impl->levels_.size())) {
+        return;
     }
 
-    return stats;
-}
-
-std::vector<ModelPoint> ShapeModel::GetModelPoints(int32_t level) const {
-    if (level < 0 || level >= static_cast<int32_t>(impl_->levels_.size())) {
-        return {};
-    }
-    return impl_->levels_[level].points;
-}
-
-int32_t ShapeModel::NumLevels() const {
-    return static_cast<int32_t>(impl_->levels_.size());
-}
-
-Point2d ShapeModel::GetOrigin() const {
-    return impl_->origin_;
-}
-
-Size2i ShapeModel::GetSize() const {
-    return impl_->templateSize_;
-}
-
-const ModelParams& ShapeModel::GetParams() const {
-    return impl_->params_;
-}
-
-// =============================================================================
-// Timing
-// =============================================================================
-
-void ShapeModel::SetTimingParams(const ShapeModelTimingParams& params) {
-    impl_->timingParams_ = params;
-}
-
-const ShapeModelCreateTiming& ShapeModel::GetCreateTiming() const {
-    return impl_->createTiming_;
-}
-
-const ShapeModelFindTiming& ShapeModel::GetFindTiming() const {
-    return impl_->findTiming_;
-}
-
-// =============================================================================
-// Visualization
-// =============================================================================
-
-std::vector<Point2d> ShapeModel::GetModelContour(int32_t level) const {
-    std::vector<Point2d> contour;
-    if (level < 0 || level >= static_cast<int32_t>(impl_->levels_.size())) {
-        return contour;
-    }
-
-    const auto& points = impl_->levels_[level].points;
-    contour.reserve(points.size());
+    const auto& points = impl->levels_[actualLevel].points;
+    contourRows.reserve(points.size());
+    contourCols.reserve(points.size());
 
     for (const auto& pt : points) {
-        contour.push_back(Point2d{pt.x, pt.y});
+        contourRows.push_back(pt.y);  // Halcon: row = y
+        contourCols.push_back(pt.x);  // Halcon: col = x
     }
-
-    return contour;
 }
 
-std::vector<Point2d> ShapeModel::GetMatchContour(const MatchResult& match) const {
-    auto modelContour = GetModelContour(0);
-    std::vector<Point2d> transformed;
-    transformed.reserve(modelContour.size());
-
-    for (const auto& pt : modelContour) {
-        transformed.push_back(match.TransformPoint(pt));
+void GetShapeModelParams(
+    const ShapeModel& model,
+    int32_t& numLevels,
+    double& angleStart,
+    double& angleExtent,
+    double& angleStep,
+    double& scaleMin,
+    double& scaleMax,
+    double& scaleStep,
+    std::string& metric)
+{
+    if (!model.IsValid()) {
+        numLevels = 0;
+        angleStart = 0;
+        angleExtent = 0;
+        angleStep = 0;
+        scaleMin = 1.0;
+        scaleMax = 1.0;
+        scaleStep = 0;
+        metric = "use_polarity";
+        return;
     }
 
-    return transformed;
+    auto* impl = model.Impl();
+    numLevels = static_cast<int32_t>(impl->levels_.size());
+    angleStart = impl->params_.angleStart;
+    angleExtent = impl->params_.angleExtent;
+    angleStep = impl->params_.angleStep;
+    scaleMin = impl->params_.scaleMin;
+    scaleMax = impl->params_.scaleMax;
+    scaleStep = 0;  // Not stored currently
+    metric = MetricToString(impl->params_.metric);
+}
+
+void GetShapeModelOrigin(
+    const ShapeModel& model,
+    double& row,
+    double& col)
+{
+    if (!model.IsValid()) {
+        row = 0;
+        col = 0;
+        return;
+    }
+
+    auto* impl = model.Impl();
+    row = impl->origin_.y;  // Halcon: row = y
+    col = impl->origin_.x;  // Halcon: col = x
+}
+
+void SetShapeModelOrigin(
+    ShapeModel& model,
+    double row,
+    double col)
+{
+    if (!model.IsValid()) {
+        return;
+    }
+
+    auto* impl = model.Impl();
+    impl->origin_.y = row;
+    impl->origin_.x = col;
 }
 
 // =============================================================================
-// Serialization
+// Model I/O Functions
 // =============================================================================
 
-bool ShapeModel::Save(const std::string& filename) const {
-    if (!impl_ || !impl_->valid_) {
-        return false;
+void WriteShapeModel(
+    const ShapeModel& model,
+    const std::string& filename)
+{
+    if (!model.IsValid()) {
+        throw std::runtime_error("Cannot write invalid shape model");
     }
+
+    auto* impl = model.Impl();
 
     using Platform::BinaryWriter;
     BinaryWriter writer(filename);
     if (!writer.IsOpen()) {
-        return false;
+        throw std::runtime_error("Cannot open file for writing: " + filename);
     }
 
     // Magic number and version
@@ -321,42 +436,42 @@ bool ShapeModel::Save(const std::string& filename) const {
     writer.Write(MAGIC);
     writer.Write(VERSION);
 
-    // Model parameters - v3 format
-    writer.Write(static_cast<int32_t>(impl_->params_.contrastMode));
-    writer.Write(impl_->params_.contrastHigh);
-    writer.Write(impl_->params_.contrastLow);
-    writer.Write(impl_->params_.contrastMax);
-    writer.Write(impl_->params_.minComponentSize);
-    writer.Write(impl_->params_.minContrast);
-    writer.Write(static_cast<int32_t>(impl_->params_.optimization));
-    writer.Write(impl_->params_.pregeneration);
-    writer.Write(static_cast<int32_t>(impl_->params_.metric));
-    writer.Write(impl_->params_.numLevels);
-    writer.Write(impl_->params_.startLevel);
-    writer.Write(impl_->params_.angleStart);
-    writer.Write(impl_->params_.angleExtent);
-    writer.Write(impl_->params_.angleStep);
-    writer.Write(impl_->params_.scaleMin);
-    writer.Write(impl_->params_.scaleMax);
-    writer.Write(static_cast<int32_t>(impl_->params_.polarity));
+    // Model parameters
+    writer.Write(static_cast<int32_t>(impl->params_.contrastMode));
+    writer.Write(impl->params_.contrastHigh);
+    writer.Write(impl->params_.contrastLow);
+    writer.Write(impl->params_.contrastMax);
+    writer.Write(impl->params_.minComponentSize);
+    writer.Write(impl->params_.minContrast);
+    writer.Write(static_cast<int32_t>(impl->params_.optimization));
+    writer.Write(impl->params_.pregeneration);
+    writer.Write(static_cast<int32_t>(impl->params_.metric));
+    writer.Write(impl->params_.numLevels);
+    writer.Write(impl->params_.startLevel);
+    writer.Write(impl->params_.angleStart);
+    writer.Write(impl->params_.angleExtent);
+    writer.Write(impl->params_.angleStep);
+    writer.Write(impl->params_.scaleMin);
+    writer.Write(impl->params_.scaleMax);
+    writer.Write(static_cast<int32_t>(impl->params_.polarity));
 
     // Origin and template size
-    writer.Write(impl_->origin_.x);
-    writer.Write(impl_->origin_.y);
-    writer.Write(impl_->templateSize_.width);
-    writer.Write(impl_->templateSize_.height);
+    writer.Write(impl->origin_.x);
+    writer.Write(impl->origin_.y);
+    writer.Write(impl->templateSize_.width);
+    writer.Write(impl->templateSize_.height);
 
     // Model bounds
-    writer.Write(impl_->modelMinX_);
-    writer.Write(impl_->modelMaxX_);
-    writer.Write(impl_->modelMinY_);
-    writer.Write(impl_->modelMaxY_);
+    writer.Write(impl->modelMinX_);
+    writer.Write(impl->modelMaxX_);
+    writer.Write(impl->modelMinY_);
+    writer.Write(impl->modelMaxY_);
 
     // Pyramid levels
-    uint32_t numLevels = static_cast<uint32_t>(impl_->levels_.size());
+    uint32_t numLevels = static_cast<uint32_t>(impl->levels_.size());
     writer.Write(numLevels);
 
-    for (const auto& level : impl_->levels_) {
+    for (const auto& level : impl->levels_) {
         writer.Write(level.width);
         writer.Write(level.height);
         writer.Write(level.scale);
@@ -377,49 +492,50 @@ bool ShapeModel::Save(const std::string& filename) const {
     }
 
     writer.Close();
-    return true;
 }
 
-bool ShapeModel::Load(const std::string& filename) {
+ShapeModel ReadShapeModel(const std::string& filename)
+{
     using Platform::BinaryReader;
     BinaryReader reader(filename);
     if (!reader.IsOpen()) {
-        return false;
+        throw std::runtime_error("Cannot open file for reading: " + filename);
     }
 
     const uint32_t MAGIC = 0x4D495351;
     uint32_t magic = reader.Read<uint32_t>();
     if (magic != MAGIC) {
-        return false;
+        throw std::runtime_error("Invalid shape model file format");
     }
 
     uint32_t version = reader.Read<uint32_t>();
     if (version < 1 || version > 3) {
-        return false;
+        throw std::runtime_error("Unsupported shape model version");
     }
 
-    impl_ = std::make_unique<Internal::ShapeModelImpl>();
+    ShapeModel model;
+    auto* impl = model.Impl();
 
     if (version >= 3) {
-        impl_->params_.contrastMode = static_cast<ContrastMode>(reader.Read<int32_t>());
-        impl_->params_.contrastHigh = reader.Read<double>();
-        impl_->params_.contrastLow = reader.Read<double>();
-        impl_->params_.contrastMax = reader.Read<double>();
-        impl_->params_.minComponentSize = reader.Read<int32_t>();
-        impl_->params_.minContrast = reader.Read<double>();
-        impl_->params_.optimization = static_cast<OptimizationMode>(reader.Read<int32_t>());
-        impl_->params_.pregeneration = reader.Read<bool>();
-        impl_->params_.metric = static_cast<MetricMode>(reader.Read<int32_t>());
-        impl_->params_.numLevels = reader.Read<int32_t>();
-        impl_->params_.startLevel = reader.Read<int32_t>();
-        impl_->params_.angleStart = reader.Read<double>();
-        impl_->params_.angleExtent = reader.Read<double>();
-        impl_->params_.angleStep = reader.Read<double>();
-        impl_->params_.scaleMin = reader.Read<double>();
-        impl_->params_.scaleMax = reader.Read<double>();
-        impl_->params_.polarity = static_cast<MatchPolarity>(reader.Read<int32_t>());
+        impl->params_.contrastMode = static_cast<ContrastMode>(reader.Read<int32_t>());
+        impl->params_.contrastHigh = reader.Read<double>();
+        impl->params_.contrastLow = reader.Read<double>();
+        impl->params_.contrastMax = reader.Read<double>();
+        impl->params_.minComponentSize = reader.Read<int32_t>();
+        impl->params_.minContrast = reader.Read<double>();
+        impl->params_.optimization = static_cast<OptimizationMode>(reader.Read<int32_t>());
+        impl->params_.pregeneration = reader.Read<bool>();
+        impl->params_.metric = static_cast<MetricMode>(reader.Read<int32_t>());
+        impl->params_.numLevels = reader.Read<int32_t>();
+        impl->params_.startLevel = reader.Read<int32_t>();
+        impl->params_.angleStart = reader.Read<double>();
+        impl->params_.angleExtent = reader.Read<double>();
+        impl->params_.angleStep = reader.Read<double>();
+        impl->params_.scaleMin = reader.Read<double>();
+        impl->params_.scaleMax = reader.Read<double>();
+        impl->params_.polarity = static_cast<MatchPolarity>(reader.Read<int32_t>());
     } else {
-        // v1/v2: Legacy format
+        // Legacy v1/v2 format
         double minContrast = reader.Read<double>();
         double hysteresisContrast = 0.0;
         if (version >= 2) {
@@ -427,45 +543,45 @@ bool ShapeModel::Load(const std::string& filename) {
         }
         double maxContrast = reader.Read<double>();
 
-        impl_->params_.contrastMode = ContrastMode::Manual;
-        impl_->params_.contrastHigh = minContrast;
-        impl_->params_.contrastLow = hysteresisContrast;
-        impl_->params_.contrastMax = maxContrast;
-        impl_->params_.minContrast = minContrast;
+        impl->params_.contrastMode = ContrastMode::Manual;
+        impl->params_.contrastHigh = minContrast;
+        impl->params_.contrastLow = hysteresisContrast;
+        impl->params_.contrastMax = maxContrast;
+        impl->params_.minContrast = minContrast;
 
-        impl_->params_.numLevels = reader.Read<int32_t>();
-        impl_->params_.startLevel = reader.Read<int32_t>();
-        impl_->params_.angleStart = reader.Read<double>();
-        impl_->params_.angleExtent = reader.Read<double>();
-        impl_->params_.scaleMin = reader.Read<double>();
-        impl_->params_.scaleMax = reader.Read<double>();
+        impl->params_.numLevels = reader.Read<int32_t>();
+        impl->params_.startLevel = reader.Read<int32_t>();
+        impl->params_.angleStart = reader.Read<double>();
+        impl->params_.angleExtent = reader.Read<double>();
+        impl->params_.scaleMin = reader.Read<double>();
+        impl->params_.scaleMax = reader.Read<double>();
 
         bool optimizeModel = reader.Read<bool>();
         (void)reader.Read<int32_t>();  // maxModelPoints
         (void)reader.Read<double>();   // modelPointSpacing
 
-        impl_->params_.optimization = optimizeModel
+        impl->params_.optimization = optimizeModel
             ? OptimizationMode::Auto : OptimizationMode::None;
 
-        impl_->params_.polarity = static_cast<MatchPolarity>(reader.Read<int32_t>());
-        impl_->params_.metric = MetricMode::UsePolarity;
+        impl->params_.polarity = static_cast<MatchPolarity>(reader.Read<int32_t>());
+        impl->params_.metric = MetricMode::UsePolarity;
     }
 
-    impl_->origin_.x = reader.Read<double>();
-    impl_->origin_.y = reader.Read<double>();
-    impl_->templateSize_.width = reader.Read<int32_t>();
-    impl_->templateSize_.height = reader.Read<int32_t>();
+    impl->origin_.x = reader.Read<double>();
+    impl->origin_.y = reader.Read<double>();
+    impl->templateSize_.width = reader.Read<int32_t>();
+    impl->templateSize_.height = reader.Read<int32_t>();
 
-    impl_->modelMinX_ = reader.Read<double>();
-    impl_->modelMaxX_ = reader.Read<double>();
-    impl_->modelMinY_ = reader.Read<double>();
-    impl_->modelMaxY_ = reader.Read<double>();
+    impl->modelMinX_ = reader.Read<double>();
+    impl->modelMaxX_ = reader.Read<double>();
+    impl->modelMinY_ = reader.Read<double>();
+    impl->modelMaxY_ = reader.Read<double>();
 
     uint32_t numLevels = reader.Read<uint32_t>();
-    impl_->levels_.resize(numLevels);
+    impl->levels_.resize(numLevels);
 
     for (uint32_t i = 0; i < numLevels; ++i) {
-        auto& level = impl_->levels_[i];
+        auto& level = impl->levels_[i];
 
         level.width = reader.Read<int32_t>();
         level.height = reader.Read<int32_t>();
@@ -489,92 +605,113 @@ bool ShapeModel::Load(const std::string& filename) {
         level.BuildSoA();
     }
 
-    impl_->valid_ = true;
-    return true;
+    impl->valid_ = true;
+    return model;
 }
 
-// =============================================================================
-// Advanced
-// =============================================================================
-
-double ShapeModel::ComputeScore(const QImage& image,
-                                 double x, double y,
-                                 double angle, double scale) const {
-    if (!impl_->valid_) {
-        return 0.0;
+void ClearShapeModel(ShapeModel& model)
+{
+    if (model.Impl()) {
+        model.Impl()->levels_.clear();
+        model.Impl()->valid_ = false;
     }
-
-    Internal::AnglePyramidParams params;
-    params.numLevels = 1;
-
-    double searchContrast = (impl_->params_.minContrast > 0)
-        ? impl_->params_.minContrast
-        : impl_->params_.contrastHigh * 0.5;
-    params.minContrast = searchContrast;
-
-    Internal::AnglePyramid pyramid;
-    if (!pyramid.Build(image, params)) {
-        return 0.0;
-    }
-
-    return impl_->ComputeScoreAtPosition(pyramid, 0, x, y, angle, scale, 0.0);
-}
-
-bool ShapeModel::RefineMatch(const QImage& image, MatchResult& match,
-                              SubpixelMethod method) const {
-    if (!impl_->valid_) {
-        return false;
-    }
-
-    Internal::AnglePyramidParams params;
-    params.numLevels = 1;
-
-    double searchContrast = (impl_->params_.minContrast > 0)
-        ? impl_->params_.minContrast
-        : impl_->params_.contrastHigh * 0.5;
-    params.minContrast = searchContrast;
-
-    Internal::AnglePyramid pyramid;
-    if (!pyramid.Build(image, params)) {
-        return false;
-    }
-
-    impl_->RefinePosition(pyramid, match, method);
-    return true;
 }
 
 // =============================================================================
 // Utility Functions
 // =============================================================================
 
-ShapeModel CreateShapeModelFromFile(const std::string& /*filename*/,
-                                     const ModelParams& /*params*/) {
-    // TODO: Implement file loading
-    return ShapeModel();
-}
+void DetermineShapeModelParams(
+    const QImage& templateImage,
+    const Rect2i& roi,
+    int32_t& numLevels,
+    double& angleStart,
+    double& angleExtent,
+    double& angleStep,
+    double& scaleMin,
+    double& scaleMax,
+    double& scaleStep,
+    double& contrast,
+    double& minContrast)
+{
+    // Determine ROI dimensions
+    int32_t roiWidth = (roi.width > 0) ? roi.width : templateImage.Width();
+    int32_t roiHeight = (roi.height > 0) ? roi.height : templateImage.Height();
+    int32_t minDim = std::min(roiWidth, roiHeight);
 
-int32_t EstimateOptimalLevels(int32_t imageWidth, int32_t imageHeight,
-                               int32_t modelWidth, int32_t modelHeight) {
-    int32_t minImageDim = std::min(imageWidth, imageHeight);
-    int32_t minModelDim = std::min(modelWidth, modelHeight);
-
-    int32_t levels = 1;
-    while (minImageDim >= 64 && minModelDim >= 8) {
-        minImageDim /= 2;
-        minModelDim /= 2;
-        levels++;
+    // Auto-determine pyramid levels (stop when top level ~30px)
+    numLevels = 1;
+    int32_t dim = minDim;
+    while (dim > 30 && numLevels < 6) {
+        dim /= 2;
+        numLevels++;
     }
 
-    return std::min(levels, 6);
+    // Default angle parameters (full rotation)
+    angleStart = 0.0;
+    angleExtent = 2.0 * 3.14159265358979323846;
+
+    // Auto-determine angle step based on model size
+    double maxRadius = minDim / 2.0;
+    if (maxRadius < 1.0) maxRadius = 1.0;
+    angleStep = 2.0 * std::asin(1.0 / (2.0 * maxRadius));
+    angleStep = std::clamp(angleStep, 0.0087, 0.175);  // ~0.5° to ~10°
+
+    // Default scale (no scaling)
+    scaleMin = 1.0;
+    scaleMax = 1.0;
+    scaleStep = 0.0;
+
+    // Auto-determine contrast (simple heuristic)
+    // TODO: Implement proper auto-contrast using histogram analysis
+    contrast = 30.0;
+    minContrast = 10.0;
 }
 
-double EstimateAngleStep(int32_t modelSize) {
-    double maxRadius = modelSize / 2.0;
-    if (maxRadius < 1.0) maxRadius = 1.0;
+void InspectShapeModel(
+    const ShapeModel& model,
+    int32_t level,
+    QImage& contrastImage,
+    int32_t& numPoints)
+{
+    contrastImage = QImage();
+    numPoints = 0;
 
-    double step = 2.0 * std::asin(1.0 / (2.0 * maxRadius));
+    if (!model.IsValid()) {
+        return;
+    }
 
-    return std::clamp(step, 0.0087, 0.175);
+    auto* impl = model.Impl();
+    int32_t actualLevel = (level >= 1) ? level - 1 : 0;
+
+    if (actualLevel < 0 || actualLevel >= static_cast<int32_t>(impl->levels_.size())) {
+        return;
+    }
+
+    const auto& levelData = impl->levels_[actualLevel];
+    numPoints = static_cast<int32_t>(levelData.points.size());
+
+    // Create contrast visualization image
+    int32_t w = levelData.width;
+    int32_t h = levelData.height;
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+
+    contrastImage = QImage(w, h, PixelType::UInt8, ChannelType::Gray);
+    std::memset(contrastImage.Data(), 0, contrastImage.Height() * contrastImage.Stride());
+
+    uint8_t* data = static_cast<uint8_t*>(contrastImage.Data());
+    int32_t stride = static_cast<int32_t>(contrastImage.Stride());
+
+    // Mark model points
+    for (const auto& pt : levelData.points) {
+        int32_t px = static_cast<int32_t>(pt.x + w / 2);
+        int32_t py = static_cast<int32_t>(pt.y + h / 2);
+        if (px >= 0 && px < w && py >= 0 && py < h) {
+            data[py * stride + px] = 255;
+        }
+    }
 }
 
 } // namespace Qi::Vision::Matching

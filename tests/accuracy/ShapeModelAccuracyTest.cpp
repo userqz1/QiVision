@@ -295,10 +295,8 @@ TEST_F(ShapeModelAccuracyTest, PositionAccuracy_NoNoise) {
     DrawSmoothRectangle(templateImg, TEMPLATE_SIZE / 2.0, TEMPLATE_SIZE / 2.0,
                         RECT_WIDTH, RECT_HEIGHT, 0.0, BACKGROUND, FOREGROUND);
 
-    // Create model
-    ShapeModel model;
-    bool created = model.Create(templateImg, ModelParams().SetContrast(20));
-    ASSERT_TRUE(created);
+    // Create model using Halcon-style API
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
     ASSERT_TRUE(model.IsValid());
 
     std::vector<double> positionErrors;
@@ -318,15 +316,15 @@ TEST_F(ShapeModelAccuracyTest, PositionAccuracy_NoNoise) {
         DrawSmoothRectangle(targetImg, gtX, gtY,
                            RECT_WIDTH, RECT_HEIGHT, 0.0, BACKGROUND, FOREGROUND);
 
-        // Find match
-        auto result = model.FindBest(targetImg, SearchParams()
-                                     .SetMinScore(0.3)
-                                     .SetSubpixel(SubpixelMethod::LeastSquares));
+        // Find match using Halcon-style API
+        std::vector<double> rows, cols, angles, scores;
+        FindShapeModel(targetImg, model, 0, RAD(360), 0.3, 1, 0.5,
+                       "least_squares", 0, 0.9, rows, cols, angles, scores);
 
-        if (result.score > 0) {
-            // Compute position error
-            double dx = result.x - gtX;
-            double dy = result.y - gtY;
+        if (!scores.empty() && scores[0] > 0) {
+            // Compute position error (cols=x, rows=y in Halcon convention)
+            double dx = cols[0] - gtX;
+            double dy = rows[0] - gtY;
             double error = std::sqrt(dx * dx + dy * dy);
             positionErrors.push_back(error);
         }
@@ -354,10 +352,9 @@ TEST_F(ShapeModelAccuracyTest, PositionAccuracy_StandardNoise) {
     DrawSmoothRectangle(templateImg, TEMPLATE_SIZE / 2.0, TEMPLATE_SIZE / 2.0,
                         RECT_WIDTH, RECT_HEIGHT, 0.0, BACKGROUND, FOREGROUND);
 
-    // Create model
-    ShapeModel model;
-    bool created = model.Create(templateImg, ModelParams().SetContrast(20));
-    ASSERT_TRUE(created);
+    // Create model using Halcon-style API
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
+    ASSERT_TRUE(model.IsValid());
 
     std::vector<double> positionErrors;
     std::uniform_real_distribution<double> posDist(-0.5, 0.5);
@@ -375,14 +372,14 @@ TEST_F(ShapeModelAccuracyTest, PositionAccuracy_StandardNoise) {
                            RECT_WIDTH, RECT_HEIGHT, 0.0, BACKGROUND, FOREGROUND);
         AddGaussianNoise(targetImg, 5.0, rng_);
 
-        // Find match
-        auto result = model.FindBest(targetImg, SearchParams()
-                                     .SetMinScore(0.2)
-                                     .SetSubpixel(SubpixelMethod::LeastSquares));
+        // Find match using Halcon-style API
+        std::vector<double> rows, cols, angles, scores;
+        FindShapeModel(targetImg, model, 0, RAD(360), 0.2, 1, 0.5,
+                       "least_squares", 0, 0.9, rows, cols, angles, scores);
 
-        if (result.score > 0) {
-            double dx = result.x - gtX;
-            double dy = result.y - gtY;
+        if (!scores.empty() && scores[0] > 0) {
+            double dx = cols[0] - gtX;
+            double dy = rows[0] - gtY;
             double error = std::sqrt(dx * dx + dy * dy);
             positionErrors.push_back(error);
         }
@@ -412,10 +409,9 @@ TEST_F(ShapeModelAccuracyTest, AngleAccuracy_NoNoise) {
     DrawSmoothRectangle(templateImg, TEMPLATE_SIZE / 2.0, TEMPLATE_SIZE / 2.0,
                         RECT_WIDTH, RECT_HEIGHT, 0.0, BACKGROUND, FOREGROUND);
 
-    // Create model
-    ShapeModel model;
-    bool created = model.Create(templateImg, ModelParams().SetContrast(20));
-    ASSERT_TRUE(created);
+    // Create model using Halcon-style API
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
+    ASSERT_TRUE(model.IsValid());
 
     std::vector<double> angleErrors;
     std::uniform_real_distribution<double> angleDist(-0.3, 0.3);  // ±17 degrees
@@ -429,15 +425,14 @@ TEST_F(ShapeModelAccuracyTest, AngleAccuracy_NoNoise) {
         DrawSmoothRectangle(targetImg, IMAGE_SIZE / 2.0, IMAGE_SIZE / 2.0,
                            RECT_WIDTH, RECT_HEIGHT, gtAngle, BACKGROUND, FOREGROUND);
 
-        // Find match with angle search
-        auto result = model.FindBest(targetImg, SearchParams()
-                                     .SetMinScore(0.3)
-                                     .SetAngleRange(-0.5, 1.0)
-                                     .SetSubpixel(SubpixelMethod::LeastSquares));
+        // Find match with angle search using Halcon-style API
+        std::vector<double> rows, cols, angles, scores;
+        FindShapeModel(targetImg, model, -0.5, 1.0, 0.3, 1, 0.5,
+                       "least_squares", 0, 0.9, rows, cols, angles, scores);
 
-        if (result.score > 0) {
+        if (!scores.empty() && scores[0] > 0) {
             // Compute angle error
-            double angleDiff = NormalizeAngleDiff(result.angle - gtAngle);
+            double angleDiff = NormalizeAngleDiff(angles[0] - gtAngle);
             double error = std::abs(angleDiff) * 180.0 / PI;  // Convert to degrees
             angleErrors.push_back(error);
         }
@@ -463,10 +458,9 @@ TEST_F(ShapeModelAccuracyTest, AngleAccuracy_StandardNoise) {
     DrawSmoothRectangle(templateImg, TEMPLATE_SIZE / 2.0, TEMPLATE_SIZE / 2.0,
                         RECT_WIDTH, RECT_HEIGHT, 0.0, BACKGROUND, FOREGROUND);
 
-    // Create model
-    ShapeModel model;
-    bool created = model.Create(templateImg, ModelParams().SetContrast(20));
-    ASSERT_TRUE(created);
+    // Create model using Halcon-style API
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
+    ASSERT_TRUE(model.IsValid());
 
     std::vector<double> angleErrors;
     std::uniform_real_distribution<double> angleDist(-0.3, 0.3);
@@ -480,14 +474,13 @@ TEST_F(ShapeModelAccuracyTest, AngleAccuracy_StandardNoise) {
                            RECT_WIDTH, RECT_HEIGHT, gtAngle, BACKGROUND, FOREGROUND);
         AddGaussianNoise(targetImg, 5.0, rng_);
 
-        // Find match
-        auto result = model.FindBest(targetImg, SearchParams()
-                                     .SetMinScore(0.2)
-                                     .SetAngleRange(-0.5, 1.0)
-                                     .SetSubpixel(SubpixelMethod::LeastSquares));
+        // Find match using Halcon-style API
+        std::vector<double> rows, cols, angles, scores;
+        FindShapeModel(targetImg, model, -0.5, 1.0, 0.2, 1, 0.5,
+                       "least_squares", 0, 0.9, rows, cols, angles, scores);
 
-        if (result.score > 0) {
-            double angleDiff = NormalizeAngleDiff(result.angle - gtAngle);
+        if (!scores.empty() && scores[0] > 0) {
+            double angleDiff = NormalizeAngleDiff(angles[0] - gtAngle);
             double error = std::abs(angleDiff) * 180.0 / PI;
             angleErrors.push_back(error);
         }
@@ -517,9 +510,9 @@ TEST_F(ShapeModelAccuracyTest, DetectionRate_VariousContrasts) {
     DrawSmoothRectangle(templateImg, TEMPLATE_SIZE / 2.0, TEMPLATE_SIZE / 2.0,
                         RECT_WIDTH, RECT_HEIGHT, 0.0, 80, 200);
 
-    ShapeModel model;
-    bool created = model.Create(templateImg, ModelParams().SetContrast(20));
-    ASSERT_TRUE(created);
+    // Create model using Halcon-style API
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
+    ASSERT_TRUE(model.IsValid());
 
     // Test with various contrasts
     std::vector<int> contrasts = {120, 80, 50, 30, 20};
@@ -544,8 +537,10 @@ TEST_F(ShapeModelAccuracyTest, DetectionRate_VariousContrasts) {
                                RECT_WIDTH, RECT_HEIGHT, 0.0, bg, fg);
             AddGaussianNoise(targetImg, 5.0, rng_);
 
-            auto result = model.FindBest(targetImg, SearchParams().SetMinScore(0.3));
-            if (result.score > 0.3) {
+            std::vector<double> rows, cols, angles, scores;
+            FindShapeModel(targetImg, model, 0, RAD(360), 0.3, 1, 0.5,
+                           "least_squares", 0, 0.9, rows, cols, angles, scores);
+            if (!scores.empty() && scores[0] > 0.3) {
                 detections++;
             }
         }
@@ -575,10 +570,10 @@ TEST_F(ShapeModelAccuracyTest, ScaleAccuracy_NoNoise) {
     DrawSmoothRectangle(templateImg, TEMPLATE_SIZE / 2.0, TEMPLATE_SIZE / 2.0,
                         RECT_WIDTH, RECT_HEIGHT, 0.0, BACKGROUND, FOREGROUND);
 
-    // Create model
-    ShapeModel model;
-    bool created = model.Create(templateImg, ModelParams().SetContrast(20));
-    ASSERT_TRUE(created);
+    // Create scaled model using Halcon-style API
+    ShapeModel model = CreateScaledShapeModel(templateImg, 4, 0, RAD(360), 0, 0.85, 1.15, 0,
+                                               "auto", "use_polarity", 20, 10);
+    ASSERT_TRUE(model.IsValid());
 
     std::vector<double> scaleErrors;
     std::vector<double> testScales = {0.9, 0.95, 1.0, 1.05, 1.1};
@@ -594,14 +589,14 @@ TEST_F(ShapeModelAccuracyTest, ScaleAccuracy_NoNoise) {
                                RECT_WIDTH * gtScale, RECT_HEIGHT * gtScale,
                                0.0, BACKGROUND, FOREGROUND);
 
-            // Find match with scale search
-            auto result = model.FindBest(targetImg, SearchParams()
-                                         .SetMinScore(0.3)
-                                         .SetScaleRange(0.85, 1.15)
-                                         .SetSubpixel(SubpixelMethod::LeastSquares));
+            // Find match with scale search using Halcon-style API
+            std::vector<double> rows, cols, angles, scales, scores;
+            FindScaledShapeModel(targetImg, model, 0, RAD(360), 0.85, 1.15,
+                                 0.3, 1, 0.5, "least_squares", 0, 0.9,
+                                 rows, cols, angles, scales, scores);
 
-            if (result.score > 0) {
-                double error = std::abs(result.scaleX - gtScale);
+            if (!scores.empty() && scores[0] > 0) {
+                double error = std::abs(scales[0] - gtScale);
                 scaleErrors.push_back(error);
                 sumError += error;
                 detections++;
@@ -633,8 +628,8 @@ TEST_F(ShapeModelAccuracyTest, PerformanceBenchmark) {
     DrawSmoothRectangle(templateImg, TEMPLATE_SIZE / 2.0, TEMPLATE_SIZE / 2.0,
                         RECT_WIDTH, RECT_HEIGHT, 0.0, BACKGROUND, FOREGROUND);
 
-    ShapeModel model;
-    model.Create(templateImg, ModelParams().SetContrast(20));
+    // Create model using Halcon-style API
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
 
     // Create target
     QImage targetImg = CreateTestImage(IMAGE_SIZE, IMAGE_SIZE, BACKGROUND);
@@ -643,7 +638,9 @@ TEST_F(ShapeModelAccuracyTest, PerformanceBenchmark) {
 
     // Warmup
     for (int i = 0; i < 3; ++i) {
-        model.FindBest(targetImg, SearchParams().SetMinScore(0.3));
+        std::vector<double> rows, cols, angles, scores;
+        FindShapeModel(targetImg, model, 0, RAD(360), 0.3, 1, 0.5,
+                       "least_squares", 0, 0.9, rows, cols, angles, scores);
     }
 
     // Benchmark fixed angle
@@ -651,9 +648,9 @@ TEST_F(ShapeModelAccuracyTest, PerformanceBenchmark) {
         auto start = std::chrono::high_resolution_clock::now();
         int iterations = 50;
         for (int i = 0; i < iterations; ++i) {
-            model.FindBest(targetImg, SearchParams()
-                          .SetMinScore(0.3)
-                          .SetAngleRange(0, 0));  // Fixed angle
+            std::vector<double> rows, cols, angles, scores;
+            FindShapeModel(targetImg, model, 0, 0, 0.3, 1, 0.5,
+                           "least_squares", 0, 0.9, rows, cols, angles, scores);
         }
         auto end = std::chrono::high_resolution_clock::now();
         double ms = std::chrono::duration<double, std::milli>(end - start).count();
@@ -666,9 +663,9 @@ TEST_F(ShapeModelAccuracyTest, PerformanceBenchmark) {
         auto start = std::chrono::high_resolution_clock::now();
         int iterations = 20;
         for (int i = 0; i < iterations; ++i) {
-            model.FindBest(targetImg, SearchParams()
-                          .SetMinScore(0.3)
-                          .SetAngleRange(-0.5, 1.0));  // ±30° range
+            std::vector<double> rows, cols, angles, scores;
+            FindShapeModel(targetImg, model, -0.5, 1.0, 0.3, 1, 0.5,
+                           "least_squares", 0, 0.9, rows, cols, angles, scores);
         }
         auto end = std::chrono::high_resolution_clock::now();
         double ms = std::chrono::duration<double, std::milli>(end - start).count();
@@ -828,9 +825,9 @@ TEST_F(ShapeModelAccuracyTest, ComplexShape_Circle) {
     DrawSmoothCircle(templateImg, CIRC_TEMPLATE_SIZE / 2.0, CIRC_TEMPLATE_SIZE / 2.0,
                      RADIUS, BACKGROUND, FOREGROUND);
 
-    ShapeModel model;
-    bool created = model.Create(templateImg, ModelParams().SetContrast(20));
-    ASSERT_TRUE(created);
+    // Create model using Halcon-style API
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
+    ASSERT_TRUE(model.IsValid());
 
     std::vector<double> positionErrors;
     std::uniform_real_distribution<double> posDist(-0.5, 0.5);
@@ -845,13 +842,13 @@ TEST_F(ShapeModelAccuracyTest, ComplexShape_Circle) {
         DrawSmoothCircle(targetImg, gtX, gtY, RADIUS, BACKGROUND, FOREGROUND);
         AddGaussianNoise(targetImg, 3.0, rng_);
 
-        auto result = model.FindBest(targetImg, SearchParams()
-                                     .SetMinScore(0.3)
-                                     .SetSubpixel(SubpixelMethod::LeastSquares));
+        std::vector<double> rows, cols, angles, scores;
+        FindShapeModel(targetImg, model, 0, RAD(360), 0.3, 1, 0.5,
+                       "least_squares", 0, 0.9, rows, cols, angles, scores);
 
-        if (result.score > 0) {
-            double dx = result.x - gtX;
-            double dy = result.y - gtY;
+        if (!scores.empty() && scores[0] > 0) {
+            double dx = cols[0] - gtX;
+            double dy = rows[0] - gtY;
             double error = std::sqrt(dx * dx + dy * dy);
             positionErrors.push_back(error);
         }
@@ -881,9 +878,9 @@ TEST_F(ShapeModelAccuracyTest, ComplexShape_Cross) {
     DrawCross(templateImg, CROSS_TEMPLATE_SIZE / 2.0, CROSS_TEMPLATE_SIZE / 2.0,
               ARM_LENGTH, ARM_WIDTH, 0.0, BACKGROUND, FOREGROUND);
 
-    ShapeModel model;
-    bool created = model.Create(templateImg, ModelParams().SetContrast(20));
-    ASSERT_TRUE(created);
+    // Create model using Halcon-style API
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
+    ASSERT_TRUE(model.IsValid());
 
     std::vector<double> positionErrors;
     std::vector<double> angleErrors;
@@ -901,18 +898,17 @@ TEST_F(ShapeModelAccuracyTest, ComplexShape_Cross) {
         DrawCross(targetImg, gtX, gtY, ARM_LENGTH, ARM_WIDTH, gtAngle, BACKGROUND, FOREGROUND);
         AddGaussianNoise(targetImg, 3.0, rng_);
 
-        auto result = model.FindBest(targetImg, SearchParams()
-                                     .SetMinScore(0.3)
-                                     .SetAngleRange(-0.3, 0.6)
-                                     .SetSubpixel(SubpixelMethod::LeastSquares));
+        std::vector<double> rows, cols, angles, scores;
+        FindShapeModel(targetImg, model, -0.3, 0.6, 0.3, 1, 0.5,
+                       "least_squares", 0, 0.9, rows, cols, angles, scores);
 
-        if (result.score > 0) {
-            double dx = result.x - gtX;
-            double dy = result.y - gtY;
+        if (!scores.empty() && scores[0] > 0) {
+            double dx = cols[0] - gtX;
+            double dy = rows[0] - gtY;
             double posError = std::sqrt(dx * dx + dy * dy);
             positionErrors.push_back(posError);
 
-            double angleDiff = NormalizeAngleDiff(result.angle - gtAngle);
+            double angleDiff = NormalizeAngleDiff(angles[0] - gtAngle);
             double angleError = std::abs(angleDiff) * 180.0 / PI;
             angleErrors.push_back(angleError);
         }
@@ -938,9 +934,9 @@ TEST_F(ShapeModelAccuracyTest, ComplexBackground_TexturedGradient) {
     DrawSmoothRectangle(templateImg, TEMPLATE_SIZE / 2.0, TEMPLATE_SIZE / 2.0,
                         RECT_WIDTH, RECT_HEIGHT, 0.0, BACKGROUND, FOREGROUND);
 
-    ShapeModel model;
-    bool created = model.Create(templateImg, ModelParams().SetContrast(25));
-    ASSERT_TRUE(created);
+    // Create model using Halcon-style API
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 25, 10);
+    ASSERT_TRUE(model.IsValid());
 
     std::vector<double> positionErrors;
     std::uniform_real_distribution<double> posDist(-0.5, 0.5);
@@ -958,13 +954,13 @@ TEST_F(ShapeModelAccuracyTest, ComplexBackground_TexturedGradient) {
                            RECT_WIDTH, RECT_HEIGHT, 0.0, BACKGROUND, FOREGROUND);
         AddGaussianNoise(targetImg, 3.0, rng_);
 
-        auto result = model.FindBest(targetImg, SearchParams()
-                                     .SetMinScore(0.3)
-                                     .SetSubpixel(SubpixelMethod::LeastSquares));
+        std::vector<double> rows, cols, angles, scores;
+        FindShapeModel(targetImg, model, 0, RAD(360), 0.3, 1, 0.5,
+                       "least_squares", 0, 0.9, rows, cols, angles, scores);
 
-        if (result.score > 0) {
-            double dx = result.x - gtX;
-            double dy = result.y - gtY;
+        if (!scores.empty() && scores[0] > 0) {
+            double dx = cols[0] - gtX;
+            double dy = rows[0] - gtY;
             double error = std::sqrt(dx * dx + dy * dy);
             positionErrors.push_back(error);
         }
@@ -989,9 +985,9 @@ TEST_F(ShapeModelAccuracyTest, LargeImage_HighResolution) {
     DrawSmoothRectangle(templateImg, TEMPLATE_SIZE / 2.0, TEMPLATE_SIZE / 2.0,
                         RECT_WIDTH, RECT_HEIGHT, 0.0, BACKGROUND, FOREGROUND);
 
-    ShapeModel model;
-    bool created = model.Create(templateImg, ModelParams().SetContrast(20));
-    ASSERT_TRUE(created);
+    // Create model using Halcon-style API
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
+    ASSERT_TRUE(model.IsValid());
 
     std::vector<double> positionErrors;
     std::uniform_real_distribution<double> posXDist(100.0, LARGE_IMAGE_SIZE - 100.0);
@@ -1008,19 +1004,19 @@ TEST_F(ShapeModelAccuracyTest, LargeImage_HighResolution) {
                            RECT_WIDTH, RECT_HEIGHT, 0.0, BACKGROUND, FOREGROUND);
         AddGaussianNoise(targetImg, 3.0, rng_);
 
-        auto result = model.FindBest(targetImg, SearchParams()
-                                     .SetMinScore(0.3)
-                                     .SetSubpixel(SubpixelMethod::LeastSquares));
+        std::vector<double> rows, cols, angles, scores;
+        FindShapeModel(targetImg, model, 0, RAD(360), 0.3, 1, 0.5,
+                       "least_squares", 0, 0.9, rows, cols, angles, scores);
 
-        if (result.score > 0) {
-            double dx = result.x - gtX;
-            double dy = result.y - gtY;
+        if (!scores.empty() && scores[0] > 0) {
+            double dx = cols[0] - gtX;
+            double dy = rows[0] - gtY;
             double error = std::sqrt(dx * dx + dy * dy);
             positionErrors.push_back(error);
 
             if (error > 1.0) {
                 std::cout << "  Trial " << trial << ": GT(" << gtX << "," << gtY
-                         << ") -> Found(" << result.x << "," << result.y
+                         << ") -> Found(" << cols[0] << "," << rows[0]
                          << ") error=" << error << "px\n";
             }
         }
@@ -1047,9 +1043,9 @@ TEST_F(ShapeModelAccuracyTest, MultipleInstances_SameImage) {
     DrawSmoothRectangle(templateImg, TEMPLATE_SIZE / 2.0, TEMPLATE_SIZE / 2.0,
                         RECT_WIDTH * 0.8, RECT_HEIGHT * 0.8, 0.0, BACKGROUND, FOREGROUND);
 
-    ShapeModel model;
-    bool created = model.Create(templateImg, ModelParams().SetContrast(20));
-    ASSERT_TRUE(created);
+    // Create model using Halcon-style API
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 20, 10);
+    ASSERT_TRUE(model.IsValid());
 
     // Create image with 4 instances
     std::vector<std::pair<double, double>> gtPositions = {
@@ -1066,12 +1062,12 @@ TEST_F(ShapeModelAccuracyTest, MultipleInstances_SameImage) {
     }
     AddGaussianNoise(targetImg, 3.0, rng_);
 
-    // Find all instances (Find returns up to maxMatches results)
-    auto results = model.Find(targetImg, SearchParams()
-                              .SetMinScore(0.3)
-                              .SetSubpixel(SubpixelMethod::LeastSquares));
+    // Find all instances using Halcon-style API
+    std::vector<double> rows, cols, angles, scores;
+    FindShapeModel(targetImg, model, 0, RAD(360), 0.3, 10, 0.5,
+                   "least_squares", 0, 0.9, rows, cols, angles, scores);
 
-    std::cout << "  Found " << results.size() << " instances (expected " << gtPositions.size() << ")\n";
+    std::cout << "  Found " << rows.size() << " instances (expected " << gtPositions.size() << ")\n";
 
     // Match found instances to ground truth
     int matched = 0;
@@ -1079,9 +1075,9 @@ TEST_F(ShapeModelAccuracyTest, MultipleInstances_SameImage) {
 
     for (const auto& gt : gtPositions) {
         double minDist = 1000.0;
-        for (const auto& result : results) {
-            double dx = result.x - gt.first;
-            double dy = result.y - gt.second;
+        for (size_t i = 0; i < rows.size(); ++i) {
+            double dx = cols[i] - gt.first;
+            double dy = rows[i] - gt.second;
             double dist = std::sqrt(dx * dx + dy * dy);
             minDist = std::min(minDist, dist);
         }
@@ -1155,13 +1151,12 @@ TEST_F(ShapeModelAccuracyTest, RealImagePerformance) {
 
     std::cout << "  Template size: " << templateImg.Width() << "x" << templateImg.Height() << "\n";
 
-    // Create model
-    ShapeModel model;
+    // Create model using Halcon-style API
     auto start = std::chrono::high_resolution_clock::now();
-    bool created = model.Create(templateImg, ModelParams().SetContrast(15));
+    ShapeModel model = CreateShapeModel(templateImg, 4, 0, RAD(360), 0, "auto", "use_polarity", 15, 10);
     auto end = std::chrono::high_resolution_clock::now();
 
-    if (!created) {
+    if (!model.IsValid()) {
         std::cout << "  Failed to create model from template\n";
         GTEST_SKIP() << "Model creation failed";
         return;
@@ -1171,7 +1166,11 @@ TEST_F(ShapeModelAccuracyTest, RealImagePerformance) {
     std::cout << "  Model creation: " << std::fixed << std::setprecision(2) << createMs << " ms\n";
 
     // Warmup
-    model.FindBest(grayImage, SearchParams().SetMinScore(0.3));
+    {
+        std::vector<double> rows, cols, angles, scores;
+        FindShapeModel(grayImage, model, 0, RAD(360), 0.3, 1, 0.5,
+                       "least_squares", 0, 0.9, rows, cols, angles, scores);
+    }
 
     // Test search performance on all images
     std::cout << "\n  Search Performance:\n";
@@ -1204,11 +1203,11 @@ TEST_F(ShapeModelAccuracyTest, RealImagePerformance) {
         // Fixed angle search
         start = std::chrono::high_resolution_clock::now();
         int iterations = 10;
-        MatchResult lastResult;
+        std::vector<double> lastRows, lastCols, lastAngles, lastScores;
         for (int i = 0; i < iterations; ++i) {
-            lastResult = model.FindBest(testGray, SearchParams()
-                                        .SetMinScore(0.3)
-                                        .SetAngleRange(0, 0));
+            lastRows.clear(); lastCols.clear(); lastAngles.clear(); lastScores.clear();
+            FindShapeModel(testGray, model, 0, 0, 0.3, 1, 0.5,
+                           "least_squares", 0, 0.9, lastRows, lastCols, lastAngles, lastScores);
         }
         end = std::chrono::high_resolution_clock::now();
         double fixedMs = std::chrono::duration<double, std::milli>(end - start).count() / iterations;
@@ -1217,9 +1216,9 @@ TEST_F(ShapeModelAccuracyTest, RealImagePerformance) {
         start = std::chrono::high_resolution_clock::now();
         iterations = 5;
         for (int i = 0; i < iterations; ++i) {
-            lastResult = model.FindBest(testGray, SearchParams()
-                                        .SetMinScore(0.3)
-                                        .SetAngleRange(-0.5, 1.0));
+            lastRows.clear(); lastCols.clear(); lastAngles.clear(); lastScores.clear();
+            FindShapeModel(testGray, model, -0.5, 1.0, 0.3, 1, 0.5,
+                           "least_squares", 0, 0.9, lastRows, lastCols, lastAngles, lastScores);
         }
         end = std::chrono::high_resolution_clock::now();
         double angleMs = std::chrono::duration<double, std::milli>(end - start).count() / iterations;
@@ -1227,8 +1226,10 @@ TEST_F(ShapeModelAccuracyTest, RealImagePerformance) {
         std::cout << "    " << filename << ":\n";
         std::cout << "      Fixed angle: " << std::fixed << std::setprecision(2) << fixedMs << " ms\n";
         std::cout << "      Angle ±30°:  " << angleMs << " ms\n";
-        std::cout << "      Best match score: " << std::setprecision(3) << lastResult.score
-                  << " at (" << std::setprecision(1) << lastResult.x << ", " << lastResult.y << ")\n";
+        if (!lastScores.empty()) {
+            std::cout << "      Best match score: " << std::setprecision(3) << lastScores[0]
+                      << " at (" << std::setprecision(1) << lastCols[0] << ", " << lastRows[0] << ")\n";
+        }
     }
 }
 

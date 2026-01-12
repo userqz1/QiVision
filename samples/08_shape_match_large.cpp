@@ -1,6 +1,6 @@
 /**
  * @file 08_shape_match_large.cpp
- * @brief Shape matching test for small (640x512) and large (2048x4001) images
+ * @brief Shape matching test using Halcon-style API
  *
  * Tests both image1 (small) and image2 (large) directories
  * Outputs: template ROI, model edges, match results for all images
@@ -9,6 +9,7 @@
 #include <QiVision/Core/QImage.h>
 #include <QiVision/Core/Draw.h>
 #include <QiVision/Matching/ShapeModel.h>
+#include <QiVision/Matching/MatchTypes.h>
 #include <QiVision/Platform/Timer.h>
 #include <QiVision/Platform/FileIO.h>
 
@@ -35,7 +36,6 @@ QImage ToGrayscale(const QImage& img) {
         const uint8_t* srcRow = src + y * srcStride;
         uint8_t* dstRow = dst + y * dstStride;
         for (int32_t x = 0; x < img.Width(); ++x) {
-            // Standard luminance conversion for RGB images
             uint8_t r = srcRow[x * 3 + 0];
             uint8_t g = srcRow[x * 3 + 1];
             uint8_t b = srcRow[x * 3 + 2];
@@ -72,15 +72,18 @@ void SaveModelVisualization(const QImage& templateGray, const Rect2i& roi,
     roiVis.SaveToFile(roiPath);
     std::cout << "   Saved: " << roiPath << std::endl;
 
+    // Get model contours using Halcon-style API
+    std::vector<double> contourRows, contourCols;
+    GetShapeModelContours(model, 1, contourRows, contourCols);
+
     // Save model edges on black background
-    auto modelPoints = model.GetModelPoints(0);
     QImage edgeImg(roi.width, roi.height, PixelType::UInt8, ChannelType::RGB);
     std::memset(edgeImg.Data(), 0, edgeImg.Height() * edgeImg.Stride());
 
     uint8_t* dst = static_cast<uint8_t*>(edgeImg.Data());
-    for (const auto& pt : modelPoints) {
-        int32_t px = static_cast<int32_t>(pt.x + roi.width / 2);
-        int32_t py = static_cast<int32_t>(pt.y + roi.height / 2);
+    for (size_t i = 0; i < contourRows.size(); ++i) {
+        int32_t px = static_cast<int32_t>(contourCols[i] + roi.width / 2);
+        int32_t py = static_cast<int32_t>(contourRows[i] + roi.height / 2);
         if (px >= 0 && px < roi.width && py >= 0 && py < roi.height) {
             size_t idx = py * edgeImg.Stride() + px * 3;
             dst[idx + 0] = 0;
@@ -90,20 +93,35 @@ void SaveModelVisualization(const QImage& templateGray, const Rect2i& roi,
     }
     std::string edgePath = prefix + "_model_edges.bmp";
     edgeImg.SaveToFile(edgePath);
-    std::cout << "   Saved: " << edgePath << " (" << modelPoints.size() << " points)" << std::endl;
+    std::cout << "   Saved: " << edgePath << " (" << contourRows.size() << " points)" << std::endl;
 }
 
 // Draw match result on image
-void DrawMatchResult(QImage& colorImg, const MatchResult& m,
-                     const std::vector<Point2d>& contour, const ModelStats& stats) {
+void DrawMatchResult(QImage& colorImg, double row, double col, double angle, double score,
+                     const std::vector<double>& contourRows, const std::vector<double>& contourCols,
+                     double modelWidth, double modelHeight) {
+    double cosA = std::cos(angle);
+    double sinA = std::sin(angle);
+
     // Draw contour (green)
-    Draw::MatchResultWithContour(colorImg, m, contour, Color::Green(), 2);
+    for (size_t i = 0; i < contourRows.size(); ++i) {
+        // Transform contour point to image coordinates
+        double px = col + cosA * contourCols[i] - sinA * contourRows[i];
+        double py = row + sinA * contourCols[i] + cosA * contourRows[i];
+        int32_t ix = static_cast<int32_t>(px);
+        int32_t iy = static_cast<int32_t>(py);
+        if (ix >= 0 && ix < colorImg.Width() && iy >= 0 && iy < colorImg.Height()) {
+            uint8_t* dst = static_cast<uint8_t*>(colorImg.Data());
+            size_t idx = iy * colorImg.Stride() + ix * 3;
+            dst[idx + 0] = 0;
+            dst[idx + 1] = 255;
+            dst[idx + 2] = 0;
+        }
+    }
 
     // Draw bounding box (red)
-    double halfW = stats.Width() / 2.0;
-    double halfH = stats.Height() / 2.0;
-    double cosA = std::cos(m.angle);
-    double sinA = std::sin(m.angle);
+    double halfW = modelWidth / 2.0;
+    double halfH = modelHeight / 2.0;
 
     double corners[4][2] = {
         {-halfW, -halfH}, {halfW, -halfH},
@@ -111,8 +129,8 @@ void DrawMatchResult(QImage& colorImg, const MatchResult& m,
     };
     int32_t px[4], py[4];
     for (int k = 0; k < 4; ++k) {
-        px[k] = static_cast<int32_t>(m.x + cosA * corners[k][0] - sinA * corners[k][1]);
-        py[k] = static_cast<int32_t>(m.y + sinA * corners[k][0] + cosA * corners[k][1]);
+        px[k] = static_cast<int32_t>(col + cosA * corners[k][0] - sinA * corners[k][1]);
+        py[k] = static_cast<int32_t>(row + sinA * corners[k][0] + cosA * corners[k][1]);
     }
     Draw::Line(colorImg, px[0], py[0], px[1], py[1], Color::Red(), 2);
     Draw::Line(colorImg, px[1], py[1], px[2], py[2], Color::Red(), 2);
@@ -120,24 +138,29 @@ void DrawMatchResult(QImage& colorImg, const MatchResult& m,
     Draw::Line(colorImg, px[3], py[3], px[0], py[0], Color::Red(), 2);
 
     // Draw center cross (yellow)
-    Draw::Cross(colorImg, m.x, m.y, 15, Color::Yellow(), 2);
+    Draw::Cross(colorImg, col, row, 15, Color::Yellow(), 2);
 }
 
-// Test a set of images
+// Test a set of images using Halcon-style API
 void TestImageSet(const std::string& name, const std::string& dataDir,
                   const std::string& outputPrefix,
                   const std::vector<std::string>& imageFiles,
-                  const Rect2i& roi, const ModelParams& modelParams,
-                  const SearchParams& searchParams) {
+                  const Rect2i& roi,
+                  int32_t numLevels,
+                  double angleStart, double angleExtent, double angleStep,
+                  const std::string& optimization, const std::string& metric,
+                  double contrast, double minContrast,
+                  double searchAngleStart, double searchAngleExtent,
+                  double minScore, int32_t numMatches, double maxOverlap,
+                  const std::string& subPixel, int32_t searchNumLevels, double greediness) {
 
     std::cout << "\n" << std::string(70, '=') << std::endl;
     std::cout << "  " << name << std::endl;
     std::cout << std::string(70, '=') << std::endl;
 
-    ShapeModel model;
     Timer timer;
 
-    // Create model from first image
+    // Create model from first image using Halcon-style API
     std::cout << "\n1. Creating model from: " << imageFiles[0] << std::endl;
 
     QImage templateImg = QImage::FromFile(dataDir + imageFiles[0]);
@@ -150,29 +173,37 @@ void TestImageSet(const std::string& name, const std::string& dataDir,
     std::cout << "   Image size: " << templateGray.Width() << " x " << templateGray.Height() << std::endl;
     std::cout << "   ROI: (" << roi.x << ", " << roi.y << ", " << roi.width << ", " << roi.height << ")" << std::endl;
 
-    // Enable timing for detailed breakdown
-    ShapeModelTimingParams timingParams;
-    timingParams.enableTiming = true;
-    timingParams.printTiming = false;
-    model.SetTimingParams(timingParams);
-
     timer.Start();
-    if (!model.Create(templateGray, roi, modelParams)) {
+    // Halcon-style: CreateShapeModel with ROI
+    ShapeModel model = CreateShapeModel(templateGray, roi, numLevels,
+                                        angleStart, angleExtent, angleStep,
+                                        optimization, metric, contrast, minContrast);
+
+    if (!model.IsValid()) {
         std::cerr << "   Failed to create model!" << std::endl;
         return;
     }
     std::cout << "   Model created in " << timer.ElapsedMs() << " ms" << std::endl;
 
-    auto stats = model.GetStats();
-    std::cout << "   Model points: " << stats.numPoints << ", Levels: " << stats.numLevels << std::endl;
+    // Get model parameters using Halcon-style API
+    int32_t outNumLevels;
+    double outAngleStart, outAngleExtent, outAngleStep;
+    double outScaleMin, outScaleMax, outScaleStep;
+    std::string outMetric;
+    GetShapeModelParams(model, outNumLevels, outAngleStart, outAngleExtent, outAngleStep,
+                        outScaleMin, outScaleMax, outScaleStep, outMetric);
+    std::cout << "   Model levels: " << outNumLevels << std::endl;
 
     // Save visualization
     SaveModelVisualization(templateGray, roi, model, outputPrefix);
 
+    // Get contours for drawing
+    std::vector<double> contourRows, contourCols;
+    GetShapeModelContours(model, 1, contourRows, contourCols);
+
     // Search in all images
     std::cout << "\n2. Searching in " << imageFiles.size() << " images..." << std::endl;
 
-    auto contour = model.GetModelContour();
     int successCount = 0;
     double totalTime = 0;
 
@@ -184,41 +215,38 @@ void TestImageSet(const std::string& name, const std::string& dataDir,
         }
         QImage searchGray = ToGrayscale(searchImg);
 
+        // Halcon-style: FindShapeModel with output parameters
+        std::vector<double> rows, cols, angles, scores;
+
         timer.Reset();
         timer.Start();
-        auto matches = model.Find(searchGray, searchParams);
+        FindShapeModel(searchGray, model, searchAngleStart, searchAngleExtent,
+                       minScore, numMatches, maxOverlap, subPixel, searchNumLevels, greediness,
+                       rows, cols, angles, scores);
         double searchTime = timer.ElapsedMs();
         totalTime += searchTime;
 
-        // Get detailed timing
-        auto timing = model.GetFindTiming();
-
-        bool success = !matches.empty();
+        bool success = !rows.empty();
         if (success) successCount++;
 
         std::cout << "   [" << (i+1) << "/" << imageFiles.size() << "] "
                   << imageFiles[i] << std::endl;
         if (success) {
             std::cout << "      Match: (" << std::fixed << std::setprecision(1)
-                      << matches[0].x << "," << matches[0].y << ") "
-                      << "Score=" << std::setprecision(3) << matches[0].score
-                      << " Angle=" << std::setprecision(1) << (matches[0].angle * 180 / M_PI) << "deg" << std::endl;
+                      << cols[0] << "," << rows[0] << ") "
+                      << "Score=" << std::setprecision(3) << scores[0]
+                      << " Angle=" << std::setprecision(1) << DEG(angles[0]) << "deg" << std::endl;
         } else {
             std::cout << "      NO MATCH" << std::endl;
         }
-        std::cout << "      Time: " << std::setprecision(1) << searchTime << "ms total"
-                  << " (Pyramid:" << timing.pyramidBuildMs
-                  << " Coarse:" << timing.coarseSearchMs
-                  << " Refine:" << timing.pyramidRefineMs
-                  << " SubPix:" << timing.subpixelRefineMs
-                  << " NMS:" << timing.nmsMs << ")" << std::endl;
-        std::cout << "      Candidates: " << timing.numCoarseCandidates << " coarse -> "
-                  << timing.numFinalMatches << " final" << std::endl;
+        std::cout << "      Time: " << std::setprecision(1) << searchTime << "ms" << std::endl;
+        std::cout << "      Found: " << rows.size() << " matches" << std::endl;
 
         // Save result image
         QImage colorImg = ToRGB(searchGray);
-        for (const auto& m : matches) {
-            DrawMatchResult(colorImg, m, contour, stats);
+        for (size_t j = 0; j < rows.size(); ++j) {
+            DrawMatchResult(colorImg, rows[j], cols[j], angles[j], scores[j],
+                           contourRows, contourCols, roi.width, roi.height);
         }
         std::string outPath = outputPrefix + "_" + std::to_string(i+1) + ".bmp";
         colorImg.SaveToFile(outPath);
@@ -229,7 +257,10 @@ void TestImageSet(const std::string& name, const std::string& dataDir,
 }
 
 int main(int argc, char* argv[]) {
-    std::cout << "=== QiVision Shape Matching - Complete Test ===" << std::endl;
+    (void)argc;
+    (void)argv;
+
+    std::cout << "=== QiVision Shape Matching - Halcon-style API Test ===" << std::endl;
 
     std::string outputDir = "tests/data/matching/";
 
@@ -247,25 +278,23 @@ int main(int argc, char* argv[]) {
 
         Rect2i smallROI(180, 100, 210, 70);
 
-        ModelParams smallModelParams;
-        smallModelParams.SetContrastAutoHysteresis();
-        smallModelParams.SetNumLevels(4);
-
-        SearchParams smallSearchParams;
-        smallSearchParams.SetAngleRange(0, 2 * M_PI);
-        smallSearchParams.SetMinScore(0.5);
-        smallSearchParams.SetGreediness(0.9);
-        smallSearchParams.SetMaxMatches(5);
-
         TestImageSet("Small Images (640x512)",
                      "tests/data/matching/image1/",
                      outputDir + "output_small",
                      smallImages, smallROI,
-                     smallModelParams, smallSearchParams);
+                     4,                      // numLevels
+                     0, RAD(360), 0,         // angleStart, angleExtent, angleStep (0=auto)
+                     "auto",                 // optimization
+                     "use_polarity",         // metric
+                     30, 10,                 // contrast, minContrast
+                     0, RAD(360),            // search angleStart, angleExtent
+                     0.5, 5, 0.5,            // minScore, numMatches, maxOverlap
+                     "least_squares", 0, 0.9 // subPixel, numLevels, greediness
+        );
     }
 
     // =========================================================================
-    // Test 2: Large Images (2048x4001)
+    // Test 2: Large Images (2048x4001) - XLDContour mode
     // =========================================================================
     {
         std::vector<std::string> largeImages = {
@@ -284,64 +313,35 @@ int main(int argc, char* argv[]) {
 
         Rect2i largeROI(1065, 2720, 135, 200);
 
-        // Common search params
-        SearchParams largeSearchParams;
-        largeSearchParams.angleStart = 0;
-        largeSearchParams.angleExtent = 2 * M_PI;
-        largeSearchParams.minScore = 0.7;
-        largeSearchParams.greediness = 0.9;
-        largeSearchParams.maxMatches = 10;
-
-        // Test 1: XLDContour mode (Halcon-style, fewer points)
         std::cout << "\n*** Testing XLDContour mode ***" << std::endl;
-        ModelParams largeModelParamsXLD;
-        largeModelParamsXLD.numLevels = 5;
-        largeModelParamsXLD.angleStart = 0;
-        largeModelParamsXLD.angleExtent = 2 * M_PI;
-        largeModelParamsXLD.contrastHigh = 10;
-        largeModelParamsXLD.contrastLow = 5;
-        largeModelParamsXLD.metric = MetricMode::IgnoreLocalPolarity;
-        largeModelParamsXLD.optimization = OptimizationMode::XLDContour;
-
         TestImageSet("Large Images - XLDContour",
                      "tests/data/matching/image2/",
                      outputDir + "output_large_xld",
                      largeImages, largeROI,
-                     largeModelParamsXLD, largeSearchParams);
+                     5,                             // numLevels
+                     0, RAD(360), 0,                // angleStart, angleExtent, angleStep
+                     "xld_contour",                 // optimization
+                     "ignore_local_polarity",       // metric
+                     10, 5,                         // contrast (high), minContrast (low as hysteresis)
+                     0, RAD(360),                   // search angleStart, angleExtent
+                     0.7, 10, 0.5,                  // minScore, numMatches, maxOverlap
+                     "least_squares", 0, 0.9        // subPixel, numLevels, greediness
+        );
 
-        // Test 2: Auto mode (original, more points)
         std::cout << "\n*** Testing Auto mode (original) ***" << std::endl;
-        ModelParams largeModelParams;
-        largeModelParams.numLevels = 5;
-        largeModelParams.angleStart = 0;
-        largeModelParams.angleExtent = 2 * M_PI;
-        largeModelParams.contrastHigh = 10;
-        largeModelParams.contrastLow = 5;
-        largeModelParams.metric = MetricMode::IgnoreLocalPolarity;
-        largeModelParams.optimization = OptimizationMode::Auto;
-
         TestImageSet("Large Images - Auto",
                      "tests/data/matching/image2/",
                      outputDir + "output_large",
                      largeImages, largeROI,
-                     largeModelParams, largeSearchParams);
-
-        // Test 3: LINEMOD mode (8-bin quantization, LUT scoring)
-        std::cout << "\n*** Testing LINEMOD mode ***" << std::endl;
-        ModelParams linemodModelParams;
-        // numLevels auto-calculated based on template size (135x200 → ~4 levels)
-        linemodModelParams.angleStart = 0;
-        linemodModelParams.angleExtent = 2 * M_PI;
-        linemodModelParams.contrastHigh = 10;
-        linemodModelParams.contrastLow = 5;
-        linemodModelParams.metric = MetricMode::IgnoreLocalPolarity;
-        linemodModelParams.useLinemod = true;  // Enable LINEMOD mode
-
-        TestImageSet("Large Images - LINEMOD",
-                     "tests/data/matching/image2/",
-                     outputDir + "output_large_linemod",
-                     largeImages, largeROI,
-                     linemodModelParams, largeSearchParams);
+                     5,                             // numLevels
+                     0, RAD(360), 0,                // angleStart, angleExtent, angleStep
+                     "auto",                        // optimization
+                     "ignore_local_polarity",       // metric
+                     10, 5,                         // contrast, minContrast
+                     0, RAD(360),                   // search angleStart, angleExtent
+                     0.7, 10, 0.5,                  // minScore, numMatches, maxOverlap
+                     "least_squares", 0, 0.9        // subPixel, numLevels, greediness
+        );
     }
 
     std::cout << "\n=== All Tests Complete ===" << std::endl;
