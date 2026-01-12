@@ -59,6 +59,7 @@ set(QIVISION_SOURCES
     Internal/Eigen.cpp
     Internal/Hough.cpp
     Internal/AnglePyramid.cpp
+    Internal/LinemodPyramid.cpp
     Internal/ResponseMap.cpp
     Internal/IntegralImage.cpp
     # Matching (Feature Layer)
@@ -133,6 +134,7 @@ set(QIVISION_HEADERS
     ${CMAKE_SOURCE_DIR}/include/QiVision/Internal/Eigen.h
     ${CMAKE_SOURCE_DIR}/include/QiVision/Internal/Hough.h
     ${CMAKE_SOURCE_DIR}/include/QiVision/Internal/AnglePyramid.h
+    ${CMAKE_SOURCE_DIR}/include/QiVision/Internal/LinemodPyramid.h
     ${CMAKE_SOURCE_DIR}/include/QiVision/Internal/ResponseMap.h
     ${CMAKE_SOURCE_DIR}/include/QiVision/Internal/IntegralImage.h
     # Matching (Feature Layer)

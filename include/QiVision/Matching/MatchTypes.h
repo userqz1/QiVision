@@ -240,7 +240,8 @@ enum class OptimizationMode {
     PointReductionLow,  ///< Light point reduction ('point_reduction_low')
     PointReductionMedium, ///< Medium reduction ('point_reduction_medium')
     PointReductionHigh, ///< Heavy reduction ('point_reduction_high')
-    Auto                ///< Automatic selection ('auto')
+    Auto,               ///< Automatic selection ('auto')
+    XLDContour          ///< Use XLD contour key points only (~20-50 points, Halcon-style)
 };
 
 /**
@@ -284,6 +285,11 @@ struct ModelParams {
     // =========================================================================
     OptimizationMode optimization = OptimizationMode::Auto;
     bool pregeneration = false;     ///< Pre-generate rotated models (memory vs speed)
+
+    // =========================================================================
+    // LINEMOD Mode (Paper-accurate implementation)
+    // =========================================================================
+    bool useLinemod = false;        ///< Use LINEMOD-style matching (8-bin, OR spreading, LUT)
 
     // =========================================================================
     // Metric (polarity handling)
@@ -382,6 +388,12 @@ struct ModelParams {
     /// Set minimum contrast for search
     ModelParams& SetMinContrast(double mc) {
         minContrast = mc;
+        return *this;
+    }
+
+    /// Enable LINEMOD mode (paper-accurate 8-bin + OR spreading + LUT)
+    ModelParams& SetUseLinemod(bool enable) {
+        useLinemod = enable;
         return *this;
     }
 

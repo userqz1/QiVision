@@ -29,6 +29,10 @@
 #include <vector>
 #include <cmath>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 namespace Qi::Vision::Internal {
 
 // ============================================================================
@@ -310,6 +314,7 @@ void ConvolveRow(const SrcT* src, DstT* dst,
                  BorderMode borderMode, double borderValue) {
     int32_t halfK = kernelSize / 2;
 
+    #pragma omp parallel for if(width * height > 100000)
     for (int32_t y = 0; y < height; ++y) {
         for (int32_t x = 0; x < width; ++x) {
             double sum = 0.0;
@@ -341,6 +346,7 @@ void ConvolveCol(const SrcT* src, DstT* dst,
                  BorderMode borderMode, double borderValue) {
     int32_t halfK = kernelSize / 2;
 
+    #pragma omp parallel for if(width * height > 100000)
     for (int32_t y = 0; y < height; ++y) {
         for (int32_t x = 0; x < width; ++x) {
             double sum = 0.0;

@@ -78,6 +78,7 @@ struct AnglePyramidParams {
     bool useSubpixel = true;            ///< Use subpixel gradient interpolation
     bool enableTiming = false;          ///< Enable detailed timing statistics
     bool extractEdgePoints = true;      ///< Extract edge points (false for search pyramid)
+    bool useNMS = true;                 ///< Apply Non-Maximum Suppression (false for shape matching)
 
     // Builder pattern
     AnglePyramidParams& SetNumLevels(int32_t n) { numLevels = n; return *this; }
@@ -87,6 +88,7 @@ struct AnglePyramidParams {
     AnglePyramidParams& SetSubpixel(bool v) { useSubpixel = v; return *this; }
     AnglePyramidParams& SetEnableTiming(bool v) { enableTiming = v; return *this; }
     AnglePyramidParams& SetExtractEdgePoints(bool v) { extractEdgePoints = v; return *this; }
+    AnglePyramidParams& SetUseNMS(bool v) { useNMS = v; return *this; }
 };
 
 /**

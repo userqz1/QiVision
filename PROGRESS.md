@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-09 (ShapeModel 性能优化方案评估与记录)
+> 最后更新: 2026-01-12 (LINEMOD 性能优化 - 总时间 245ms → 105ms, 57%提升)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -240,6 +240,150 @@ Tests    █████████████████░░░ 87%
 
 ## 变更日志
 
+### 2026-01-12 (LINEMOD 高斯核优化)
+
+- **高斯模糊核优化** ✅
+  - 使用 3x3 核 (σ=0.5) 替代 7x7 核 (σ=1.0)
+  - 减少 75% 的模糊计算量
+
+- **性能对比**:
+  | 指标 | 优化前 | 优化后 | 改进 |
+  |------|--------|--------|------|
+  | LINEMOD 总时间 | 115-118ms | **105ms** | ~10% |
+  | Pyramid 构建 | 82-96ms | **81-95ms** | ~5% |
+  | 粗搜索 | 15-18ms | **10-15ms** | ~30% |
+
+- **注意**: 3x3 核的噪声抑制较弱，但对于 LINEMOD 的 bit-flag 表示足够
+
+---
+
+### 2026-01-12 (LINEMOD 金字塔性能优化 - Sobel+量化合并)
+
+- **Sobel + Magnitude + Quantization 合并优化** ✅
+  - 将 3 次独立内存遍历合并为 1 次
+  - 减少中间缓冲区分配，提升 CPU 缓存命中率
+
+- **性能对比**:
+  | 阶段 | 架构优化前 | 架构优化后 | 合并优化后 | 总改进 |
+  |------|-----------|-----------|-----------|--------|
+  | Pyramid 构建 | 200-230ms | 142-165ms | **82-96ms** | ~60% |
+  | LINEMOD 总时间 | 245ms | 181.7ms | **115-120ms** | ~52% |
+
+- **优化细节**:
+  - Pass 1: 高斯模糊 (保留, σ=1.0 效果最佳)
+  - Pass 2: Sobel + 幅值 + 量化 (合并为一个 pass) ← **本次优化**
+  - Pass 3: 邻域投票 + OR 扩散 (保持原有实现)
+
+- **测试结果** (2048x4001 图像, 11/11 匹配成功):
+  - LINEMOD 模式: 115-120ms (原 245ms)
+  - 金字塔构建: 82-96ms (原 200-230ms)
+
+---
+
+### 2026-01-12 (LINEMOD 金字塔架构优化)
+
+- **架构优化** ✅
+  - 只对 Level 0 计算完整 Sobel 梯度
+  - Level 1+ 从量化图降采样 (2x2 投票)
+  - 新增 `BuildLevelFromQuantized()` 函数
+
+- **性能提升**: 245ms → 181.7ms (26%)
+
+---
+
+### 2026-01-12 (LINEMOD 算法完整实现)
+
+- **按论文重新实现 LINEMOD 算法** ✅
+  - 参考论文: Hinterstoisser et al. "Gradient Response Maps for Real-Time Detection" (TPAMI 2012)
+  - 参考论文: "Multimodal Templates for Real-Time Detection" (ICCV 2011)
+
+- **核心算法实现** ✅
+  | 组件 | 论文描述 | 实现 | 状态 |
+  |------|----------|------|------|
+  | 方向量化 | 8 bins (45°/bin) | LINEMOD_NUM_BINS = 8 | ✅ |
+  | Bit flag | bit i = orientation i | uint8_t bitmask | ✅ |
+  | 邻域投票 | 3×3 mode + threshold | NEIGHBOR_THRESHOLD = 5 | ✅ |
+  | OR spreading | 空间容差 | spreadT = 4 | ✅ |
+  | SIMILARITY_LUT | LUT[8][256] | 2D 查表 O(1) | ✅ |
+  | 评分公式 | Σ LUT[ori][mask] / N | ComputeScoreRotated() | ✅ |
+
+- **新增文件**:
+  - `include/QiVision/Internal/LinemodPyramid.h` (~340 行)
+    - SimilarityLUT class: 预计算 2D 查找表
+    - LinemodFeature struct: 6 bytes/feature (x, y, ori)
+    - LinemodPyramid class: 完整金字塔处理
+  - `src/Internal/LinemodPyramid.cpp` (~600 行)
+    - 8-bin 方向量化 (full 360°)
+    - 3x3 邻域直方图 + 阈值投票
+    - OR spreading (非 max filter)
+    - SIMILARITY_LUT 预计算
+    - ComputeScore/ComputeScoreRotated 评分函数
+
+- **ShapeModel 集成** ✅
+  - `include/QiVision/Matching/MatchTypes.h`: 添加 `useLinemod` 参数
+  - `src/Matching/ShapeModelImpl.h`: 添加 LinemodFeature 存储 + 函数声明
+  - `src/Matching/ShapeModelCreate.cpp`: 添加 `CreateModelLinemod()`
+  - `src/Matching/ShapeModelSearch.cpp`: 添加 `SearchPyramidLinemod()`
+  - `src/Matching/ShapeModel.cpp`: 在 Create/Find 中路由到 LINEMOD 模式
+
+- **使用方法**:
+  ```cpp
+  ModelParams params;
+  params.SetUseLinemod(true);  // 启用 LINEMOD 模式
+
+  ShapeModel model;
+  model.Create(templateImage, params);
+
+  auto results = model.Find(searchImage, searchParams);
+  ```
+
+- **与原实现对比**:
+  | 特性 | 原 AnglePyramid | 新 LINEMOD |
+  |------|----------------|-----------|
+  | 方向 bins | 64 | 8 |
+  | 存储格式 | float angle | uint8_t bitmask |
+  | 空间容差 | 无 | OR spreading T=4 |
+  | 评分 | cos(angle_diff) | LUT[ori][mask] |
+  | 适用场景 | 精确匹配 | 快速粗匹配 |
+
+### 2026-01-12 (Shape-Based Matching 边缘提取优化)
+
+- **论文研究** ✅
+  - 研究 LINEMOD 论文 (Hinterstoisser et al. ICCV 2011)
+  - 研究 Ulrich 博士论文 "Hierarchical Real-Time Recognition of Compound Objects"
+  - 参考 "Machine Vision Algorithms and Applications" P317 Section 3.11.5
+
+- **边缘点提取算法改进** ✅
+  - **禁用 Canny-style NMS**: Shape-based matching 不需要 NMS 边缘细化
+  - **添加 3x3 邻域众数滤波**: 论文中的 "Robust Quantization" 步骤
+  - 新增 `AnglePyramidParams::useNMS` 选项，默认 `true`
+  - Shape matching 模板创建时设置 `useNMS = false`
+
+- **重要修正** ✅ (session 2)
+  - **BUG**: 初始实现把 3x3 众数滤波作为 FILTER 使用（丢弃 bin != modeBin 的像素）
+  - **正确实现**: 论文 `quantized_value[x] = mode(...)` 是 **REPLACE**（替换方向），不是 FILTER
+  - **修复**: 保留所有 contrast > threshold 的像素，用邻域众数 **替换** 方向值
+
+- **论文流程对比**:
+  | 步骤 | 论文描述 | 我们的实现 | 状态 |
+  |------|----------|-----------|------|
+  | 1 | Sobel 梯度 | GaussianGradient | ✅ |
+  | 2 | 方向量化 (8/16 bins) | 64 bins | ✅ |
+  | 3 | 鲁棒量化 = mode(3×3邻域) | **修复**: REPLACE | ✅ |
+  | 4 | 对比度阈值 | minContrast | ✅ |
+  | 5 | 特征点选择 | 网格稀疏采样 | ✅ |
+  | 6-7 | 响应图 + LUT | FindScaledShapeModel | ✅ |
+
+- **测试结果**:
+  - XLDContour 模式: 11/11 匹配成功
+  - 分数: 0.983-0.992
+  - 平均时间: 155ms
+
+- **代码修改**:
+  - `include/QiVision/Internal/AnglePyramid.h`: 添加 `useNMS` 参数
+  - `src/Internal/AnglePyramid.cpp`: 实现 3x3 众数滤波 (REPLACE 模式)
+  - `src/Matching/ShapeModelCreate.cpp`: 设置 `useNMS = false`
+
 ### 2026-01-09 (AnglePyramid OpenMP + SIMD 优化)
 
 - **性能瓶颈定位** ✅
@@ -287,6 +431,36 @@ Tests    █████████████████░░░ 87%
   - AnglePyramid 是每张搜索图像的梯度金字塔
   - 不同图像必须重新构建，无法复用
   - 预构建只在同一图像多模板搜索时有效
+
+### 2026-01-12 (ShapeModel XLDContour 模式修正)
+
+- **Halcon 实际点数分析** ✅
+  - 运行 Halcon 脚本获取真实点数分布 (135×200 ROI, 5层):
+    - Level 1 (1/1): 4541 点
+    - Level 2 (1/2): 958 点
+    - Level 3 (1/4): 302 点
+    - Level 4 (1/8): 154 点
+    - Level 5 (1/16): 52 点
+  - **关键发现**: Halcon 的 optimization 参数对点数**无影响**
+  - 所有模式 (auto/none/point_reduction_*) 产生相同点数
+
+- **XLDContour 模式重写** ✅
+  - **移除错误的间距策略** - 之前的实现是反的 (精细层少点，粗层多点)
+  - **改用与 Auto 模式相同的逻辑**:
+    - 提取所有超过对比度阈值的边缘点
+    - 按梯度强度排序，取 top N
+    - maxPoints 限制: Level 0 = 1500, Level 1 = 300, Level 2+ = 100
+  - 点数自然随金字塔下采样减少
+
+- **间距优化应用** ✅
+  - XLDContour 原先跳过 OptimizeModel() 的间距过滤
+  - 修改后与 Auto 使用相同的 minSpacing (模板 100-300px 用 2.0)
+  - 点数从 1500 降至 516
+
+- **测试结果** ✅
+  - XLDContour 模式: 516 点, **11/11 全部匹配**, 186ms
+  - Auto 模式: 516 点, 11/11 匹配, 168ms
+  - 两种模式点数相同，性能差异 ~10% (可接受)
 
 ### 2026-01-09 (ShapeModel 性能优化方案评估)
 

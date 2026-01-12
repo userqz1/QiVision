@@ -284,6 +284,33 @@ int main(int argc, char* argv[]) {
 
         Rect2i largeROI(1065, 2720, 135, 200);
 
+        // Common search params
+        SearchParams largeSearchParams;
+        largeSearchParams.angleStart = 0;
+        largeSearchParams.angleExtent = 2 * M_PI;
+        largeSearchParams.minScore = 0.7;
+        largeSearchParams.greediness = 0.9;
+        largeSearchParams.maxMatches = 10;
+
+        // Test 1: XLDContour mode (Halcon-style, fewer points)
+        std::cout << "\n*** Testing XLDContour mode ***" << std::endl;
+        ModelParams largeModelParamsXLD;
+        largeModelParamsXLD.numLevels = 5;
+        largeModelParamsXLD.angleStart = 0;
+        largeModelParamsXLD.angleExtent = 2 * M_PI;
+        largeModelParamsXLD.contrastHigh = 10;
+        largeModelParamsXLD.contrastLow = 5;
+        largeModelParamsXLD.metric = MetricMode::IgnoreLocalPolarity;
+        largeModelParamsXLD.optimization = OptimizationMode::XLDContour;
+
+        TestImageSet("Large Images - XLDContour",
+                     "tests/data/matching/image2/",
+                     outputDir + "output_large_xld",
+                     largeImages, largeROI,
+                     largeModelParamsXLD, largeSearchParams);
+
+        // Test 2: Auto mode (original, more points)
+        std::cout << "\n*** Testing Auto mode (original) ***" << std::endl;
         ModelParams largeModelParams;
         largeModelParams.numLevels = 5;
         largeModelParams.angleStart = 0;
@@ -293,18 +320,28 @@ int main(int argc, char* argv[]) {
         largeModelParams.metric = MetricMode::IgnoreLocalPolarity;
         largeModelParams.optimization = OptimizationMode::Auto;
 
-        SearchParams largeSearchParams;
-        largeSearchParams.angleStart = 0;
-        largeSearchParams.angleExtent = 2 * M_PI;
-        largeSearchParams.minScore = 0.7;
-        largeSearchParams.greediness = 0.9;
-        largeSearchParams.maxMatches = 10;
-
-        TestImageSet("Large Images (2048x4001)",
+        TestImageSet("Large Images - Auto",
                      "tests/data/matching/image2/",
                      outputDir + "output_large",
                      largeImages, largeROI,
                      largeModelParams, largeSearchParams);
+
+        // Test 3: LINEMOD mode (8-bin quantization, LUT scoring)
+        std::cout << "\n*** Testing LINEMOD mode ***" << std::endl;
+        ModelParams linemodModelParams;
+        linemodModelParams.numLevels = 5;
+        linemodModelParams.angleStart = 0;
+        linemodModelParams.angleExtent = 2 * M_PI;
+        linemodModelParams.contrastHigh = 10;
+        linemodModelParams.contrastLow = 5;
+        linemodModelParams.metric = MetricMode::IgnoreLocalPolarity;
+        linemodModelParams.useLinemod = true;  // Enable LINEMOD mode
+
+        TestImageSet("Large Images - LINEMOD",
+                     "tests/data/matching/image2/",
+                     outputDir + "output_large_linemod",
+                     largeImages, largeROI,
+                     linemodModelParams, largeSearchParams);
     }
 
     std::cout << "\n=== All Tests Complete ===" << std::endl;

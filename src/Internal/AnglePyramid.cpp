@@ -12,9 +12,11 @@
 #include <QiVision/Internal/Pyramid.h>
 #include <QiVision/Internal/Interpolate.h>
 #include <QiVision/Internal/Geometry2d.h>
+#include <QiVision/Internal/NonMaxSuppression.h>
 #include <QiVision/Core/Constants.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -735,6 +737,9 @@ void AnglePyramid::Impl::ExtractEdgePointsForLevel(int32_t level) {
     auto& levelData = levels_[level];
     levelData.edgePoints.clear();
 
+    const int32_t width = levelData.width;
+    const int32_t height = levelData.height;
+
     const float* magData = static_cast<const float*>(levelData.gradMag.Data());
     const float* dirData = static_cast<const float*>(levelData.gradDir.Data());
     const int16_t* binData = static_cast<const int16_t*>(levelData.angleBinImage.Data());
@@ -743,104 +748,153 @@ void AnglePyramid::Impl::ExtractEdgePointsForLevel(int32_t level) {
     int32_t dirStride = levelData.gradDir.Stride() / sizeof(float);
     int32_t binStride = levelData.angleBinImage.Stride() / sizeof(int16_t);
 
-    double minContrast = params_.minContrast;
-    const bool useParallel = ShouldUseOpenMP(levelData.width, levelData.height);
+    const float minContrast = static_cast<float>(params_.minContrast);
 
-#ifdef _OPENMP
-    if (useParallel) {
-        // For edge point extraction, we need thread-local vectors then merge
-        #pragma omp parallel
-        {
-            std::vector<EdgePoint> localPoints;
-            localPoints.reserve(1000);
+    if (params_.useNMS) {
+        // Original behavior: Apply Non-Maximum Suppression along gradient direction
+        // This thins edges from "bands" to single-pixel-wide "ridges" (Canny-style)
+        // NMS2DGradient expects contiguous data, so copy if stride != width
+        std::vector<float> magContiguous, dirContiguous;
+        const float* magForNms = magData;
+        const float* dirForNms = dirData;
 
-            #pragma omp for schedule(static) nowait
-            for (int32_t y = 2; y < levelData.height - 2; ++y) {
-                for (int32_t x = 2; x < levelData.width - 2; ++x) {
-                    float mag = magData[y * magStride + x];
+        if (magStride != width) {
+            magContiguous.resize(width * height);
+            for (int32_t y = 0; y < height; ++y) {
+                std::memcpy(magContiguous.data() + y * width,
+                            magData + y * magStride, width * sizeof(float));
+            }
+            magForNms = magContiguous.data();
+        }
+        if (dirStride != width) {
+            dirContiguous.resize(width * height);
+            for (int32_t y = 0; y < height; ++y) {
+                std::memcpy(dirContiguous.data() + y * width,
+                            dirData + y * dirStride, width * sizeof(float));
+            }
+            dirForNms = dirContiguous.data();
+        }
 
-                    if (mag >= minContrast) {
-                        // Parabolic subpixel refinement in X direction
-                        float magXm1 = magData[y * magStride + (x - 1)];
-                        float magXp1 = magData[y * magStride + (x + 1)];
-                        double dx = 0.0;
-                        double denomX = 2.0 * (magXm1 - 2.0 * mag + magXp1);
-                        if (std::abs(denomX) > 1e-6) {
-                            dx = (magXm1 - magXp1) / denomX;
-                            dx = std::clamp(dx, -0.5, 0.5);
+        std::vector<float> nmsOutput(width * height, 0.0f);
+        NMS2DGradient(magForNms, dirForNms, nmsOutput.data(), width, height, minContrast);
+
+        // Extract edge points from NMS output with subpixel refinement
+        levelData.edgePoints.reserve(width * height / 20);
+
+        for (int32_t y = 2; y < height - 2; ++y) {
+            for (int32_t x = 2; x < width - 2; ++x) {
+                float nmsMag = nmsOutput[y * width + x];
+
+                if (nmsMag >= minContrast) {
+                    float dir = dirData[y * dirStride + x];
+                    double cosDir = std::cos(dir);
+                    double sinDir = std::sin(dir);
+
+                    auto sampleMag = [&](double ox, double oy) -> double {
+                        int32_t ix = x + static_cast<int32_t>(std::round(ox));
+                        int32_t iy = y + static_cast<int32_t>(std::round(oy));
+                        ix = std::clamp(ix, 0, width - 1);
+                        iy = std::clamp(iy, 0, height - 1);
+                        return magData[iy * magStride + ix];
+                    };
+
+                    double p0 = sampleMag(-cosDir, -sinDir);
+                    double p1 = magData[y * magStride + x];
+                    double p2 = sampleMag(cosDir, sinDir);
+
+                    double denom = 2.0 * (p0 - 2.0 * p1 + p2);
+                    double offset = 0.0;
+                    if (std::abs(denom) > 1e-10) {
+                        offset = (p0 - p2) / denom;
+                        offset = std::clamp(offset, -0.5, 0.5);
+                    }
+
+                    double subX = x + offset * cosDir;
+                    double subY = y + offset * sinDir;
+
+                    int16_t bin = binData[y * binStride + x];
+
+                    levelData.edgePoints.emplace_back(
+                        subX, subY,
+                        static_cast<double>(dir),
+                        static_cast<double>(nmsMag),
+                        static_cast<int32_t>(bin)
+                    );
+                }
+            }
+        }
+    } else {
+        // Shape-based matching mode (LINEMOD/Halcon style):
+        // 1. NO Canny-style NMS
+        // 2. Apply 3x3 neighborhood mode filter for robust orientation quantization
+        //    IMPORTANT: Replace orientation with neighborhood mode, don't filter pixels!
+        //
+        // Reference: LINEMOD paper (Hinterstoisser et al. ICCV 2011)
+        // "Quantized orientations are made more robust by taking the mode in a 3x3 neighborhood"
+        //
+        // Paper pseudo-code:
+        //   for each pixel location x:
+        //       quantized_value[x] = mode(quantized values in 3×3 neighborhood of x)
+
+        levelData.edgePoints.reserve(width * height / 10);
+
+        // Helper: compute mode (most frequent value) in 3x3 neighborhood
+        // Returns both mode bin and the corresponding direction
+        auto computeNeighborhoodMode = [&](int32_t cx, int32_t cy, float& modeDir) -> int16_t {
+            // Count occurrences of each bin in 3x3 neighborhood
+            // Only count pixels above contrast threshold
+            std::array<int32_t, 64> binCounts = {};
+            std::array<float, 64> binDirSum = {};  // Sum of directions for each bin
+            int32_t maxCount = 0;
+            int16_t modeBin = binData[cy * binStride + cx];
+
+            for (int32_t dy = -1; dy <= 1; ++dy) {
+                for (int32_t dx = -1; dx <= 1; ++dx) {
+                    int32_t nx = cx + dx;
+                    int32_t ny = cy + dy;
+                    if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                        float neighborMag = magData[ny * magStride + nx];
+                        if (neighborMag >= minContrast) {
+                            int16_t neighborBin = binData[ny * binStride + nx];
+                            if (neighborBin >= 0 && neighborBin < 64) {
+                                binCounts[neighborBin]++;
+                                binDirSum[neighborBin] += dirData[ny * dirStride + nx];
+                                if (binCounts[neighborBin] > maxCount) {
+                                    maxCount = binCounts[neighborBin];
+                                    modeBin = neighborBin;
+                                }
+                            }
                         }
-
-                        // Parabolic subpixel refinement in Y direction
-                        float magYm1 = magData[(y - 1) * magStride + x];
-                        float magYp1 = magData[(y + 1) * magStride + x];
-                        double dy = 0.0;
-                        double denomY = 2.0 * (magYm1 - 2.0 * mag + magYp1);
-                        if (std::abs(denomY) > 1e-6) {
-                            dy = (magYm1 - magYp1) / denomY;
-                            dy = std::clamp(dy, -0.5, 0.5);
-                        }
-
-                        float dir = dirData[y * dirStride + x];
-                        int16_t bin = binData[y * binStride + x];
-
-                        localPoints.emplace_back(
-                            static_cast<double>(x) + dx,  // Subpixel X
-                            static_cast<double>(y) + dy,  // Subpixel Y
-                            static_cast<double>(dir),
-                            static_cast<double>(mag),
-                            static_cast<int32_t>(bin)
-                        );
                     }
                 }
             }
 
-            #pragma omp critical
-            {
-                levelData.edgePoints.insert(levelData.edgePoints.end(),
-                                             localPoints.begin(), localPoints.end());
+            // Compute average direction for the mode bin
+            if (binCounts[modeBin] > 0) {
+                modeDir = binDirSum[modeBin] / binCounts[modeBin];
+            } else {
+                modeDir = dirData[cy * dirStride + cx];
             }
-        }
-    } else
-#endif
-    {
-        // 小图: 单线程执行，避免 OpenMP 开销
-        (void)useParallel;
-        levelData.edgePoints.reserve(1000);
 
-        for (int32_t y = 2; y < levelData.height - 2; ++y) {
-            for (int32_t x = 2; x < levelData.width - 2; ++x) {
+            return modeBin;
+        };
+
+        for (int32_t y = 1; y < height - 1; ++y) {
+            for (int32_t x = 1; x < width - 1; ++x) {
                 float mag = magData[y * magStride + x];
 
                 if (mag >= minContrast) {
-                    // Parabolic subpixel refinement in X direction
-                    float magXm1 = magData[y * magStride + (x - 1)];
-                    float magXp1 = magData[y * magStride + (x + 1)];
-                    double dx = 0.0;
-                    double denomX = 2.0 * (magXm1 - 2.0 * mag + magXp1);
-                    if (std::abs(denomX) > 1e-6) {
-                        dx = (magXm1 - magXp1) / denomX;
-                        dx = std::clamp(dx, -0.5, 0.5);
-                    }
-
-                    // Parabolic subpixel refinement in Y direction
-                    float magYm1 = magData[(y - 1) * magStride + x];
-                    float magYp1 = magData[(y + 1) * magStride + x];
-                    double dy = 0.0;
-                    double denomY = 2.0 * (magYm1 - 2.0 * mag + magYp1);
-                    if (std::abs(denomY) > 1e-6) {
-                        dy = (magYm1 - magYp1) / denomY;
-                        dy = std::clamp(dy, -0.5, 0.5);
-                    }
-
-                    float dir = dirData[y * dirStride + x];
-                    int16_t bin = binData[y * binStride + x];
+                    // Robust quantization: REPLACE orientation with neighborhood mode
+                    // (Don't filter pixels - keep all pixels above threshold)
+                    float modeDir;
+                    int16_t modeBin = computeNeighborhoodMode(x, y, modeDir);
 
                     levelData.edgePoints.emplace_back(
-                        static_cast<double>(x) + dx,  // Subpixel X
-                        static_cast<double>(y) + dy,  // Subpixel Y
-                        static_cast<double>(dir),
+                        static_cast<double>(x),
+                        static_cast<double>(y),
+                        static_cast<double>(modeDir),  // Use mode direction
                         static_cast<double>(mag),
-                        static_cast<int32_t>(bin)
+                        static_cast<int32_t>(modeBin)  // Use mode bin
                     );
                 }
             }

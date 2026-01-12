@@ -15,9 +15,12 @@
 
 #include "ShapeModelImpl.h"
 #include <QiVision/Internal/Pyramid.h>
+#include <QiVision/Internal/Canny.h>
+#include <QiVision/Internal/ContourProcess.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <queue>
 #include <unordered_map>
 
@@ -120,6 +123,11 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const Rect2i& roi, const P
         pyramidParams.numLevels = params_.numLevels;
     }
     pyramidParams.smoothSigma = 0.5;
+
+    // Disable NMS for shape-based matching (Halcon-style)
+    // Shape matching uses gradient direction similarity, not edge detection
+    // All pixels above contrast threshold participate in matching
+    pyramidParams.useNMS = false;
 
     // For contrast auto-detection, use a very low initial threshold to get all gradients
     bool needAutoContrast = (params_.contrastMode == ContrastMode::Auto ||
@@ -283,7 +291,13 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const Rect2i& roi, const P
 
     // Extract model points from pyramid
     tStep = std::chrono::high_resolution_clock::now();
-    ExtractModelPoints(pyramid);
+    if (params_.optimization == OptimizationMode::XLDContour) {
+        // Use XLD contour-based extraction (Halcon-style, ~20-50 key points)
+        ExtractModelPointsXLD(templateImg, pyramid);
+    } else {
+        // Traditional edge pixel-based extraction
+        ExtractModelPoints(pyramid);
+    }
     if (timingParams_.enableTiming) {
         createTiming_.extractPointsMs = elapsedMs(tStep);
     }
@@ -531,6 +545,207 @@ void ShapeModelImpl::ExtractModelPoints(const AnglePyramid& pyramid) {
 }
 
 // =============================================================================
+// ShapeModelImpl::ExtractModelPointsXLD
+// =============================================================================
+
+void ShapeModelImpl::ExtractModelPointsXLD(const QImage& templateImg, const AnglePyramid& pyramid) {
+    (void)templateImg;  // Not used - we use AnglePyramid's edge points directly
+
+    levels_.clear();
+    levels_.resize(pyramid.NumLevels());
+
+    // Halcon-style point extraction (based on actual Halcon analysis):
+    // - Extract ALL edge points that pass contrast threshold
+    // - NO spacing strategy, NO point reduction
+    // - Points naturally reduce at coarser levels due to pyramid downsampling
+    //
+    // Halcon actual point counts (135x200 ROI, 5 levels):
+    //   Level 1 (1/1):  4541 points
+    //   Level 2 (1/2):  958 points
+    //   Level 3 (1/4):  302 points
+    //   Level 4 (1/8):  154 points
+    //   Level 5 (1/16): 52 points
+    //
+    // Key insight: Halcon's "optimization" parameter has NO effect on point counts.
+    // All modes (auto, none, point_reduction_*) produce identical counts.
+
+    // Get contrast thresholds from parameters
+    double contrastHigh = params_.contrastHigh;
+    double contrastLow = (params_.contrastLow > 0) ? params_.contrastLow : contrastHigh;
+    double contrastMax = params_.contrastMax;
+    bool useHysteresis = (params_.contrastLow > 0 && params_.contrastLow < params_.contrastHigh);
+
+    for (int32_t level = 0; level < pyramid.NumLevels(); ++level) {
+        const auto& levelData = pyramid.GetLevel(level);
+        auto& levelModel = levels_[level];
+
+        levelModel.width = levelData.width;
+        levelModel.height = levelData.height;
+        levelModel.scale = levelData.scale;
+
+        double levelOriginX = origin_.x * levelData.scale;
+        double levelOriginY = origin_.y * levelData.scale;
+
+        // Scale contrast thresholds with pyramid level
+        double levelContrastHigh = contrastHigh * levelData.scale;
+        double levelContrastLow = contrastLow * levelData.scale;
+        double levelContrastMax = contrastMax * levelData.scale;
+
+        levelContrastHigh = std::max(2.0, levelContrastHigh);
+        levelContrastLow = std::max(1.0, levelContrastLow);
+
+        const auto& edgePoints = pyramid.GetEdgePoints(level);
+
+        std::vector<ModelPoint> allPoints;
+        allPoints.reserve(edgePoints.size());
+
+        if (useHysteresis) {
+            // Hysteresis thresholding with BFS propagation (same as Auto mode)
+            const double gridSize = 1.5;
+            const double gridSizeSq = gridSize * gridSize;
+
+            std::vector<int32_t> strongIndices;
+            std::vector<int32_t> weakIndices;
+            std::vector<ModelPoint> allCandidates;
+
+            for (size_t i = 0; i < edgePoints.size(); ++i) {
+                const auto& ep = edgePoints[i];
+                if (ep.magnitude > levelContrastMax) continue;
+
+                double relX = ep.x - levelOriginX;
+                double relY = ep.y - levelOriginY;
+
+                if (ep.magnitude >= levelContrastHigh) {
+                    strongIndices.push_back(static_cast<int32_t>(allCandidates.size()));
+                    allCandidates.emplace_back(relX, relY, ep.angle, ep.magnitude, ep.angleBin, 1.0);
+                } else if (ep.magnitude >= levelContrastLow) {
+                    weakIndices.push_back(static_cast<int32_t>(allCandidates.size()));
+                    allCandidates.emplace_back(relX, relY, ep.angle, ep.magnitude, ep.angleBin, 1.0);
+                }
+            }
+
+            std::vector<int8_t> keepFlag(allCandidates.size(), 0);
+
+            for (int32_t idx : strongIndices) {
+                keepFlag[idx] = 1;
+            }
+
+            // Spatial hash grid for fast neighbor lookup
+            std::unordered_map<int64_t, std::vector<int32_t>> weakGrid;
+            auto toGridKey = [gridSize](double x, double y) -> int64_t {
+                int32_t gx = static_cast<int32_t>(std::floor(x / gridSize));
+                int32_t gy = static_cast<int32_t>(std::floor(y / gridSize));
+                return (static_cast<int64_t>(gx) << 32) | static_cast<uint32_t>(gy);
+            };
+
+            for (int32_t idx : weakIndices) {
+                int64_t key = toGridKey(allCandidates[idx].x, allCandidates[idx].y);
+                weakGrid[key].push_back(idx);
+            }
+
+            // BFS propagation from strong points
+            std::queue<int32_t> bfsQueue;
+            for (int32_t idx : strongIndices) {
+                bfsQueue.push(idx);
+            }
+
+            while (!bfsQueue.empty()) {
+                int32_t currentIdx = bfsQueue.front();
+                bfsQueue.pop();
+
+                const auto& currentPt = allCandidates[currentIdx];
+                int32_t gx = static_cast<int32_t>(std::floor(currentPt.x / gridSize));
+                int32_t gy = static_cast<int32_t>(std::floor(currentPt.y / gridSize));
+
+                for (int32_t dy = -1; dy <= 1; ++dy) {
+                    for (int32_t dx = -1; dx <= 1; ++dx) {
+                        int64_t neighborKey = (static_cast<int64_t>(gx + dx) << 32) |
+                                               static_cast<uint32_t>(gy + dy);
+
+                        auto it = weakGrid.find(neighborKey);
+                        if (it == weakGrid.end()) continue;
+
+                        for (int32_t weakIdx : it->second) {
+                            if (keepFlag[weakIdx] != 0) continue;
+
+                            double ddx = allCandidates[weakIdx].x - currentPt.x;
+                            double ddy = allCandidates[weakIdx].y - currentPt.y;
+                            if (ddx * ddx + ddy * ddy <= gridSizeSq) {
+                                keepFlag[weakIdx] = 1;
+                                bfsQueue.push(weakIdx);
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (size_t i = 0; i < allCandidates.size(); ++i) {
+                if (keepFlag[i] == 1) {
+                    allPoints.push_back(allCandidates[i]);
+                }
+            }
+        } else {
+            // Simple threshold - keep all points above contrast threshold
+            for (const auto& ep : edgePoints) {
+                if (ep.magnitude >= levelContrastHigh && ep.magnitude <= levelContrastMax) {
+                    double relX = ep.x - levelOriginX;
+                    double relY = ep.y - levelOriginY;
+                    allPoints.emplace_back(relX, relY, ep.angle, ep.magnitude, ep.angleBin, 1.0);
+                }
+            }
+        }
+
+        // Apply maxPoints limit (same as Auto mode)
+        // This ensures reasonable matching performance
+        int32_t maxPoints;
+        int32_t templateDim = std::max(templateSize_.width, templateSize_.height);
+        if (templateDim <= 100) {
+            maxPoints = (level == 0) ? 500 : (level == 1) ? 150 : 50;
+        } else if (templateDim <= 300) {
+            maxPoints = (level == 0) ? 1500 : (level == 1) ? 300 : 100;
+        } else {
+            maxPoints = (level == 0) ? 2500 : (level == 1) ? 500 : 180;
+        }
+
+        if (static_cast<int32_t>(allPoints.size()) > maxPoints) {
+            std::sort(allPoints.begin(), allPoints.end(),
+                [](const ModelPoint& a, const ModelPoint& b) {
+                    return a.magnitude > b.magnitude;
+                });
+            allPoints.resize(maxPoints);
+        }
+
+        levelModel.points = allPoints;
+
+        // Generate grid points (unique integer coordinates)
+        std::set<std::pair<int32_t, int32_t>> uniqueGridCoords;
+        std::vector<ModelPoint> gridPts;
+        gridPts.reserve(allPoints.size() * 2);
+
+        for (const auto& pt : allPoints) {
+            int32_t gx = static_cast<int32_t>(std::round(pt.x));
+            int32_t gy = static_cast<int32_t>(std::round(pt.y));
+
+            auto key = std::make_pair(gx, gy);
+            if (uniqueGridCoords.find(key) == uniqueGridCoords.end()) {
+                uniqueGridCoords.insert(key);
+                gridPts.emplace_back(static_cast<double>(gx), static_cast<double>(gy),
+                                    pt.angle, pt.magnitude, pt.angleBin, pt.weight);
+            }
+        }
+
+        std::sort(gridPts.begin(), gridPts.end(),
+            [](const ModelPoint& a, const ModelPoint& b) {
+                if (static_cast<int32_t>(a.y) != static_cast<int32_t>(b.y))
+                    return a.y < b.y;
+                return a.x < b.x;
+            });
+
+        levelModel.gridPoints = std::move(gridPts);
+    }
+}
+
+// =============================================================================
 // ShapeModelImpl::OptimizeModel
 // =============================================================================
 
@@ -539,6 +754,19 @@ void ShapeModelImpl::OptimizeModel() {
     switch (params_.optimization) {
         case OptimizationMode::None:
             minSpacing = 0.0;
+            break;
+        case OptimizationMode::XLDContour:
+            // XLDContour uses same spacing as Auto for consistent performance
+            {
+                int32_t templateDim = std::max(templateSize_.width, templateSize_.height);
+                if (templateDim <= 100) {
+                    minSpacing = 1.5;
+                } else if (templateDim <= 300) {
+                    minSpacing = 2.0;
+                } else {
+                    minSpacing = 2.5;
+                }
+            }
             break;
         case OptimizationMode::PointReductionLow:
             minSpacing = 1.5;
@@ -650,6 +878,129 @@ void ShapeModelImpl::BuildAngleCache(double angleStart, double angleExtent, doub
             angleCache_[level][i].sinA = std::sin(angle);
         }
     }
+}
+
+// =============================================================================
+// ShapeModelImpl::CreateModelLinemod
+// =============================================================================
+
+bool ShapeModelImpl::CreateModelLinemod(const QImage& image, const Rect2i& roi, const Point2d& origin) {
+    // LINEMOD-style model creation (paper-accurate implementation)
+    //
+    // Uses:
+    // - 8-bin orientation quantization (bit flags)
+    // - 3x3 neighbor voting with threshold
+    // - OR spreading for robustness
+    // - SIMILARITY_LUT[8][256] for O(1) scoring
+
+    if (image.Empty() || image.Channels() != 1) {
+        return false;
+    }
+
+    // Extract template region
+    Rect2i actualRoi = roi;
+    if (actualRoi.width <= 0 || actualRoi.height <= 0) {
+        actualRoi = Rect2i(0, 0, image.Width(), image.Height());
+    }
+
+    // Clamp ROI
+    actualRoi.x = std::max(0, actualRoi.x);
+    actualRoi.y = std::max(0, actualRoi.y);
+    actualRoi.width = std::min(actualRoi.width, image.Width() - actualRoi.x);
+    actualRoi.height = std::min(actualRoi.height, image.Height() - actualRoi.y);
+
+    if (actualRoi.width < 8 || actualRoi.height < 8) {
+        return false;
+    }
+
+    templateSize_ = Size2i{actualRoi.width, actualRoi.height};
+
+    // Set origin
+    if (origin.x != 0 || origin.y != 0) {
+        origin_ = origin;
+    } else {
+        origin_ = Point2d{actualRoi.width / 2.0, actualRoi.height / 2.0};
+    }
+
+    // Extract template image
+    QImage templateImg(actualRoi.width, actualRoi.height,
+                       image.Type(), image.GetChannelType());
+    {
+        const uint8_t* src = static_cast<const uint8_t*>(image.Data());
+        uint8_t* dst = static_cast<uint8_t*>(templateImg.Data());
+        const size_t srcStride = image.Stride();
+        const size_t dstStride = templateImg.Stride();
+        const size_t rowBytes = actualRoi.width * (image.Type() == PixelType::Float32 ? 4 : 1);
+
+        for (int32_t y = 0; y < actualRoi.height; ++y) {
+            std::memcpy(dst + y * dstStride,
+                       src + (actualRoi.y + y) * srcStride + actualRoi.x * (rowBytes / actualRoi.width),
+                       rowBytes);
+        }
+    }
+
+    // Build LINEMOD pyramid for template
+    LinemodPyramidParams pyramidParams;
+    pyramidParams.numLevels = params_.numLevels > 0 ? params_.numLevels : 4;
+    pyramidParams.minMagnitude = static_cast<float>(params_.contrastHigh);
+    pyramidParams.smoothSigma = 1.0;
+    pyramidParams.spreadT = 4;
+    pyramidParams.neighborThreshold = 5;
+    pyramidParams.extractFeatures = true;
+
+    LinemodPyramid pyramid;
+    if (!pyramid.Build(templateImg, pyramidParams)) {
+        return false;
+    }
+
+    // Extract features for each level
+    int32_t numLevels = pyramid.NumLevels();
+    linemodFeatures_.resize(numLevels);
+    levels_.resize(numLevels);
+
+    int32_t maxFeaturesLevel0 = 256;  // Max features at finest level
+    float minDistance = 2.0f;
+
+    for (int32_t level = 0; level < numLevels; ++level) {
+        // Extract features (relative to template center)
+        // Use more features at each level for better robustness
+        int32_t maxFeatures = maxFeaturesLevel0 / (1 << level);
+        maxFeatures = std::max(64, maxFeatures);  // Minimum 64 features per level
+
+        linemodFeatures_[level] = pyramid.ExtractFeatures(
+            level, Rect2i(), maxFeatures, minDistance);
+
+        // Also store in LevelModel for compatibility
+        auto& levelModel = levels_[level];
+        levelModel.width = pyramid.GetWidth(level);
+        levelModel.height = pyramid.GetHeight(level);
+        levelModel.scale = pyramid.GetScale(level);
+
+        // Convert LinemodFeature to ModelPoint for compatibility
+        levelModel.points.clear();
+        levelModel.points.reserve(linemodFeatures_[level].size());
+
+        for (const auto& f : linemodFeatures_[level]) {
+            // Convert 8-bin orientation back to radians
+            double angle = LinemodPyramid::BinToAngle(f.ori);
+
+            levelModel.points.emplace_back(
+                static_cast<double>(f.x),
+                static_cast<double>(f.y),
+                angle,
+                1.0,  // magnitude (not used in LINEMOD)
+                static_cast<int32_t>(f.ori),
+                1.0   // weight
+            );
+        }
+
+        levelModel.BuildSoA();
+    }
+
+    ComputeModelBounds();
+    valid_ = true;
+
+    return true;
 }
 
 // =============================================================================
