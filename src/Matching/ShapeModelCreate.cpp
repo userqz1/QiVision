@@ -430,15 +430,32 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const Rect2i& roi, const P
     // Build angle pyramid for template
     AnglePyramidParams pyramidParams;
 
+    // Compute template dimensions
+    int32_t templateWidth = roi.width > 0 ? roi.width : image.Width();
+    int32_t templateHeight = roi.height > 0 ? roi.height : image.Height();
+    int32_t minTemplateDim = std::min(templateWidth, templateHeight);
+
+    // Compute maximum valid pyramid levels based on template size
+    // Rule: minimum 12 pixels at coarsest level for reliable matching
+    // (tested: 15px works, 8px too sparse)
+    constexpr int32_t MIN_LEVEL_SIZE = 12;
+    int32_t maxValidLevels = 1;
+    int32_t dim = minTemplateDim;
+    while (dim >= MIN_LEVEL_SIZE * 2 && maxValidLevels < 6) {
+        dim /= 2;
+        maxValidLevels++;
+    }
+
     // Auto pyramid levels if not specified (Halcon: 'auto')
     if (params_.numLevels <= 0) {
-        // Estimate based on template size
-        int32_t templateSize = std::max(roi.width > 0 ? roi.width : image.Width(),
-                                        roi.height > 0 ? roi.height : image.Height());
-        pyramidParams.numLevels = EstimateOptimalLevels(image.Width(), image.Height(),
-                                                         templateSize, templateSize);
+        pyramidParams.numLevels = maxValidLevels;
     } else {
-        pyramidParams.numLevels = params_.numLevels;
+        // User specified levels - clamp to valid range
+        pyramidParams.numLevels = std::min(params_.numLevels, maxValidLevels);
+        if (params_.numLevels > maxValidLevels) {
+            // Note: numLevels was clamped from user value to maxValidLevels
+            // This happens when template is too small for requested levels
+        }
     }
     pyramidParams.smoothSigma = 0.5;
 
@@ -645,6 +662,15 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const Rect2i& roi, const P
     } else {
         BuildCosLUT(64);
     }
+
+    // Build pregenerated search angle cache (Halcon pregeneration strategy)
+    // This precomputes cos/sin and rotated bounds for all search angles,
+    // avoiding expensive computation during search
+    double angleExtent = params_.angleExtent;
+    if (angleExtent <= 0) {
+        angleExtent = 2.0 * PI;  // Full rotation range
+    }
+    BuildSearchAngleCache(params_.angleStart, angleExtent, params_.angleStep);
 
     if (timingParams_.enableTiming) {
         createTiming_.buildSoAMs = elapsedMs(tStep);
@@ -980,6 +1006,74 @@ void ShapeModelImpl::BuildAngleCache(double angleStart, double angleExtent, doub
 }
 
 // =============================================================================
+// ShapeModelImpl::BuildSearchAngleCache (Halcon pregeneration strategy)
+// =============================================================================
+
+void ShapeModelImpl::BuildSearchAngleCache(double angleStart, double angleExtent, double angleStep) {
+    searchAngleCache_.clear();
+
+    // Store search parameters
+    searchAngleStart_ = angleStart;
+    searchAngleExtent_ = angleExtent;
+
+    // Auto-compute angle step if not specified (Halcon: AngleStep = atan(1/R_max))
+    if (angleStep <= 0) {
+        int32_t modelSize = std::max(templateSize_.width, templateSize_.height);
+        angleStep = EstimateAngleStep(modelSize);
+    }
+    searchAngleStep_ = angleStep;
+
+    // Calculate number of angles
+    int32_t numAngles = static_cast<int32_t>(std::ceil(angleExtent / angleStep)) + 1;
+    searchAngleCache_.resize(numAngles);
+
+    const size_t numLevels = levels_.size();
+
+    // Precompute all angle data
+    for (int32_t i = 0; i < numAngles; ++i) {
+        SearchAngleData& data = searchAngleCache_[i];
+        data.angle = angleStart + i * angleStep;
+        data.cosA = static_cast<float>(std::cos(data.angle));
+        data.sinA = static_cast<float>(std::sin(data.angle));
+
+        // Precompute bounds for each pyramid level
+        data.levelBounds.resize(numLevels);
+
+        for (size_t level = 0; level < numLevels; ++level) {
+            const auto& levelModel = levels_[level];
+            if (levelModel.points.empty()) {
+                data.levelBounds[level] = {0, 0, 0, 0};
+                continue;
+            }
+
+            // Compute rotated bounds for this level
+            double minX = std::numeric_limits<double>::max();
+            double maxX = std::numeric_limits<double>::lowest();
+            double minY = std::numeric_limits<double>::max();
+            double maxY = std::numeric_limits<double>::lowest();
+
+            const double cosA = data.cosA;
+            const double sinA = data.sinA;
+
+            for (const auto& pt : levelModel.points) {
+                double rx = cosA * pt.x - sinA * pt.y;
+                double ry = sinA * pt.x + cosA * pt.y;
+                minX = std::min(minX, rx);
+                maxX = std::max(maxX, rx);
+                minY = std::min(minY, ry);
+                maxY = std::max(maxY, ry);
+            }
+
+            // Store as integer bounds (floor/ceil for safety margin)
+            data.levelBounds[level].minX = static_cast<int32_t>(std::floor(minX));
+            data.levelBounds[level].maxX = static_cast<int32_t>(std::ceil(maxX));
+            data.levelBounds[level].minY = static_cast<int32_t>(std::floor(minY));
+            data.levelBounds[level].maxY = static_cast<int32_t>(std::ceil(maxY));
+        }
+    }
+}
+
+// =============================================================================
 // ShapeModelImpl::CreateModelLinemod
 // =============================================================================
 
@@ -1039,19 +1133,23 @@ bool ShapeModelImpl::CreateModelLinemod(const QImage& image, const Rect2i& roi, 
     }
 
     // Build LINEMOD pyramid for template
-    // Compute optimal levels based on template size (not fixed!)
-    // Rule: top level template should be ~15-30 pixels in smallest dimension
+    // Compute optimal levels based on template size
+    // Rule: minimum 16 pixels at coarsest level for reliable matching
     LinemodPyramidParams pyramidParams;
+    constexpr int32_t MIN_LEVEL_SIZE = 16;
+    int32_t minDim = std::min(actualRoi.width, actualRoi.height);
+    int32_t maxValidLevels = 1;
+    int32_t dim = minDim;
+    while (dim >= MIN_LEVEL_SIZE * 2 && maxValidLevels < 6) {
+        dim /= 2;
+        maxValidLevels++;
+    }
+
     if (params_.numLevels > 0) {
-        pyramidParams.numLevels = params_.numLevels;
+        // User specified levels - clamp to valid range
+        pyramidParams.numLevels = std::min(params_.numLevels, maxValidLevels);
     } else {
-        int32_t minDim = std::min(actualRoi.width, actualRoi.height);
-        int32_t levels = 1;
-        while (minDim > 30 && levels < 6) {  // Stop when top level ~30px
-            minDim /= 2;
-            levels++;
-        }
-        pyramidParams.numLevels = levels;
+        pyramidParams.numLevels = maxValidLevels;
     }
     pyramidParams.minMagnitude = static_cast<float>(params_.contrastHigh);
     pyramidParams.smoothSigma = 1.0;

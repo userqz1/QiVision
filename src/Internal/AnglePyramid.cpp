@@ -995,7 +995,7 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
     PyramidParams pyramidParams;
     pyramidParams.numLevels = impl_->params_.numLevels;
     pyramidParams.sigma = std::max(1.0, params.smoothSigma);
-    pyramidParams.minDimension = 16;
+    pyramidParams.minDimension = 8;  // Minimum 8 pixels at coarsest level
 
     // Extract float data from the float QImage (handle stride correctly)
     auto tCopy = std::chrono::high_resolution_clock::now();

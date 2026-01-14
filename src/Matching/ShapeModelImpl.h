@@ -128,6 +128,30 @@ struct RotatedPoint {
 };
 
 /**
+ * @brief Precomputed search angle data with rotated bounds per level
+ *
+ * Halcon pregeneration strategy: Pre-compute all rotation-dependent data
+ * at model creation time to avoid expensive computation during search.
+ *
+ * Key optimizations:
+ * - cos/sin computed once per angle (not per search position)
+ * - Rotated bounds computed once per angle per level (not per search position)
+ * - Search region calculation becomes O(1) lookup
+ */
+struct SearchAngleData {
+    double angle = 0.0;           ///< Rotation angle (radians)
+    float cosA = 1.0f;            ///< cos(angle)
+    float sinA = 0.0f;            ///< sin(angle)
+
+    /// Precomputed rotated model bounds for each pyramid level
+    struct LevelBounds {
+        int32_t minX = 0, maxX = 0;  ///< Integer bounds for fast region computation
+        int32_t minY = 0, maxY = 0;
+    };
+    std::vector<LevelBounds> levelBounds;  ///< Bounds[level]
+};
+
+/**
  * @brief Fast cosine lookup table for angle difference computation
  * Optimized with O(1) angle normalization instead of while loops
  */
@@ -186,6 +210,12 @@ public:
     // LINEMOD mode data
     std::vector<std::vector<LinemodFeature>> linemodFeatures_;  ///< Features per level
 
+    // Pregenerated search data (Halcon pregeneration strategy)
+    std::vector<SearchAngleData> searchAngleCache_;  ///< Precomputed angle data for search
+    double searchAngleStart_ = 0.0;                  ///< Search angle range start
+    double searchAngleExtent_ = 2.0 * PI;            ///< Search angle range extent
+    double searchAngleStep_ = 0.0;                   ///< Search angle step (0 = auto)
+
     // ==========================================================================
     // Model Creation (ShapeModelCreate.cpp)
     // ==========================================================================
@@ -196,6 +226,7 @@ public:
     void OptimizeModel();
     void BuildCosLUT(int32_t numBins);
     void BuildAngleCache(double angleStart, double angleExtent, double angleStep);
+    void BuildSearchAngleCache(double angleStart, double angleExtent, double angleStep);
     void ComputeModelBounds();
     static void ComputeRotatedBounds(const std::vector<ModelPoint>& points, double angle,
                                      double& minX, double& maxX, double& minY, double& maxY);
@@ -250,6 +281,11 @@ public:
                                    double x, double y, float cosR, float sinR, double scale,
                                    double greediness, double* outCoverage = nullptr,
                                    bool useGridPoints = false) const;
+
+    /// Fast score using nearest-neighbor interpolation (4x less memory access)
+    double ComputeScoreNearestNeighbor(const AnglePyramid& pyramid, int32_t level,
+                                        int32_t x, int32_t y, float cosR, float sinR,
+                                        double greediness, double* outCoverage = nullptr) const;
 
     double ComputeScoreQuantized(const AnglePyramid& pyramid, int32_t level,
                                   double x, double y, float cosR, float sinR, int32_t rotationBin,

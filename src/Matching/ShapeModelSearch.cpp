@@ -46,89 +46,263 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
         fineAngleStep = EstimateAngleStep(std::max(templateSize_.width, templateSize_.height));
     }
 
-    // COARSE angle step for top-level search: 6° = ~0.1 radians
-    constexpr double COARSE_ANGLE_STEP = 0.1;
-    double coarseAngleStep = std::max(fineAngleStep, COARSE_ANGLE_STEP);
+    // Coarse angle step for top-level search
+    // Rule: Pyramid refinement searches ±6° at first level, halving each level down.
+    // So coarse step can be up to 2*6°=12° to ensure overlap with refinement.
+    // We use 10° as a safe default, but scale down for small models.
+    //
+    // For small models: fine step might be ~0.5° (model radius ~100px)
+    //   -> coarse step = max(fine * 4, 10°) = 10° (~36 angles for 360°)
+    // For large models: fine step might be ~0.3° (model radius ~200px)
+    //   -> coarse step = max(fine * 4, 10°) = 10°
+    //
+    // The factor of 4 ensures coarse step is at least 4x fine step for efficiency,
+    // while the 10° minimum prevents too many angles in coarse search.
+    constexpr double PYRAMID_REFINE_ANGLE_RANGE = 6.0 * PI / 180.0;  // ±6° at first refine level
+
+    // Coarse step can be larger than 2*6°=12° because:
+    // 1. Refinement has some tolerance for nearby angles
+    // 2. Score function still gives reasonable scores within ±10° of true angle
+    // Tested: 15° works reliably, 20° works for most cases, 25° fails some
+    constexpr double COARSE_ANGLE_STEP_BASE = 15.0 * PI / 180.0;  // ~15°
+
+    // Start with model-based estimate, but ensure minimum efficiency
+    double coarseAngleStep = std::max(fineAngleStep * 4.0, COARSE_ANGLE_STEP_BASE);
+
+    // Cap at 18° (aggressive but tested safe for most cases)
+    constexpr double MAX_COARSE_ANGLE_STEP = 18.0 * PI / 180.0;  // ~18°
+    coarseAngleStep = std::min(coarseAngleStep, MAX_COARSE_ANGLE_STEP);
 
     // Coarse search at top level
-    const auto& topLevel = levels_[startLevel];
     int32_t targetWidth = targetPyramid.GetWidth(startLevel);
     int32_t targetHeight = targetPyramid.GetHeight(startLevel);
 
     // Search grid at top level
     int32_t stepSize = 2;
 
-    // Build COARSE angle list for parallel processing
-    std::vector<double> angles;
-    for (double angle = params.angleStart;
-         angle <= params.angleStart + params.angleExtent;
-         angle += coarseAngleStep) {
-        angles.push_back(angle);
-    }
+    // =========================================================================
+    // ResponseMap-based coarse search (O(1) lookup instead of bilinear interp)
+    // NOTE: Disabled - ResponseMap build overhead (~400ms for large images)
+    //       exceeds the savings from O(1) lookup during search.
+    // =========================================================================
+    ResponseMap responseMap;
+    bool useResponseMap = false;  // Disabled: build overhead too high
 
-    // OpenMP parallelization over angles
-    #pragma omp parallel
-    {
-        std::vector<MatchResult> localCandidates;
+    if (useResponseMap) {
+        // Prepare rotated models for all search angles
+        const auto& topLevelModel = levels_[startLevel];
+        auto rotatedModels = ResponseMap::PrepareAllRotations(
+            topLevelModel.points, params.angleStart, params.angleExtent, coarseAngleStep);
 
-        #pragma omp for schedule(dynamic)
-        for (size_t ai = 0; ai < angles.size(); ++ai) {
-            const double angle = angles[ai];
+        // Coarse threshold for ResponseMap (not too low to avoid too many candidates)
+        const double coarseThreshold = params.minScore * 0.6;
 
-            // Precompute sin/cos once per angle
-            const float cosR = static_cast<float>(std::cos(angle));
-            const float sinR = static_cast<float>(std::sin(angle));
+        #pragma omp parallel
+        {
+            std::vector<MatchResult> localCandidates;
 
-            // Compute rotation bin for quantized scoring
-            double normAngle = angle - std::floor(angle / (2.0 * PI)) * (2.0 * PI);
-            int32_t rotationBin = (numAngleBins_ > 0) ?
-                static_cast<int32_t>(normAngle * numAngleBins_ / (2.0 * PI)) % numAngleBins_ : 0;
-            (void)rotationBin;  // Reserved for future use
+            #pragma omp for schedule(dynamic)
+            for (size_t angleIdx = 0; angleIdx < rotatedModels.size(); ++angleIdx) {
+                const auto& rotatedModel = rotatedModels[angleIdx];
 
-            // Compute rotated model bounds
-            double rMinX, rMaxX, rMinY, rMaxY;
-            ComputeRotatedBounds(topLevel.points, angle, rMinX, rMaxX, rMinY, rMaxY);
+                // Use precomputed bounds from rotated model
+                int32_t searchXMin = std::max(0, -static_cast<int32_t>(rotatedModel.minX));
+                int32_t searchXMax = std::min(targetWidth - 1,
+                                               targetWidth - 1 - static_cast<int32_t>(rotatedModel.maxX));
+                int32_t searchYMin = std::max(0, -static_cast<int32_t>(rotatedModel.minY));
+                int32_t searchYMax = std::min(targetHeight - 1,
+                                               targetHeight - 1 - static_cast<int32_t>(rotatedModel.maxY));
 
-            // Valid search region
-            int32_t searchXMin = static_cast<int32_t>(std::ceil(-rMinX));
-            int32_t searchXMax = static_cast<int32_t>(std::floor(targetWidth - 1 - rMaxX));
-            int32_t searchYMin = static_cast<int32_t>(std::ceil(-rMinY));
-            int32_t searchYMax = static_cast<int32_t>(std::floor(targetHeight - 1 - rMaxY));
+                if (searchXMin > searchXMax || searchYMin > searchYMax) {
+                    continue;
+                }
 
-            searchXMin = std::max(0, searchXMin);
-            searchYMin = std::max(0, searchYMin);
-            searchXMax = std::min(targetWidth - 1, searchXMax);
-            searchYMax = std::min(targetHeight - 1, searchYMax);
+                // Fast coarse search using ResponseMap (O(1) per point)
+                for (int32_t y = searchYMin; y <= searchYMax; y += stepSize) {
+                    for (int32_t x = searchXMin; x <= searchXMax; x += stepSize) {
+                        double coverage = 0.0;
+                        double score = responseMap.ComputeScore(rotatedModel, startLevel,
+                                                                 x, y, &coverage);
 
-            if (searchXMin > searchXMax || searchYMin > searchYMax) {
-                continue;
-            }
-
-            for (int32_t y = searchYMin; y <= searchYMax; y += stepSize) {
-                for (int32_t x = searchXMin; x <= searchXMax; x += stepSize) {
-                    double coverage = 0.0;
-                    double score = ComputeScoreWithSinCos(targetPyramid, startLevel,
-                                                           x, y, cosR, sinR, 1.0, params.greediness, &coverage,
-                                                           false);
-
-                    if (score >= params.minScore * 0.7 && coverage >= 0.7) {
-                        MatchResult result;
-                        result.x = x;
-                        result.y = y;
-                        result.angle = angle;
-                        result.score = score;
-                        result.pyramidLevel = startLevel;
-                        localCandidates.push_back(result);
+                        // Lower threshold for coarse filtering
+                        if (score >= coarseThreshold && coverage >= 0.5) {
+                            MatchResult result;
+                            result.x = x;
+                            result.y = y;
+                            result.angle = rotatedModel.angle;
+                            result.score = score;
+                            result.pyramidLevel = startLevel;
+                            localCandidates.push_back(result);
+                        }
                     }
                 }
             }
+
+            #pragma omp critical
+            {
+                candidates.insert(candidates.end(), localCandidates.begin(), localCandidates.end());
+            }
         }
 
-        #pragma omp critical
+        // Sort and limit candidates before precise verification
+        std::sort(candidates.begin(), candidates.end());
+        if (candidates.size() > 200) {
+            candidates.resize(200);
+        }
+
+        // Skip precise verification at coarse level - let pyramid refinement handle it
+        // Just keep candidates that passed ResponseMap threshold
+
+    } else {
+    // Fallback: original bilinear interpolation method
+
+    // Use pregenerated angle cache if available (Halcon pregeneration strategy)
+    // This avoids computing cos/sin and bounds for each angle during search
+    const bool usePregenCache = !searchAngleCache_.empty() &&
+                                 static_cast<size_t>(startLevel) < levels_.size() &&
+                                 searchAngleStep_ > 0;
+
+    if (usePregenCache) {
+        // Calculate coarse angle stride (skip angles for faster coarse search)
+        // e.g., if cache has 755 angles and we want ~60 for coarse search, stride = ~12
+        const int32_t coarseStride = std::max(1, static_cast<int32_t>(
+            coarseAngleStep / searchAngleStep_));
+
+        // Build angle index list for search range
+        std::vector<size_t> angleIndices;
+        for (size_t ai = 0; ai < searchAngleCache_.size(); ai += coarseStride) {
+            const double angle = searchAngleCache_[ai].angle;
+            // Filter by search params range
+            if (angle >= params.angleStart - 0.001 &&
+                angle <= params.angleStart + params.angleExtent + 0.001) {
+                angleIndices.push_back(ai);
+            }
+        }
+
+        // OpenMP parallelization over angle indices
+        #pragma omp parallel
         {
-            candidates.insert(candidates.end(), localCandidates.begin(), localCandidates.end());
+            std::vector<MatchResult> localCandidates;
+
+            #pragma omp for schedule(dynamic)
+            for (size_t ii = 0; ii < angleIndices.size(); ++ii) {
+                const size_t ai = angleIndices[ii];
+                const SearchAngleData& angleData = searchAngleCache_[ai];
+
+                // Use precomputed cos/sin (no std::cos/sin call!)
+                const float cosR = angleData.cosA;
+                const float sinR = angleData.sinA;
+                const double angle = angleData.angle;
+
+                // Use precomputed rotated bounds (no ComputeRotatedBounds call!)
+                const auto& bounds = angleData.levelBounds[startLevel];
+
+                // Valid search region (direct lookup instead of computation)
+                int32_t searchXMin = std::max(0, -bounds.minX);
+                int32_t searchXMax = std::min(targetWidth - 1, targetWidth - 1 - bounds.maxX);
+                int32_t searchYMin = std::max(0, -bounds.minY);
+                int32_t searchYMax = std::min(targetHeight - 1, targetHeight - 1 - bounds.maxY);
+
+                if (searchXMin > searchXMax || searchYMin > searchYMax) {
+                    continue;
+                }
+
+                for (int32_t y = searchYMin; y <= searchYMax; y += stepSize) {
+                    for (int32_t x = searchXMin; x <= searchXMax; x += stepSize) {
+                        double coverage = 0.0;
+                        // Bilinear interpolation for accurate scoring
+                        double score = ComputeScoreWithSinCos(targetPyramid, startLevel,
+                                                               x, y, cosR, sinR, 1.0, params.greediness, &coverage,
+                                                               false);
+
+                        if (score >= params.minScore * 0.7 && coverage >= 0.7) {
+                            MatchResult result;
+                            result.x = x;
+                            result.y = y;
+                            result.angle = angle;
+                            result.score = score;
+                            result.pyramidLevel = startLevel;
+                            localCandidates.push_back(result);
+                        }
+                    }
+                }
+            }
+
+            #pragma omp critical
+            {
+                candidates.insert(candidates.end(), localCandidates.begin(), localCandidates.end());
+            }
+        }
+    } else {
+        // Fallback: Build angle list and compute bounds at runtime
+        std::vector<double> angles;
+        for (double angle = params.angleStart;
+             angle <= params.angleStart + params.angleExtent;
+             angle += coarseAngleStep) {
+            angles.push_back(angle);
+        }
+
+        const auto& topLevel = levels_[startLevel];
+
+        #pragma omp parallel
+        {
+            std::vector<MatchResult> localCandidates;
+
+            #pragma omp for schedule(dynamic)
+            for (size_t ai = 0; ai < angles.size(); ++ai) {
+                const double angle = angles[ai];
+
+                // Compute sin/cos at runtime
+                const float cosR = static_cast<float>(std::cos(angle));
+                const float sinR = static_cast<float>(std::sin(angle));
+
+                // Compute rotated model bounds at runtime
+                double rMinX, rMaxX, rMinY, rMaxY;
+                ComputeRotatedBounds(topLevel.points, angle, rMinX, rMaxX, rMinY, rMaxY);
+
+                // Valid search region
+                int32_t searchXMin = static_cast<int32_t>(std::ceil(-rMinX));
+                int32_t searchXMax = static_cast<int32_t>(std::floor(targetWidth - 1 - rMaxX));
+                int32_t searchYMin = static_cast<int32_t>(std::ceil(-rMinY));
+                int32_t searchYMax = static_cast<int32_t>(std::floor(targetHeight - 1 - rMaxY));
+
+                searchXMin = std::max(0, searchXMin);
+                searchYMin = std::max(0, searchYMin);
+                searchXMax = std::min(targetWidth - 1, searchXMax);
+                searchYMax = std::min(targetHeight - 1, searchYMax);
+
+                if (searchXMin > searchXMax || searchYMin > searchYMax) {
+                    continue;
+                }
+
+                for (int32_t y = searchYMin; y <= searchYMax; y += stepSize) {
+                    for (int32_t x = searchXMin; x <= searchXMax; x += stepSize) {
+                        double coverage = 0.0;
+                        // Bilinear interpolation for accurate scoring
+                        double score = ComputeScoreWithSinCos(targetPyramid, startLevel,
+                                                               x, y, cosR, sinR, 1.0, params.greediness, &coverage,
+                                                               false);
+
+                        if (score >= params.minScore * 0.7 && coverage >= 0.7) {
+                            MatchResult result;
+                            result.x = x;
+                            result.y = y;
+                            result.angle = angle;
+                            result.score = score;
+                            result.pyramidLevel = startLevel;
+                            localCandidates.push_back(result);
+                        }
+                    }
+                }
+            }
+
+            #pragma omp critical
+            {
+                candidates.insert(candidates.end(), localCandidates.begin(), localCandidates.end());
+            }
         }
     }
+    } // end else (fallback to bilinear)
 
     // Sort candidates by score
     std::sort(candidates.begin(), candidates.end());
@@ -194,7 +368,10 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
     }
 
     // Apply non-maximum suppression
-    results = NonMaxSuppression(results, 10.0);
+    // Use half of model's smaller dimension as minimum distance
+    double nmsDistance = std::min(templateSize_.width, templateSize_.height) * 0.5;
+    nmsDistance = std::max(nmsDistance, 10.0);  // At least 10 pixels
+    results = NonMaxSuppression(results, nmsDistance);
 
     // Limit results
     if (params.maxMatches > 0 && static_cast<int32_t>(results.size()) > params.maxMatches) {
@@ -391,7 +568,10 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramidWithResponseMap(
         }
     }
 
-    results = NonMaxSuppression(results, 10.0);
+    // Use half of model's smaller dimension as minimum distance
+    double nmsDistance = std::min(templateSize_.width, templateSize_.height) * 0.5;
+    nmsDistance = std::max(nmsDistance, 10.0);  // At least 10 pixels
+    results = NonMaxSuppression(results, nmsDistance);
 
     if (params.maxMatches > 0 && static_cast<int32_t>(results.size()) > params.maxMatches) {
         results.resize(params.maxMatches);
@@ -431,7 +611,14 @@ std::vector<MatchResult> ShapeModelImpl::SearchLevel(
     int32_t targetWidth = targetPyramid.GetWidth(level);
     int32_t targetHeight = targetPyramid.GetHeight(level);
 
-    for (const auto& candidate : candidates) {
+    // Parallel refinement over candidates (each candidate is independent)
+    const int32_t numCandidates = static_cast<int32_t>(candidates.size());
+    std::vector<MatchResult> allResults(numCandidates);
+    std::vector<bool> validResults(numCandidates, false);
+
+    #pragma omp parallel for schedule(dynamic, 4)
+    for (int32_t ci = 0; ci < numCandidates; ++ci) {
+        const auto& candidate = candidates[ci];
         double baseX = candidate.x * scaleFactor;
         double baseY = candidate.y * scaleFactor;
         double baseAngle = candidate.angle;
@@ -470,7 +657,15 @@ std::vector<MatchResult> ShapeModelImpl::SearchLevel(
         }
 
         if (bestMatch.score >= params.minScore * 0.7) {
-            refined.push_back(bestMatch);
+            allResults[ci] = bestMatch;
+            validResults[ci] = true;
+        }
+    }
+
+    // Collect valid results
+    for (int32_t ci = 0; ci < numCandidates; ++ci) {
+        if (validResults[ci]) {
+            refined.push_back(allResults[ci]);
         }
     }
 
@@ -765,7 +960,10 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramidLinemod(
     }
 
     // Apply non-maximum suppression
-    results = NonMaxSuppression(results, 10.0);
+    // Use half of model's smaller dimension as minimum distance
+    double nmsDistance = std::min(templateSize_.width, templateSize_.height) * 0.5;
+    nmsDistance = std::max(nmsDistance, 10.0);  // At least 10 pixels
+    results = NonMaxSuppression(results, nmsDistance);
 
     // Limit results
     if (params.maxMatches > 0 && static_cast<int32_t>(results.size()) > params.maxMatches) {

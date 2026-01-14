@@ -323,7 +323,9 @@ void FindShapeModel(
     // numLevels: 0 means use model levels
     (void)numLevels;
 
-    // Build target pyramid
+    // Build target pyramid (with timing)
+    auto tPyramidStart = std::chrono::high_resolution_clock::now();
+
     const bool useLinemod = impl->params_.useLinemod && !impl->linemodFeatures_.empty();
 
     std::vector<MatchResult> results;
@@ -342,7 +344,15 @@ void FindShapeModel(
             return;
         }
 
+        auto tPyramidEnd = std::chrono::high_resolution_clock::now();
+        auto tSearchStart = tPyramidEnd;
+
         results = impl->SearchPyramidLinemod(targetPyramid, params);
+
+        auto tSearchEnd = std::chrono::high_resolution_clock::now();
+        fprintf(stderr, "[Find] Pyramid: %.1fms, Search: %.1fms\n",
+                std::chrono::duration<double, std::milli>(tPyramidEnd - tPyramidStart).count(),
+                std::chrono::duration<double, std::milli>(tSearchEnd - tSearchStart).count());
     } else {
         Internal::AnglePyramidParams pyramidParams;
         pyramidParams.numLevels = static_cast<int32_t>(impl->levels_.size());
@@ -359,7 +369,15 @@ void FindShapeModel(
             return;
         }
 
+        auto tPyramidEnd = std::chrono::high_resolution_clock::now();
+        auto tSearchStart = tPyramidEnd;
+
         results = impl->SearchPyramid(targetPyramid, params);
+
+        auto tSearchEnd = std::chrono::high_resolution_clock::now();
+        fprintf(stderr, "[Find] Pyramid: %.1fms, Search: %.1fms\n",
+                std::chrono::duration<double, std::milli>(tPyramidEnd - tPyramidStart).count(),
+                std::chrono::duration<double, std::milli>(tSearchEnd - tSearchStart).count());
     }
 
     // Convert results to output vectors

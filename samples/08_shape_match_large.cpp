@@ -262,8 +262,6 @@ int main(int argc, char* argv[]) {
 
     std::cout << "=== QiVision Shape Matching - Halcon-style API Test ===" << std::endl;
 
-    std::string outputDir = "tests/data/matching/";
-
     // =========================================================================
     // Test 1: Small Images (640x512) - XLDContour mode
     // =========================================================================
@@ -280,7 +278,7 @@ int main(int argc, char* argv[]) {
 
         TestImageSet("Small Images (640x512)",
                      "tests/data/matching/image1/",
-                     outputDir + "output_small",
+                     "tests/data/matching/image1_result/output",
                      smallImages, smallROI,
                      4,                      // numLevels
                      0, RAD(360), 0,         // angleStart, angleExtent, angleStep (0=auto)
@@ -315,7 +313,7 @@ int main(int argc, char* argv[]) {
 
         TestImageSet("Large Images (2048x4001)",
                      "tests/data/matching/image2/",
-                     outputDir + "output_large",
+                     "tests/data/matching/image2_result/output",
                      largeImages, largeROI,
                      5,                             // numLevels
                      0, RAD(360), 0,                // angleStart, angleExtent, angleStep
@@ -324,6 +322,100 @@ int main(int argc, char* argv[]) {
                      "auto", 5,                     // contrast (auto), minContrast
                      0, RAD(360),                   // search angleStart, angleExtent
                      0.7, 10, 0.5,                  // minScore, numMatches, maxOverlap
+                     "least_squares", 0, 0.9        // subPixel, numLevels, greediness
+        );
+    }
+
+    // =========================================================================
+    // Test 3: Image3 (1280x1024) - 66 images
+    // =========================================================================
+    {
+        std::vector<std::string> image3Files = {
+            // Template image first
+            "202412121422747.bmp",
+            // All other images (65 total, excluding 20241021163820218.bmp - wrong format)
+            "20241021163730950.bmp",
+            // "20241021163820218.bmp",  // EXCLUDED: 1024x1280x32 (wrong size and format)
+            "20241021163823205.bmp",
+            "20241021163826212.bmp",
+            "20241021163829214.bmp",
+            "20241021163832216.bmp",
+            "20241021163835217.bmp",
+            "20241021163838214.bmp",
+            "20241021163841216.bmp",
+            "20241021163844224.bmp",
+            "20241021163847216.bmp",
+            "20241021163850215.bmp",
+            "20241021163853214.bmp",
+            "20241021163856217.bmp",
+            "20241212141622357.bmp",
+            "20241212141622370.bmp",
+            "20241212141718906.bmp",
+            "20241212141718921.bmp",
+            "20241212141815739.bmp",
+            "20241212141828746.bmp",
+            "20241212142048783.bmp",
+            "20241212142048797.bmp",
+            "20241212142157595.bmp",
+            "20241212142157608.bmp",
+            "20241212142223555.bmp",
+            "20241212142235286.bmp",
+            "20241212195933476.bmp",
+            "2024121220320483.bmp",
+            "20241212212921224.bmp",
+            "20241212212923225.bmp",
+            "20241212213145414.bmp",
+            "20241212213147407.bmp",
+            "20241212213149405.bmp",
+            "20241212213331374.bmp",
+            "20241212213333350.bmp",
+            "20241212213335372.bmp",
+            "20241212213616738.bmp",
+            "20241212213829107.bmp",
+            "20241212213845786.bmp",
+            "20241212214038339.bmp",
+            "20241212214256310.bmp",
+            "20241212214332142.bmp",
+            "20241212214334144.bmp",
+            "20241212214336140.bmp",
+            "2024121221829183.bmp",
+            "2024121221951633.bmp",
+            "20241216174441447.bmp",
+            "20241216174444376.bmp",
+            "20241216174447349.bmp",
+            "20241216174611370.bmp",
+            "2024121617465344.bmp",
+            "20241216174659345.bmp",
+            "2024121617468370.bmp",
+            "2024121617472365.bmp",
+            "2024121617475358.bmp",
+            "20241216174814380.bmp",
+            "20241216174817366.bmp",
+            "20241216174820367.bmp",
+            "20241216174911370.bmp",
+            "20241216174914373.bmp",
+            "20241216174959372.bmp",
+            "2024121617498368.bmp",
+            "2024121617502355.bmp",
+            "2024121617505369.bmp",
+            "20241217133454888.bmp",
+            "20241217134935725.bmp"
+        };
+
+        // ROI: (580, 340) to (650, 400) -> x=580, y=340, width=70, height=60
+        Rect2i image3ROI(580, 340, 70, 60);
+
+        TestImageSet("Image3 (1280x1024) - 66 images",
+                     "tests/data/matching/image3/",
+                     "tests/data/matching/image3_result/output",
+                     image3Files, image3ROI,
+                     4,                             // numLevels
+                     0, RAD(360), 0,                // angleStart, angleExtent, angleStep
+                     "auto",                        // optimization
+                     "ignore_local_polarity",       // metric
+                     "auto", 10,                    // contrast (auto), minContrast
+                     0, RAD(360),                   // search angleStart, angleExtent
+                     0.6, 10, 0.5,                  // minScore, numMatches, maxOverlap
                      "least_squares", 0, 0.9        // subPixel, numLevels, greediness
         );
     }

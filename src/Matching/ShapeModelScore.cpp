@@ -422,6 +422,101 @@ double ShapeModelImpl::ComputeScoreWithSinCos(
 }
 
 // =============================================================================
+// ShapeModelImpl::ComputeScoreNearestNeighbor
+// =============================================================================
+
+double ShapeModelImpl::ComputeScoreNearestNeighbor(
+    const AnglePyramid& pyramid, int32_t level,
+    int32_t x, int32_t y, float cosR, float sinR,
+    double greediness, double* outCoverage) const
+{
+    // Use grid points for coarse search (faster)
+    const auto& levelModel = levels_[level];
+    const auto& pts = levelModel.gridPoints.empty() ? levelModel.points : levelModel.gridPoints;
+    const size_t numPoints = pts.size();
+    if (numPoints == 0) {
+        if (outCoverage) *outCoverage = 0.0;
+        return 0.0;
+    }
+
+    const float* gxData;
+    const float* gyData;
+    int32_t width, height, stride;
+    if (!pyramid.GetGradientData(level, gxData, gyData, width, height, stride)) {
+        if (outCoverage) *outCoverage = 0.0;
+        return 0.0;
+    }
+
+    const float xf = static_cast<float>(x);
+    const float yf = static_cast<float>(y);
+
+    float totalScore = 0.0f;
+    float totalWeight = 0.0f;
+    int32_t matchedCount = 0;
+
+    const float earlyTermThreshold = static_cast<float>(greediness * numPoints);
+    const int32_t checkInterval = 8;
+
+    const float* soaX = levelModel.gridPoints.empty() ? levelModel.soaX.data() : levelModel.gridSoaX.data();
+    const float* soaY = levelModel.gridPoints.empty() ? levelModel.soaY.data() : levelModel.gridSoaY.data();
+    const float* soaCos = levelModel.gridPoints.empty() ? levelModel.soaCosAngle.data() : levelModel.gridSoaCosAngle.data();
+    const float* soaSin = levelModel.gridPoints.empty() ? levelModel.soaSinAngle.data() : levelModel.gridSoaSinAngle.data();
+    const float* soaWeight = levelModel.gridPoints.empty() ? levelModel.soaWeight.data() : levelModel.gridSoaWeight.data();
+
+    const int32_t maxX = width - 1;
+    const int32_t maxY = height - 1;
+
+    // Main loop with nearest-neighbor interpolation (single memory access per point)
+    for (size_t i = 0; i < numPoints; ++i) {
+        // Rotate model point
+        float rotX = cosR * soaX[i] - sinR * soaY[i];
+        float rotY = sinR * soaX[i] + cosR * soaY[i];
+
+        // Nearest neighbor: round to integer
+        int32_t imgX = static_cast<int32_t>(xf + rotX + 0.5f);
+        int32_t imgY = static_cast<int32_t>(yf + rotY + 0.5f);
+
+        if (imgX >= 0 && imgX <= maxX && imgY >= 0 && imgY <= maxY) {
+            int32_t idx = imgY * stride + imgX;
+
+            // Single memory access (vs 4 for bilinear)
+            float gx = gxData[idx];
+            float gy = gyData[idx];
+
+            float magSq = gx * gx + gy * gy;
+            if (magSq >= 25.0f) {
+                float rotCos = soaCos[i] * cosR - soaSin[i] * sinR;
+                float rotSin = soaSin[i] * cosR + soaCos[i] * sinR;
+                float dot = rotCos * gx + rotSin * gy;
+
+                // Fast inverse sqrt approximation
+                float invMag = 1.0f / std::sqrt(magSq);
+                float score = std::fabs(dot) * invMag;
+
+                totalScore += soaWeight[i] * score;
+                totalWeight += soaWeight[i];
+                matchedCount++;
+            }
+        }
+
+        // Early termination check
+        if (greediness > 0.0 && ((i + 1) & (checkInterval - 1)) == 0) {
+            if (totalWeight > 0) {
+                if ((totalScore / totalWeight) * numPoints < earlyTermThreshold * 0.85f) {
+                    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
+                    return 0.0;
+                }
+            }
+        }
+    }
+
+    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
+    if (totalWeight <= 0) return 0.0;
+
+    return static_cast<double>(totalScore) / totalWeight;
+}
+
+// =============================================================================
 // ShapeModelImpl::ComputeScoreQuantized
 // =============================================================================
 
