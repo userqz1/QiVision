@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-12 (LINEMOD 性能优化完成 - 总时间 245ms → 60ms, 75%提升)
+> 最后更新: 2026-01-15 (API 文档完成 + IO/Color/Filter 模块)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -17,7 +17,7 @@
 Platform █████████████████░░░ 86%
 Core     ████████████████████ 100%
 Internal ████████████████████ 100%
-Feature  ██░░░░░░░░░░░░░░░░░░ 10%
+Feature  █████░░░░░░░░░░░░░░░ 25%
 Tests    █████████████████░░░ 87%
 ```
 
@@ -174,17 +174,17 @@ Tests    █████████████████░░░ 87%
 
 | 模块 | 设计 | 实现 | 单测 | 精度测试 | 审查 | 优先级 | 备注 |
 |------|:----:|:----:|:----:|:--------:|:----:|:------:|------|
-| Filter/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | Domain感知滤波 |
+| **IO/ImageIO.h** | ✅ | ✅ | ⬜ | - | ⬜ | **P0** | 图像读写 (PNG/JPEG/BMP/RAW) |
+| **Color/ColorConvert.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 颜色转换 (RGB/HSV/Lab/YCrCb) |
+| **Filter/Filter.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 图像滤波 (Gauss/Mean/Median/Sobel) |
 | Blob/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | Blob 分析 |
 | Edge/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | 2D 边缘检测 |
 | Transform/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | 几何变换 |
 | Morphology/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | 形态学 |
-| IO/* | ⬜ | ⬜ | ⬜ | - | ⬜ | P0 | 图像读写 |
 | **OCR/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P1** | 字符识别/验证 |
 | **Barcode/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P1** | 一维码/二维码 |
 | **Defect/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P1** | 缺陷检测 |
 | **Texture/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P2** | 纹理分析 |
-| **Color/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P2** | 颜色处理 |
 | **Calib/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P2** | 相机标定 |
 
 ---
@@ -239,6 +239,47 @@ Tests    █████████████████░░░ 87%
 ---
 
 ## 变更日志
+
+### 2026-01-15 (API 文档完成)
+
+- **新增 API 参考手册** (`docs/API_Reference.md`)
+  - 完整记录所有公开 API（~120 个函数）
+  - 包含详细参数说明、类型、默认值
+  - 每个函数都有使用示例
+  - 涵盖模块: Matching, Measure, IO, Color, Filter
+  - 文档遵循 Halcon 风格
+
+### 2026-01-15 (IO/Color/Filter 模块实现完成)
+
+- **新增 Feature 层模块** (Halcon 风格 API)
+
+- **IO 模块** (`Qi::Vision::IO`)
+  - `ReadImage`, `WriteImage` - 支持 PNG/JPEG/BMP/RAW 格式
+  - `ReadSequence`, `WriteSequence` - 批量图像序列读写
+  - `ReadImageRaw` - RAW 格式读取 (8/16/32位)
+  - `GetFormatFromFilename`, `ReadImageMetadata` - 格式工具
+
+- **Color 模块** (`Qi::Vision::Color`)
+  - `TransFromRgb`, `TransToRgb` - RGB 与其他色彩空间转换
+  - 支持: Gray, RGB, BGR, HSV, HSL, Lab, YCrCb, YUV, XYZ
+  - `Decompose3/4`, `Compose3/4` - 通道分解/合成
+  - `AdjustBrightness/Contrast/Saturation/Hue/Gamma` - 颜色调整
+  - `AutoWhiteBalance` - 自动白平衡 (Gray World/White Patch)
+  - `CreateColorTransLut`, `ApplyColorTransLut`, `ClearColorTransLut` - LUT 加速 (48MB)
+  - `CfaToRgb` - Bayer 去马赛克 (bayer_rg/gr/gb/bg)
+  - `LinearTransColor`, `ApplyColorMatrix` - 颜色仿射变换
+  - `PrincipalComp`, `GenPrincipalCompTrans` - 主成分分析
+
+- **Filter 模块** (`Qi::Vision::Filter`)
+  - 平滑: `GaussFilter`, `MeanImage`, `MedianImage`, `BilateralFilter`
+  - 导数: `SobelAmp`, `SobelDir`, `DerivateGauss`, `GradientMagnitude`
+  - 增强: `EmphasizeImage`, `UnsharpMask`, `ShockFilter`
+  - 扩散: `AnisoDiff` (Perona-Malik)
+  - 卷积: `ConvolImage`, `ConvolSeparable`
+  - 秩滤波: `RankImage`, `MinImage`, `MaxImage`
+  - 纹理: `StdDevImage`, `VarianceImage`, `EntropyImage`
+
+---
 
 ### 2026-01-12 (LINEMOD 性能优化完成)
 

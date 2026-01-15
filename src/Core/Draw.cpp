@@ -217,8 +217,8 @@ void Draw::RotatedRectangle(QImage& image, const Point2d& center,
 
 void Draw::MatchResult(QImage& image, const Matching::MatchResult& match,
                        const Color& color, int32_t markerSize) {
-    // Draw cross at match position
-    Cross(image, Point2d{match.x, match.y}, markerSize, color, 2);
+    // Draw rotated cross at match position
+    Cross(image, Point2d{match.x, match.y}, markerSize, match.angle, color, 2);
 
     // Draw angle indicator line
     double cosA = std::cos(match.angle);
@@ -257,8 +257,8 @@ void Draw::MatchResultWithContour(QImage& image, const Matching::MatchResult& ma
         Pixel(image, px + 1, py + 1, color);
     }
 
-    // Draw center cross
-    Cross(image, Point2d{match.x, match.y}, 15, color, 2);
+    // Draw rotated center cross
+    Cross(image, Point2d{match.x, match.y}, 15, match.angle, color, 2);
 }
 
 void Draw::MatchResults(QImage& image, const std::vector<Matching::MatchResult>& matches,

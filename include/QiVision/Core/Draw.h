@@ -110,6 +110,13 @@ public:
                       const Color& color, int32_t thickness = 1);
 
     /**
+     * @brief Draw a rotated cross marker
+     * @param angle Rotation angle in radians
+     */
+    static void Cross(QImage& image, const Point2d& center, int32_t size,
+                      double angle, const Color& color, int32_t thickness = 1);
+
+    /**
      * @brief Draw an arrow
      */
     static void Arrow(QImage& image, const Point2d& from, const Point2d& to,
@@ -217,6 +224,23 @@ inline void Draw::Cross(QImage& image, const Point2d& center, int32_t size,
                         const Color& color, int32_t thickness) {
     Cross(image, static_cast<int32_t>(center.x + 0.5), static_cast<int32_t>(center.y + 0.5),
           size, color, thickness);
+}
+
+inline void Draw::Cross(QImage& image, const Point2d& center, int32_t size,
+                        double angle, const Color& color, int32_t thickness) {
+    double cosA = std::cos(angle);
+    double sinA = std::sin(angle);
+    double s = static_cast<double>(size);
+
+    // Horizontal arm rotated
+    Point2d h1{center.x - s * cosA, center.y - s * sinA};
+    Point2d h2{center.x + s * cosA, center.y + s * sinA};
+    Line(image, h1, h2, color, thickness);
+
+    // Vertical arm rotated
+    Point2d v1{center.x + s * sinA, center.y - s * cosA};
+    Point2d v2{center.x - s * sinA, center.y + s * cosA};
+    Line(image, v1, v2, color, thickness);
 }
 
 inline void Draw::Line(QImage& image, const Point2d& p1, const Point2d& p2,

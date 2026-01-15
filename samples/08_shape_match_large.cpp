@@ -137,8 +137,8 @@ void DrawMatchResult(QImage& colorImg, double row, double col, double angle, dou
     Draw::Line(colorImg, px[2], py[2], px[3], py[3], Color::Red(), 2);
     Draw::Line(colorImg, px[3], py[3], px[0], py[0], Color::Red(), 2);
 
-    // Draw center cross (yellow)
-    Draw::Cross(colorImg, col, row, 15, Color::Yellow(), 2);
+    // Draw rotated center cross (yellow)
+    Draw::Cross(colorImg, Point2d{col, row}, 15, angle, Color::Yellow(), 2);
 }
 
 // Test a set of images using Halcon-style API

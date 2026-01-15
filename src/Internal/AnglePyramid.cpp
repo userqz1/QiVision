@@ -1421,6 +1421,114 @@ std::vector<EdgePoint> AnglePyramid::ExtractEdgePoints(int32_t level,
     return result;
 }
 
+std::vector<EdgePoint> AnglePyramid::ExtractEdgePoints(int32_t level,
+                                                        const QRegion& region,
+                                                        double minContrast) const {
+    std::vector<EdgePoint> result;
+
+    if (level < 0 || level >= static_cast<int32_t>(impl_->levels_.size())) {
+        return result;
+    }
+
+    if (region.Empty()) {
+        // Empty region = full image, delegate to Rect2i version
+        return ExtractEdgePoints(level, Rect2i(), minContrast);
+    }
+
+    const auto& levelData = impl_->levels_[level];
+
+    // Get region bounding box for fast culling
+    Rect2i bbox = region.BoundingBox();
+    int32_t x0 = std::max(1, bbox.x);
+    int32_t y0 = std::max(1, bbox.y);
+    int32_t x1 = std::min(levelData.width - 1, bbox.x + bbox.width);
+    int32_t y1 = std::min(levelData.height - 1, bbox.y + bbox.height);
+
+    double threshold = (minContrast > 0) ? minContrast : impl_->params_.minContrast;
+
+    const float* magData = static_cast<const float*>(levelData.gradMag.Data());
+    const float* dirData = static_cast<const float*>(levelData.gradDir.Data());
+    const int16_t* binData = static_cast<const int16_t*>(levelData.angleBinImage.Data());
+
+    int32_t magStride = levelData.gradMag.Stride() / sizeof(float);
+    int32_t dirStride = levelData.gradDir.Stride() / sizeof(float);
+    int32_t binStride = levelData.angleBinImage.Stride() / sizeof(int16_t);
+
+    const bool useParallel = ShouldUseOpenMP(levelData.width, levelData.height);
+
+#ifdef _OPENMP
+    if (useParallel) {
+        // Use OpenMP with thread-local vectors
+        #pragma omp parallel
+        {
+            std::vector<EdgePoint> localPoints;
+            localPoints.reserve(1000);
+
+            #pragma omp for schedule(static) nowait
+            for (int32_t y = y0; y < y1; ++y) {
+                for (int32_t x = x0; x < x1; ++x) {
+                    // Check if point is within region
+                    if (!region.Contains(x, y)) {
+                        continue;
+                    }
+
+                    float mag = magData[y * magStride + x];
+
+                    if (mag >= threshold) {
+                        float dir = dirData[y * dirStride + x];
+                        int16_t bin = binData[y * binStride + x];
+
+                        localPoints.emplace_back(
+                            static_cast<double>(x),
+                            static_cast<double>(y),
+                            static_cast<double>(dir),
+                            static_cast<double>(mag),
+                            static_cast<int32_t>(bin)
+                        );
+                    }
+                }
+            }
+
+            #pragma omp critical
+            {
+                result.insert(result.end(), localPoints.begin(), localPoints.end());
+            }
+        }
+    } else
+#endif
+    {
+        // Small image: single-threaded execution
+        (void)useParallel;
+        result.reserve(1000);
+
+        for (int32_t y = y0; y < y1; ++y) {
+            for (int32_t x = x0; x < x1; ++x) {
+                // Check if point is within region
+                if (!region.Contains(x, y)) {
+                    continue;
+                }
+
+                float mag = magData[y * magStride + x];
+
+                if (mag >= threshold) {
+                    float dir = dirData[y * dirStride + x];
+                    int16_t bin = binData[y * binStride + x];
+
+                    result.emplace_back(
+                        static_cast<double>(x),
+                        static_cast<double>(y),
+                        static_cast<double>(dir),
+                        static_cast<double>(mag),
+                        static_cast<int32_t>(bin)
+                    );
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
 const std::vector<EdgePoint>& AnglePyramid::GetEdgePoints(int32_t level) const {
     static const std::vector<EdgePoint> empty;
     if (level < 0 || level >= static_cast<int32_t>(impl_->levels_.size())) {

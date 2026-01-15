@@ -71,6 +71,12 @@ set(QIVISION_SOURCES
     Measure/MeasureHandle.cpp
     Measure/Caliper.cpp
     Measure/CaliperArray.cpp
+    # IO (Feature Layer)
+    IO/ImageIO.cpp
+    # Color (Feature Layer)
+    Color/ColorConvert.cpp
+    # Filter (Feature Layer)
+    Filter/Filter.cpp
 )
 
 set(QIVISION_HEADERS
@@ -147,6 +153,12 @@ set(QIVISION_HEADERS
     ${CMAKE_SOURCE_DIR}/include/QiVision/Measure/MeasureHandle.h
     ${CMAKE_SOURCE_DIR}/include/QiVision/Measure/Caliper.h
     ${CMAKE_SOURCE_DIR}/include/QiVision/Measure/CaliperArray.h
+    # IO (Feature Layer)
+    ${CMAKE_SOURCE_DIR}/include/QiVision/IO/ImageIO.h
+    # Color (Feature Layer)
+    ${CMAKE_SOURCE_DIR}/include/QiVision/Color/ColorConvert.h
+    # Filter (Feature Layer)
+    ${CMAKE_SOURCE_DIR}/include/QiVision/Filter/Filter.h
 )
 
 # Create library

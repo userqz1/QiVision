@@ -237,6 +237,44 @@ ShapeModel CreateShapeModel(
     return model;
 }
 
+ShapeModel CreateShapeModel(
+    const QImage& templateImage,
+    const QRegion& region,
+    int32_t numLevels,
+    double angleStart,
+    double angleExtent,
+    double angleStep,
+    const std::string& optimization,
+    const std::string& metric,
+    const std::string& contrast,
+    double minContrast)
+{
+    ShapeModel model;
+
+    // Set up parameters
+    ModelParams params;
+    params.numLevels = numLevels;
+    params.angleStart = angleStart;
+    params.angleExtent = angleExtent;
+    params.angleStep = angleStep;
+    params.optimization = ParseOptimization(optimization);
+    params.metric = ParseMetric(metric);
+
+    // Parse contrast parameter
+    ParseContrast(contrast, params.contrastMode, params.contrastHigh, params.contrastLow, params.minComponentSize);
+    params.minContrast = minContrast;
+
+    model.Impl()->params_ = params;
+
+    // Create model with QRegion
+    Point2d origin{0, 0};
+    if (!model.Impl()->CreateModel(templateImage, region, origin)) {
+        return ShapeModel();  // Return invalid model
+    }
+
+    return model;
+}
+
 ShapeModel CreateScaledShapeModel(
     const QImage& templateImage,
     int32_t numLevels,

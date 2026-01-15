@@ -16,6 +16,7 @@
  */
 
 #include <QiVision/Core/QImage.h>
+#include <QiVision/Core/QRegion.h>
 #include <QiVision/Core/Types.h>
 
 #include <cstdint>
@@ -289,14 +290,35 @@ public:
     // =========================================================================
 
     /**
-     * @brief Extract edge points from a level
+     * @brief Extract edge points from a level (rectangular ROI)
      * @param level Pyramid level
-     * @param roi Optional ROI (empty = full image)
+     * @param roi Optional rectangular ROI (empty = full image)
      * @param minContrast Minimum gradient magnitude (0 = use default)
      * @return Vector of edge points
      */
     std::vector<EdgePoint> ExtractEdgePoints(int32_t level,
                                               const Rect2i& roi = Rect2i(),
+                                              double minContrast = 0) const;
+
+    /**
+     * @brief Extract edge points from a level (arbitrary region)
+     * @param level Pyramid level
+     * @param region Region mask (supports any shape: circle, ellipse, polygon, etc.)
+     * @param minContrast Minimum gradient magnitude (0 = use default)
+     * @return Vector of edge points within the region
+     *
+     * @code
+     * // Extract edge points from circular region
+     * QRegion circle = QRegion::Circle(100, 100, 50);
+     * auto points = pyramid.ExtractEdgePoints(0, circle, 20.0);
+     *
+     * // Extract from complex region (union of shapes)
+     * QRegion roi = QRegion::Circle(100, 100, 50) | QRegion::Rectangle(200, 50, 100, 100);
+     * auto points2 = pyramid.ExtractEdgePoints(0, roi);
+     * @endcode
+     */
+    std::vector<EdgePoint> ExtractEdgePoints(int32_t level,
+                                              const QRegion& region,
                                               double minContrast = 0) const;
 
     /**

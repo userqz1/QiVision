@@ -225,8 +225,11 @@ public:
     // ==========================================================================
 
     bool CreateModel(const QImage& image, const Rect2i& roi, const Point2d& origin);
+    bool CreateModel(const QImage& image, const QRegion& region, const Point2d& origin);
     bool CreateModelLinemod(const QImage& image, const Rect2i& roi, const Point2d& origin);
     void ExtractModelPointsXLD(const QImage& templateImg, const AnglePyramid& pyramid);
+    void ExtractModelPointsXLDWithRegion(const QImage& templateImg, const AnglePyramid& pyramid,
+                                          const QRegion& region);
     void OptimizeModel();
     void BuildCosLUT(int32_t numBins);
     void BuildAngleCache(double angleStart, double angleExtent, double angleStep);
