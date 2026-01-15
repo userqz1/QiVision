@@ -1,12 +1,12 @@
 <p align="center">
   <h1 align="center">🔬 QiVision</h1>
   <p align="center">
-    <strong>工业级机器视觉算法库 - 零依赖、亚像素精度、Halcon 兼容</strong>
+    <strong>Industrial Machine Vision Library - Zero Dependencies, Sub-pixel Precision, Halcon Compatible</strong>
   </p>
 </p>
 
 <p align="center">
-    <a href="./README_EN.md">English</a> | 简体中文
+    English | <a href="./README.md">简体中文</a>
 </p>
 
 <p align="center">
@@ -19,64 +19,64 @@
 
 ---
 
-## 📋 项目简介
+## 📋 Introduction
 
-**QiVision** 是一个从零实现的工业机器视觉算法库，目标是达到 Halcon 的核心功能和精度水平。
+**QiVision** is an industrial machine vision library built from scratch in C++17, designed to match Halcon's core functionality and precision.
 
-### ✨ 核心特性
+### ✨ Key Features
 
-| 特性 | 描述 |
-|------|------|
-| 🚀 **零依赖** | 仅使用 stb_image 进行图像读写，无 OpenCV 依赖 |
-| 🎯 **亚像素精度** | 边缘检测 < 0.02px，形状匹配 < 0.05px |
-| 🔧 **Halcon 兼容** | Domain 概念、XLD 轮廓、RLE 区域编码 |
-| ⚡ **SIMD 优化** | 支持 AVX2/SSE4 指令集加速 |
-| 📐 **现代 C++17** | RAII 设计、干净的 API 接口 |
+| Feature | Description |
+|---------|-------------|
+| 🚀 **Zero Dependencies** | Only uses stb_image for file I/O, no OpenCV required |
+| 🎯 **Sub-pixel Precision** | Edge detection < 0.02px, Shape matching < 0.05px |
+| 🔧 **Halcon Compatible** | Domain concept, XLD contours, RLE region encoding |
+| ⚡ **SIMD Optimized** | AVX2/SSE4 instruction set acceleration |
+| 📐 **Modern C++17** | RAII design, clean API interface |
 
 ---
 
-## 📊 开发进度
+## 📊 Development Progress
 
 ```
 Platform ████████████████░░░░ 86%   (Memory, SIMD, Thread, Timer, FileIO, Random)
 Core     ████████████████████ 100%  (QImage, QRegion, QContour, QMatrix)
 Internal ████████████████████ 100%  (Gradient, Pyramid, Fitting, Steger, Hessian...)
 Feature  ██░░░░░░░░░░░░░░░░░░ 10%   (ShapeModel ✓, Caliper ✓)
-Tests    █████████████████░░░ 87%   (2616/2626 通过)
+Tests    █████████████████░░░ 87%   (2616/2626 passed)
 ```
 
-### 🎯 已完成模块
+### 🎯 Completed Modules
 
-| 模块 | 状态 | 性能 | 说明 |
-|------|:----:|------|------|
-| **ShapeModel** | ✅ 完成 | 640x512: **9.5ms**<br>2048x4001: **205ms** | 形状模板匹配，支持旋转 0-360° |
-| **Caliper** | ✅ 完成 | < 0.03px 精度 | 卡尺测量，支持矩形/弧形句柄 |
-| **CaliperArray** | ✅ 完成 | - | 多卡尺阵列测量 |
+| Module | Status | Performance | Description |
+|--------|:------:|-------------|-------------|
+| **ShapeModel** | ✅ Done | 640x512: **9.5ms**<br>2048x4001: **205ms** | Shape template matching, 0-360° rotation |
+| **Caliper** | ✅ Done | < 0.03px precision | Caliper measurement with rectangle/arc handles |
+| **CaliperArray** | ✅ Done | - | Multi-caliper array measurement |
 
-### 📋 开发中 / 计划中
+### 📋 In Development / Planned
 
-| 模块 | 优先级 | 状态 |
-|------|:------:|:----:|
-| NCCModel | P1 | 🟡 设计中 |
-| ComponentModel | P1 | 🟡 设计中 |
-| Blob 分析 | P1 | ⬜ 计划中 |
-| OCR | P1 | ⬜ 计划中 |
-| Barcode | P1 | ⬜ 计划中 |
-| 相机标定 | P2 | ⬜ 计划中 |
+| Module | Priority | Status |
+|--------|:--------:|:------:|
+| NCCModel | P1 | 🟡 Designing |
+| ComponentModel | P1 | 🟡 Designing |
+| Blob Analysis | P1 | ⬜ Planned |
+| OCR | P1 | ⬜ Planned |
+| Barcode | P1 | ⬜ Planned |
+| Camera Calibration | P2 | ⬜ Planned |
 
-> 📄 **详细进度**: 查看 [PROGRESS.md](PROGRESS.md) 获取完整的模块开发状态
+> 📄 **Detailed Progress**: See [PROGRESS.md](PROGRESS.md) for full module status
 
 ---
 
-## 🚀 快速开始
+## 🚀 Quick Start
 
-### 环境要求
+### Requirements
 
-- **编译器**: GCC 9+, Clang 10+, MSVC 2019+
-- **构建工具**: CMake 3.16+
-- **C++ 标准**: C++17
+- **Compiler**: GCC 9+, Clang 10+, MSVC 2019+
+- **Build Tool**: CMake 3.16+
+- **C++ Standard**: C++17
 
-### 编译
+### Build
 
 ```bash
 git clone https://github.com/userqz1/QiVision.git
@@ -85,21 +85,21 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ```
 
-### 运行测试
+### Run Tests
 
 ```bash
-# 单元测试
+# Unit tests
 ./build/bin/unit_test
 
-# 形状匹配示例
+# Shape matching sample
 ./build/bin/samples/08_shape_match_large
 ```
 
 ---
 
-## 💡 使用示例
+## 💡 Usage Examples
 
-### 形状模板匹配
+### Shape Template Matching
 
 ```cpp
 #include <QiVision/QiVision.h>
@@ -109,21 +109,21 @@ using namespace Qi::Vision;
 using namespace Qi::Vision::Matching;
 
 int main() {
-    // 加载模板和搜索图像
+    // Load template and search images
     QImage templateImg = QImage::FromFile("template.png");
     QImage searchImg = QImage::FromFile("search.png");
 
-    // 创建模型
+    // Create model
     ModelParams params;
     params.angleStart = 0;
-    params.angleExtent = RAD(360);  // 支持全角度旋转
+    params.angleExtent = RAD(360);  // Full rotation support
     params.numLevels = 4;
 
     ShapeModel model;
-    Rect2i roi(100, 100, 50, 50);  // 模板区域
+    Rect2i roi(100, 100, 50, 50);  // Template region
     model.Create(templateImg, roi, params);
 
-    // 搜索匹配
+    // Search for matches
     SearchParams searchParams;
     searchParams.minScore = 0.8;
     searchParams.maxMatches = 10;
@@ -139,7 +139,7 @@ int main() {
 }
 ```
 
-### 卡尺测量
+### Caliper Measurement
 
 ```cpp
 #include <QiVision/QiVision.h>
@@ -151,20 +151,20 @@ using namespace Qi::Vision::Measure;
 int main() {
     QImage image = QImage::FromFile("edge_image.png");
 
-    // 创建矩形卡尺句柄
+    // Create rectangle caliper handle
     MeasureHandle handle = MeasureHandle::Rectangle(
-        Point2d{320, 240},  // 中心
-        100,                // 长度
-        30,                 // 宽度
-        0                   // 角度
+        Point2d{320, 240},  // Center
+        100,                // Length
+        30,                 // Width
+        0                   // Angle
     );
 
-    // 测量参数
+    // Measurement parameters
     CaliperParams params;
     params.transition = EdgeTransition::Positive;
     params.selectType = EdgeSelect::First;
 
-    // 执行测量
+    // Execute measurement
     auto result = MeasurePos(image, handle, params);
 
     if (result.edgeFound) {
@@ -177,7 +177,7 @@ int main() {
 
 ---
 
-## 📦 集成到你的项目
+## 📦 Integration
 
 **CMake FetchContent:**
 
@@ -190,7 +190,7 @@ FetchContent_MakeAvailable(QiVision)
 target_link_libraries(your_app PRIVATE QiVision)
 ```
 
-**作为子目录:**
+**As Subdirectory:**
 
 ```cmake
 add_subdirectory(QiVision)
@@ -199,7 +199,7 @@ target_link_libraries(your_app PRIVATE QiVision)
 
 ---
 
-## 🏗️ 架构设计
+## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -211,7 +211,7 @@ target_link_libraries(your_app PRIVATE QiVision)
 │   Measure:  Caliper ✓, CaliperArray ✓, Metrology                │
 │   Analysis: Blob, OCR, Barcode, Defect                          │
 ├─────────────────────────────────────────────────────────────────┤
-│ Internal Layer (不导出)                                          │
+│ Internal Layer (not exported)                                    │
 │   Math:     Gaussian, Matrix, Solver, Eigen                     │
 │   Image:    Interpolate, Convolution, Gradient, Pyramid         │
 │   Edge:     Edge1D, Steger, Hessian, NMS, Canny                 │
@@ -219,49 +219,49 @@ target_link_libraries(your_app PRIVATE QiVision)
 │   Region:   RLEOps, Morphology, ConnectedComponent              │
 ├─────────────────────────────────────────────────────────────────┤
 │ Platform Layer                                                   │
-│   Memory (64B对齐), SIMD, Thread, Timer, FileIO, Random         │
+│   Memory (64B aligned), SIMD, Thread, Timer, FileIO, Random     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 📈 性能指标
+## 📈 Performance
 
-### 形状匹配性能 (ShapeModel)
+### Shape Matching Performance (ShapeModel)
 
-| 测试集 | 图像尺寸 | 图像数 | 平均耗时 | 匹配率 |
-|--------|----------|--------|----------|--------|
+| Test Set | Image Size | Images | Avg Time | Match Rate |
+|----------|------------|--------|----------|------------|
 | Small | 640x512 | 5 | **9.5 ms** | 100% |
 | Large | 2048x4001 | 11 | **204.8 ms** | 100% |
 | Medium | 1280x1024 | 66 | **49.0 ms** | 100% |
 | Rotated | 888x702 | 20 | **34.4 ms** | 100% |
 
-### 精度目标
+### Precision Targets
 
-| 模块 | 指标 | 目标精度 |
-|------|------|----------|
-| Edge1D | 边缘位置 | < 0.02 px |
-| Caliper | 位置/宽度 | < 0.03 px / < 0.05 px |
-| ShapeModel | 位置/角度 | < 0.05 px / < 0.05° |
-| CircleFit | 圆心/半径 | < 0.02 px |
-| LineFit | 角度 | < 0.005° |
-
----
-
-## 📚 文档
-
-- [PROGRESS.md](PROGRESS.md) - 详细开发进度
-- [samples/](samples/) - 示例程序
-- [CLAUDE.md](.claude/CLAUDE.md) - 开发规范
+| Module | Metric | Target |
+|--------|--------|--------|
+| Edge1D | Edge position | < 0.02 px |
+| Caliper | Position/Width | < 0.03 px / < 0.05 px |
+| ShapeModel | Position/Angle | < 0.05 px / < 0.05° |
+| CircleFit | Center/Radius | < 0.02 px |
+| LineFit | Angle | < 0.005° |
 
 ---
 
-## 📄 许可证
+## 📚 Documentation
+
+- [PROGRESS.md](PROGRESS.md) - Development progress
+- [samples/](samples/) - Example programs
+- [CLAUDE.md](.claude/CLAUDE.md) - Development guidelines
+
+---
+
+## 📄 License
 
 [MIT License](LICENSE)
 
 ---
 
 <p align="center">
-  <i>QiVision - 让机器视觉更简单</i>
+  <i>QiVision - Making Machine Vision Simpler</i>
 </p>
