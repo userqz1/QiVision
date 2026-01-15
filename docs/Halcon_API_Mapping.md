@@ -350,6 +350,19 @@
 | `principal_comp` | Image, NumChannels → ImagePCA | `PrincipalComp()` | ✅ |
 | `gen_principal_comp_trans` | Image → TransMat, Mean, Eigenvalues | `GenPrincipalCompTrans()` | ✅ |
 
+### 7.5 直方图分析
+
+| Halcon 算子 | 参数 | QiVision 对应 | 状态 |
+|-------------|------|---------------|:----:|
+| `gray_histo` | Image, Region → AbsoluteHisto, RelativeHisto | `GrayHisto()` | ✅ |
+| `gray_histo_abs` | Image, Region → AbsoluteHisto | `GrayHistoAbs()` | ✅ |
+| `gray_histo_range` | Image, Region, Min, Max, NumBins → AbsoluteHisto, BinSize | | ⬜ |
+| `min_max_gray` | Image, Region → Min, Max, Range | `MinMaxGray()` | ✅ |
+| `intensity` | Image, Region → Mean, Deviation | `Intensity()` | ✅ |
+| `entropy_gray` | Image, Region → Entropy | `EntropyGray()` | ✅ |
+| `histo_to_thresh` | Histogram, Sigma → Threshold | | ⬜ |
+| `select_gray` | Image, Region, Features, Operation, Min, Max → SelectedRegion | | ⬜ |
+
 ---
 
 ## 8. Matching 模板匹配
@@ -531,13 +544,13 @@
 | Edge 边缘 | 12 | 0 | 9 | 21 |
 | Contour XLD | 24 | 0 | 9 | 33 |
 | Filter 滤波 | 20 | 0 | 9 | 29 |
-| Color 颜色 | 25 | 0 | 2 | 27 |
+| Color 颜色 | 30 | 0 | 5 | 35 |
 | Matching 匹配 | 15 | 2 | 12 | 29 |
 | Measure 测量 | 6 | 0 | 6 | 12 |
 | IO 读写 | 7 | 0 | 2 | 9 |
 | Transform 变换 | 14 | 0 | 16 | 30 |
 | Distance/Fitting | 9 | 0 | 4 | 13 |
 | Hough | 2 | 0 | 3 | 5 |
-| **总计** | **195** | **3** | **96** | **294** |
+| **总计** | **200** | **3** | **99** | **302** |
 
-**覆盖率**: 195/294 = **66%**
+**覆盖率**: 200/302 = **66%**

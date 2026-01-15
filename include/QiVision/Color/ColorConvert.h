@@ -405,6 +405,81 @@ QImage ScaleImageMax(const QImage& image);
 QImage EquHistoImage(const QImage& image);
 
 // =============================================================================
+// Histogram Analysis
+// =============================================================================
+
+/**
+ * @brief Compute gray value histogram
+ *
+ * Equivalent to Halcon's gray_histo operator.
+ *
+ * @param image Input grayscale image
+ * @param[out] absoluteHisto Absolute histogram (pixel counts, 256 bins)
+ * @param[out] relativeHisto Relative histogram (normalized to sum=1)
+ *
+ * @code
+ * std::vector<int64_t> absHisto;
+ * std::vector<double> relHisto;
+ * GrayHisto(image, absHisto, relHisto);
+ * @endcode
+ */
+void GrayHisto(const QImage& image,
+               std::vector<int64_t>& absoluteHisto,
+               std::vector<double>& relativeHisto);
+
+/**
+ * @brief Compute absolute gray value histogram
+ *
+ * Equivalent to Halcon's gray_histo_abs operator.
+ *
+ * @param image Input grayscale image
+ * @return Absolute histogram (256 bins)
+ */
+std::vector<int64_t> GrayHistoAbs(const QImage& image);
+
+/**
+ * @brief Get minimum and maximum gray values
+ *
+ * Equivalent to Halcon's min_max_gray operator.
+ *
+ * @param image Input image
+ * @param[out] minGray Minimum gray value
+ * @param[out] maxGray Maximum gray value
+ * @param[out] range Gray value range (max - min)
+ */
+void MinMaxGray(const QImage& image, double& minGray, double& maxGray, double& range);
+
+/**
+ * @brief Compute gray value intensity statistics
+ *
+ * Equivalent to Halcon's intensity operator.
+ *
+ * @param image Input image
+ * @param[out] mean Mean gray value
+ * @param[out] deviation Standard deviation
+ */
+void Intensity(const QImage& image, double& mean, double& deviation);
+
+/**
+ * @brief Compute gray value entropy
+ *
+ * Equivalent to Halcon's entropy_gray operator.
+ *
+ * @param image Input grayscale image
+ * @return Entropy in bits
+ */
+double EntropyGray(const QImage& image);
+
+/**
+ * @brief Compute histogram percentile value
+ *
+ * @param image Input image
+ * @param percentile Percentile value (0-100)
+ * @return Gray value at specified percentile
+ */
+double GrayHistoPercentile(const QImage& image, double percentile);
+
+// =============================================================================
 // White Balance
 // =============================================================================
 

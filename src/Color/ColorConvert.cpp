@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace Qi::Vision::Color {
 
@@ -1083,6 +1084,212 @@ QImage EquHistoImage(const QImage& image) {
     }
 
     return result;
+}
+
+// =============================================================================
+// Histogram Analysis
+// =============================================================================
+
+void GrayHisto(const QImage& image,
+               std::vector<int64_t>& absoluteHisto,
+               std::vector<double>& relativeHisto) {
+    absoluteHisto.assign(256, 0);
+    relativeHisto.assign(256, 0.0);
+
+    if (image.Empty()) return;
+
+    int32_t w = image.Width();
+    int32_t h = image.Height();
+    int channels = image.Channels();
+    int64_t totalPixels = 0;
+
+    if (image.Type() == PixelType::UInt8) {
+        for (int32_t y = 0; y < h; ++y) {
+            const uint8_t* row = static_cast<const uint8_t*>(image.RowPtr(y));
+            for (int32_t x = 0; x < w; ++x) {
+                // For multi-channel, use first channel or compute luminance
+                uint8_t val = row[x * channels];
+                absoluteHisto[val]++;
+                totalPixels++;
+            }
+        }
+    }
+
+    if (totalPixels > 0) {
+        for (int i = 0; i < 256; ++i) {
+            relativeHisto[i] = static_cast<double>(absoluteHisto[i]) / totalPixels;
+        }
+    }
+}
+
+std::vector<int64_t> GrayHistoAbs(const QImage& image) {
+    std::vector<int64_t> absHisto;
+    std::vector<double> relHisto;
+    GrayHisto(image, absHisto, relHisto);
+    return absHisto;
+}
+
+void MinMaxGray(const QImage& image, double& minGray, double& maxGray, double& range) {
+    minGray = 255.0;
+    maxGray = 0.0;
+    range = 0.0;
+
+    if (image.Empty()) return;
+
+    int32_t w = image.Width();
+    int32_t h = image.Height();
+    int channels = image.Channels();
+
+    if (image.Type() == PixelType::UInt8) {
+        uint8_t minVal = 255, maxVal = 0;
+        for (int32_t y = 0; y < h; ++y) {
+            const uint8_t* row = static_cast<const uint8_t*>(image.RowPtr(y));
+            for (int32_t x = 0; x < w * channels; ++x) {
+                if (row[x] < minVal) minVal = row[x];
+                if (row[x] > maxVal) maxVal = row[x];
+            }
+        }
+        minGray = minVal;
+        maxGray = maxVal;
+    } else if (image.Type() == PixelType::UInt16) {
+        uint16_t minVal = 65535, maxVal = 0;
+        for (int32_t y = 0; y < h; ++y) {
+            const uint16_t* row = static_cast<const uint16_t*>(image.RowPtr(y));
+            for (int32_t x = 0; x < w * channels; ++x) {
+                if (row[x] < minVal) minVal = row[x];
+                if (row[x] > maxVal) maxVal = row[x];
+            }
+        }
+        minGray = minVal;
+        maxGray = maxVal;
+    } else if (image.Type() == PixelType::Float32) {
+        float minVal = std::numeric_limits<float>::max();
+        float maxVal = std::numeric_limits<float>::lowest();
+        for (int32_t y = 0; y < h; ++y) {
+            const float* row = static_cast<const float*>(image.RowPtr(y));
+            for (int32_t x = 0; x < w * channels; ++x) {
+                if (row[x] < minVal) minVal = row[x];
+                if (row[x] > maxVal) maxVal = row[x];
+            }
+        }
+        minGray = minVal;
+        maxGray = maxVal;
+    }
+
+    range = maxGray - minGray;
+}
+
+void Intensity(const QImage& image, double& mean, double& deviation) {
+    mean = 0.0;
+    deviation = 0.0;
+
+    if (image.Empty()) return;
+
+    int32_t w = image.Width();
+    int32_t h = image.Height();
+    int channels = image.Channels();
+    int64_t totalPixels = static_cast<int64_t>(w) * h * channels;
+
+    if (totalPixels == 0) return;
+
+    // First pass: compute mean
+    double sum = 0.0;
+    if (image.Type() == PixelType::UInt8) {
+        for (int32_t y = 0; y < h; ++y) {
+            const uint8_t* row = static_cast<const uint8_t*>(image.RowPtr(y));
+            for (int32_t x = 0; x < w * channels; ++x) {
+                sum += row[x];
+            }
+        }
+    } else if (image.Type() == PixelType::UInt16) {
+        for (int32_t y = 0; y < h; ++y) {
+            const uint16_t* row = static_cast<const uint16_t*>(image.RowPtr(y));
+            for (int32_t x = 0; x < w * channels; ++x) {
+                sum += row[x];
+            }
+        }
+    } else if (image.Type() == PixelType::Float32) {
+        for (int32_t y = 0; y < h; ++y) {
+            const float* row = static_cast<const float*>(image.RowPtr(y));
+            for (int32_t x = 0; x < w * channels; ++x) {
+                sum += row[x];
+            }
+        }
+    }
+
+    mean = sum / totalPixels;
+
+    // Second pass: compute standard deviation
+    double sumSqDiff = 0.0;
+    if (image.Type() == PixelType::UInt8) {
+        for (int32_t y = 0; y < h; ++y) {
+            const uint8_t* row = static_cast<const uint8_t*>(image.RowPtr(y));
+            for (int32_t x = 0; x < w * channels; ++x) {
+                double diff = row[x] - mean;
+                sumSqDiff += diff * diff;
+            }
+        }
+    } else if (image.Type() == PixelType::UInt16) {
+        for (int32_t y = 0; y < h; ++y) {
+            const uint16_t* row = static_cast<const uint16_t*>(image.RowPtr(y));
+            for (int32_t x = 0; x < w * channels; ++x) {
+                double diff = row[x] - mean;
+                sumSqDiff += diff * diff;
+            }
+        }
+    } else if (image.Type() == PixelType::Float32) {
+        for (int32_t y = 0; y < h; ++y) {
+            const float* row = static_cast<const float*>(image.RowPtr(y));
+            for (int32_t x = 0; x < w * channels; ++x) {
+                double diff = row[x] - mean;
+                sumSqDiff += diff * diff;
+            }
+        }
+    }
+
+    deviation = std::sqrt(sumSqDiff / totalPixels);
+}
+
+double EntropyGray(const QImage& image) {
+    if (image.Empty()) return 0.0;
+
+    std::vector<int64_t> absHisto;
+    std::vector<double> relHisto;
+    GrayHisto(image, absHisto, relHisto);
+
+    double entropy = 0.0;
+    for (int i = 0; i < 256; ++i) {
+        if (relHisto[i] > 0.0) {
+            entropy -= relHisto[i] * std::log2(relHisto[i]);
+        }
+    }
+
+    return entropy;
+}
+
+double GrayHistoPercentile(const QImage& image, double percentile) {
+    if (image.Empty()) return 0.0;
+
+    std::vector<int64_t> absHisto = GrayHistoAbs(image);
+
+    int64_t total = 0;
+    for (int i = 0; i < 256; ++i) {
+        total += absHisto[i];
+    }
+
+    if (total == 0) return 0.0;
+
+    int64_t target = static_cast<int64_t>(total * percentile / 100.0);
+    int64_t cumulative = 0;
+
+    for (int i = 0; i < 256; ++i) {
+        cumulative += absHisto[i];
+        if (cumulative >= target) {
+            return static_cast<double>(i);
+        }
+    }
+
+    return 255.0;
 }
 
 // =============================================================================
