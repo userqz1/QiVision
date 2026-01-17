@@ -54,6 +54,10 @@
         #include <X11/keysym.h>
         #include <unistd.h>
         #include <sys/time.h>
+        // X11 defines 'None' as a macro, which conflicts with ScaleMode::None
+        #ifdef None
+            #undef None
+        #endif
     #endif
 #endif
 
@@ -90,6 +94,13 @@ public:
     int32_t imageWidth_ = 0;
     int32_t imageHeight_ = 0;
 
+    // Auto-resize settings
+    bool autoResize_ = false;
+    int32_t maxWidth_ = 0;
+    int32_t maxHeight_ = 0;
+    int32_t screenWidth_ = 0;
+    int32_t screenHeight_ = 0;
+
     Impl(const std::string& title, int32_t width, int32_t height)
         : width_(width), height_(height), title_(title) {
 
@@ -99,6 +110,10 @@ public:
         }
 
         int screen = DefaultScreen(display_);
+
+        // Get screen size for auto-resize limits
+        screenWidth_ = DisplayWidth(display_, screen);
+        screenHeight_ = DisplayHeight(display_, screen);
 
         // If size not specified, use reasonable default
         if (width_ <= 0) width_ = 800;
@@ -172,6 +187,33 @@ public:
 
         int32_t srcWidth = image.Width();
         int32_t srcHeight = image.Height();
+
+        // Auto-resize window to fit image
+        if (autoResize_) {
+            int32_t maxW = (maxWidth_ > 0) ? maxWidth_ : (screenWidth_ - 100);
+            int32_t maxH = (maxHeight_ > 0) ? maxHeight_ : (screenHeight_ - 100);
+
+            int32_t newWidth = srcWidth;
+            int32_t newHeight = srcHeight;
+
+            // Scale down if image is larger than max size
+            if (newWidth > maxW || newHeight > maxH) {
+                double scaleW = static_cast<double>(maxW) / srcWidth;
+                double scaleH = static_cast<double>(maxH) / srcHeight;
+                double scale = std::min(scaleW, scaleH);
+                newWidth = static_cast<int32_t>(srcWidth * scale);
+                newHeight = static_cast<int32_t>(srcHeight * scale);
+            }
+
+            // Resize window if size changed
+            if (newWidth != width_ || newHeight != height_) {
+                width_ = newWidth;
+                height_ = newHeight;
+                XResizeWindow(display_, window_, width_, height_);
+                XFlush(display_);
+            }
+        }
+
         int32_t dstWidth = width_;
         int32_t dstHeight = height_;
 
@@ -212,8 +254,6 @@ public:
                 break;
         }
 
-        // Prepare 32-bit BGRA buffer for X11
-        buffer_.resize(dstWidth * dstHeight * 4);
         imageWidth_ = dstWidth;
         imageHeight_ = dstHeight;
 
@@ -221,48 +261,103 @@ public:
         size_t srcStride = image.Stride();
         int channels = image.Channels();
 
-        // Scale and convert to BGRA
-        for (int32_t dy = 0; dy < dstHeight; ++dy) {
-            int32_t sy = static_cast<int32_t>(dy / scaleY);
-            if (sy >= srcHeight) sy = srcHeight - 1;
-
-            for (int32_t dx = 0; dx < dstWidth; ++dx) {
-                int32_t sx = static_cast<int32_t>(dx / scaleX);
-                if (sx >= srcWidth) sx = srcWidth - 1;
-
-                uint8_t* dst = &buffer_[(dy * dstWidth + dx) * 4];
-
-                if (channels == 1) {
-                    uint8_t gray = srcData[sy * srcStride + sx];
-                    dst[0] = gray;  // B
-                    dst[1] = gray;  // G
-                    dst[2] = gray;  // R
-                    dst[3] = 255;   // A
-                } else if (channels == 3) {
-                    const uint8_t* src = &srcData[sy * srcStride + sx * 3];
-                    dst[0] = src[2];  // B
-                    dst[1] = src[1];  // G
-                    dst[2] = src[0];  // R
-                    dst[3] = 255;     // A
-                }
-            }
-        }
-
         // Create/update XImage
         if (ximage_) {
             ximage_->data = nullptr;
             XDestroyImage(ximage_);
+            ximage_ = nullptr;
         }
 
         int screen = DefaultScreen(display_);
         Visual* visual = DefaultVisual(display_, screen);
         int depth = DefaultDepth(display_, screen);
 
+        // First create XImage to get the proper bytes_per_line
         ximage_ = XCreateImage(
             display_, visual, depth, ZPixmap, 0,
-            reinterpret_cast<char*>(buffer_.data()),
-            dstWidth, dstHeight, 32, dstWidth * 4
+            nullptr,  // Don't set data yet
+            dstWidth, dstHeight, 32, 0  // Let X11 decide bytes_per_line
         );
+
+        if (!ximage_) return;
+
+        // Use X11's calculated bytes_per_line for proper alignment
+        int xStride = ximage_->bytes_per_line;
+        buffer_.resize(xStride * dstHeight);
+        std::memset(buffer_.data(), 0, buffer_.size());
+
+        // Scale with area averaging (box filter) for downscaling
+        // This prevents thin lines from disappearing when shrinking
+        bool useAreaAverage = (scaleX < 1.0 || scaleY < 1.0);
+
+        for (int32_t dy = 0; dy < dstHeight; ++dy) {
+            for (int32_t dx = 0; dx < dstWidth; ++dx) {
+                uint8_t* dst = &buffer_[dy * xStride + dx * 4];
+
+                if (useAreaAverage) {
+                    // Calculate the source region that maps to this destination pixel
+                    double srcX0 = dx / scaleX;
+                    double srcY0 = dy / scaleY;
+                    double srcX1 = (dx + 1) / scaleX;
+                    double srcY1 = (dy + 1) / scaleY;
+
+                    int32_t ix0 = static_cast<int32_t>(srcX0);
+                    int32_t iy0 = static_cast<int32_t>(srcY0);
+                    int32_t ix1 = std::min(static_cast<int32_t>(srcX1) + 1, srcWidth);
+                    int32_t iy1 = std::min(static_cast<int32_t>(srcY1) + 1, srcHeight);
+
+                    // Average all pixels in the source region
+                    double sumR = 0, sumG = 0, sumB = 0;
+                    int count = 0;
+
+                    for (int32_t sy = iy0; sy < iy1; ++sy) {
+                        for (int32_t sx = ix0; sx < ix1; ++sx) {
+                            if (channels == 1) {
+                                uint8_t gray = srcData[sy * srcStride + sx];
+                                sumR += gray;
+                                sumG += gray;
+                                sumB += gray;
+                            } else if (channels == 3) {
+                                const uint8_t* src = &srcData[sy * srcStride + sx * 3];
+                                sumR += src[0];
+                                sumG += src[1];
+                                sumB += src[2];
+                            }
+                            count++;
+                        }
+                    }
+
+                    if (count > 0) {
+                        dst[0] = static_cast<uint8_t>(sumB / count);  // B
+                        dst[1] = static_cast<uint8_t>(sumG / count);  // G
+                        dst[2] = static_cast<uint8_t>(sumR / count);  // R
+                        dst[3] = 255;
+                    }
+                } else {
+                    // Nearest neighbor for upscaling
+                    int32_t sx = static_cast<int32_t>(dx / scaleX);
+                    int32_t sy = static_cast<int32_t>(dy / scaleY);
+                    if (sx >= srcWidth) sx = srcWidth - 1;
+                    if (sy >= srcHeight) sy = srcHeight - 1;
+
+                    if (channels == 1) {
+                        uint8_t gray = srcData[sy * srcStride + sx];
+                        dst[0] = gray;  // B
+                        dst[1] = gray;  // G
+                        dst[2] = gray;  // R
+                        dst[3] = 255;   // A
+                    } else if (channels == 3) {
+                        const uint8_t* src = &srcData[sy * srcStride + sx * 3];
+                        dst[0] = src[2];  // B
+                        dst[1] = src[1];  // G
+                        dst[2] = src[0];  // R
+                        dst[3] = 255;     // A
+                    }
+                }
+            }
+        }
+
+        ximage_->data = reinterpret_cast<char*>(buffer_.data());
 
         // Clear window and draw image centered
         XClearWindow(display_, window_);
@@ -371,6 +466,16 @@ public:
             XFlush(display_);
         }
     }
+
+    void SetAutoResize(bool enable, int32_t maxWidth, int32_t maxHeight) {
+        autoResize_ = enable;
+        maxWidth_ = maxWidth;
+        maxHeight_ = maxHeight;
+    }
+
+    bool IsAutoResize() const {
+        return autoResize_;
+    }
 };
 
 #endif // QIVISION_PLATFORM_LINUX && QIVISION_HAS_X11
@@ -392,6 +497,13 @@ public:
     std::vector<uint8_t> buffer_;
     int32_t imageWidth_ = 0;
     int32_t imageHeight_ = 0;
+
+    // Auto-resize settings
+    bool autoResize_ = false;
+    int32_t maxWidth_ = 0;
+    int32_t maxHeight_ = 0;
+    int32_t screenWidth_ = 0;
+    int32_t screenHeight_ = 0;
 
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         Impl* impl = reinterpret_cast<Impl*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
@@ -435,6 +547,10 @@ public:
 
     Impl(const std::string& title, int32_t width, int32_t height)
         : width_(width), height_(height), title_(title) {
+
+        // Get screen size for auto-resize limits
+        screenWidth_ = GetSystemMetrics(SM_CXSCREEN);
+        screenHeight_ = GetSystemMetrics(SM_CYSCREEN);
 
         if (width_ <= 0) width_ = 800;
         if (height_ <= 0) height_ = 600;
@@ -508,6 +624,36 @@ public:
 
         int32_t srcWidth = image.Width();
         int32_t srcHeight = image.Height();
+
+        // Auto-resize window to fit image
+        if (autoResize_) {
+            int32_t maxW = (maxWidth_ > 0) ? maxWidth_ : (screenWidth_ - 100);
+            int32_t maxH = (maxHeight_ > 0) ? maxHeight_ : (screenHeight_ - 100);
+
+            int32_t newWidth = srcWidth;
+            int32_t newHeight = srcHeight;
+
+            // Scale down if image is larger than max size
+            if (newWidth > maxW || newHeight > maxH) {
+                double scaleW = static_cast<double>(maxW) / srcWidth;
+                double scaleH = static_cast<double>(maxH) / srcHeight;
+                double scale = std::min(scaleW, scaleH);
+                newWidth = static_cast<int32_t>(srcWidth * scale);
+                newHeight = static_cast<int32_t>(srcHeight * scale);
+            }
+
+            // Resize window if size changed
+            if (newWidth != width_ || newHeight != height_) {
+                width_ = newWidth;
+                height_ = newHeight;
+                RECT rect = {0, 0, width_, height_};
+                AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+                SetWindowPos(hwnd_, nullptr, 0, 0,
+                             rect.right - rect.left, rect.bottom - rect.top,
+                             SWP_NOMOVE | SWP_NOZORDER);
+            }
+        }
+
         int32_t dstWidth = width_;
         int32_t dstHeight = height_;
 
@@ -675,6 +821,16 @@ public:
             SetWindowPos(hwnd_, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
         }
     }
+
+    void SetAutoResize(bool enable, int32_t maxWidth, int32_t maxHeight) {
+        autoResize_ = enable;
+        maxWidth_ = maxWidth;
+        maxHeight_ = maxHeight;
+    }
+
+    bool IsAutoResize() const {
+        return autoResize_;
+    }
 };
 
 #endif // QIVISION_PLATFORM_WINDOWS
@@ -691,6 +847,7 @@ public:
     int32_t height_ = 0;
     bool isOpen_ = false;
     std::string title_;
+    bool autoResize_ = false;
 
     Impl(const std::string& title, int32_t width, int32_t height)
         : width_(width > 0 ? width : 800)
@@ -716,6 +873,8 @@ public:
     void SetTitle(const std::string& title) { title_ = title; }
     void Resize(int32_t width, int32_t height) { width_ = width; height_ = height; }
     void Move(int32_t /*x*/, int32_t /*y*/) {}
+    void SetAutoResize(bool enable, int32_t /*maxWidth*/, int32_t /*maxHeight*/) { autoResize_ = enable; }
+    bool IsAutoResize() const { return autoResize_; }
 };
 
 #endif // Stub implementation
@@ -767,6 +926,14 @@ void Window::GetSize(int32_t& width, int32_t& height) const {
 
 void Window::Move(int32_t x, int32_t y) {
     if (impl_) impl_->Move(x, y);
+}
+
+void Window::SetAutoResize(bool enable, int32_t maxWidth, int32_t maxHeight) {
+    if (impl_) impl_->SetAutoResize(enable, maxWidth, maxHeight);
+}
+
+bool Window::IsAutoResize() const {
+    return impl_ ? impl_->IsAutoResize() : false;
 }
 
 int32_t Window::ShowImage(const QImage& image, const std::string& title) {

@@ -1,9 +1,9 @@
 /**
- * @file 08_shape_match_large.cpp
- * @brief Shape matching test using Halcon-style API
+ * @file shape_match.cpp
+ * @brief Shape matching test using Halcon-style API with GUI display
  *
  * Tests both image1 (small) and image2 (large) directories
- * Outputs: template ROI, model edges, match results for all images
+ * Displays: template ROI, model edges, match results in GUI window
  */
 
 #include <QiVision/Core/QImage.h>
@@ -12,15 +12,23 @@
 #include <QiVision/Matching/MatchTypes.h>
 #include <QiVision/Platform/Timer.h>
 #include <QiVision/Platform/FileIO.h>
+#include <QiVision/GUI/Window.h>
 
 #include <iostream>
 #include <iomanip>
+#include <sstream>
 #include <cmath>
 #include <cstring>
+#include <thread>
+#include <chrono>
 
 using namespace Qi::Vision;
 using namespace Qi::Vision::Matching;
 using namespace Qi::Vision::Platform;
+using namespace Qi::Vision::GUI;
+
+// Display interval in milliseconds
+constexpr int32_t DISPLAY_INTERVAL_MS = 2000;
 
 // Convert to grayscale helper
 QImage ToGrayscale(const QImage& img) {
@@ -62,38 +70,50 @@ QImage ToRGB(const QImage& gray) {
     return colorImg;
 }
 
-// Save model visualization (ROI + edges)
-void SaveModelVisualization(const QImage& templateGray, const Rect2i& roi,
-                            const ShapeModel& model, const std::string& prefix) {
-    // Save template with ROI
+// Display model visualization (ROI + edges) in GUI window
+void DisplayModelVisualization(Window& win, const QImage& templateGray, const Rect2i& roi,
+                               const ShapeModel& model) {
+    // Display template with ROI
     QImage roiVis = ToRGB(templateGray);
     Draw::Rectangle(roiVis, roi.x, roi.y, roi.width, roi.height, Color::Green(), 2);
-    std::string roiPath = prefix + "_template_roi.bmp";
-    roiVis.SaveToFile(roiPath);
-    std::cout << "   Saved: " << roiPath << std::endl;
+
+    win.SetTitle("Template ROI");
+    win.DispImage(roiVis);
+    std::cout << "   Displaying template with ROI..." << std::endl;
+    win.WaitKey(DISPLAY_INTERVAL_MS);
 
     // Get model contours using Halcon-style API
     std::vector<double> contourRows, contourCols;
     GetShapeModelContours(model, 1, contourRows, contourCols);
 
-    // Save model edges on black background
-    QImage edgeImg(roi.width, roi.height, PixelType::UInt8, ChannelType::RGB);
+    // Display model edges on black background (scaled up for visibility)
+    int32_t scale = 4;  // Scale up small ROIs
+    QImage edgeImg(roi.width * scale, roi.height * scale, PixelType::UInt8, ChannelType::RGB);
     std::memset(edgeImg.Data(), 0, edgeImg.Height() * edgeImg.Stride());
 
     uint8_t* dst = static_cast<uint8_t*>(edgeImg.Data());
     for (size_t i = 0; i < contourRows.size(); ++i) {
-        int32_t px = static_cast<int32_t>(contourCols[i] + roi.width / 2);
-        int32_t py = static_cast<int32_t>(contourRows[i] + roi.height / 2);
-        if (px >= 0 && px < roi.width && py >= 0 && py < roi.height) {
-            size_t idx = py * edgeImg.Stride() + px * 3;
-            dst[idx + 0] = 0;
-            dst[idx + 1] = 255;
-            dst[idx + 2] = 0;
+        int32_t px = static_cast<int32_t>((contourCols[i] + roi.width / 2) * scale);
+        int32_t py = static_cast<int32_t>((contourRows[i] + roi.height / 2) * scale);
+        // Draw 3x3 point for visibility
+        for (int32_t dy = -1; dy <= 1; ++dy) {
+            for (int32_t dx = -1; dx <= 1; ++dx) {
+                int32_t x = px + dx;
+                int32_t y = py + dy;
+                if (x >= 0 && x < edgeImg.Width() && y >= 0 && y < edgeImg.Height()) {
+                    size_t idx = y * edgeImg.Stride() + x * 3;
+                    dst[idx + 0] = 0;
+                    dst[idx + 1] = 255;
+                    dst[idx + 2] = 0;
+                }
+            }
         }
     }
-    std::string edgePath = prefix + "_model_edges.bmp";
-    edgeImg.SaveToFile(edgePath);
-    std::cout << "   Saved: " << edgePath << " (" << contourRows.size() << " points)" << std::endl;
+
+    win.SetTitle("Model Edges (" + std::to_string(contourRows.size()) + " points)");
+    win.DispImage(edgeImg);
+    std::cout << "   Displaying model edges (" << contourRows.size() << " points)..." << std::endl;
+    win.WaitKey(DISPLAY_INTERVAL_MS);
 }
 
 // Draw match result on image
@@ -141,8 +161,8 @@ void DrawMatchResult(QImage& colorImg, double row, double col, double angle, dou
     Draw::Cross(colorImg, Point2d{col, row}, 15, angle, Color::Yellow(), 2);
 }
 
-// Test a set of images using Halcon-style API
-void TestImageSet(const std::string& name, const std::string& dataDir,
+// Test a set of images using Halcon-style API with GUI display
+void TestImageSet(Window& win, const std::string& name, const std::string& dataDir,
                   const std::string& outputPrefix,
                   const std::vector<std::string>& imageFiles,
                   const Rect2i& roi,
@@ -194,8 +214,8 @@ void TestImageSet(const std::string& name, const std::string& dataDir,
                         outScaleMin, outScaleMax, outScaleStep, outMetric);
     std::cout << "   Model levels: " << outNumLevels << std::endl;
 
-    // Save visualization
-    SaveModelVisualization(templateGray, roi, model, outputPrefix);
+    // Display visualization in GUI window
+    DisplayModelVisualization(win, templateGray, roi, model);
 
     // Get contours for drawing
     std::vector<double> contourRows, contourCols;
@@ -242,14 +262,38 @@ void TestImageSet(const std::string& name, const std::string& dataDir,
         std::cout << "      Time: " << std::setprecision(1) << searchTime << "ms" << std::endl;
         std::cout << "      Found: " << rows.size() << " matches" << std::endl;
 
-        // Save result image
+        // Display result image in GUI window
         QImage colorImg = ToRGB(searchGray);
         for (size_t j = 0; j < rows.size(); ++j) {
             DrawMatchResult(colorImg, rows[j], cols[j], angles[j], scores[j],
                            contourRows, contourCols, roi.width, roi.height);
         }
+
+        // Build title with match info
+        std::string title = imageFiles[i];
+        if (success) {
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(1)
+                << " - Score=" << scores[0]
+                << " Angle=" << DEG(angles[0]) << "deg";
+            title += oss.str();
+        } else {
+            title += " - NO MATCH";
+        }
+
+        win.SetTitle(title);
+        win.DispImage(colorImg);
+
+        // Save result image to file
         std::string outPath = outputPrefix + "_" + std::to_string(i+1) + ".bmp";
         colorImg.SaveToFile(outPath);
+
+        // Wait for key or timeout
+        int32_t key = win.WaitKey(DISPLAY_INTERVAL_MS);
+        if (key == 'q' || key == 'Q' || key == 27) {  // q or ESC to quit
+            std::cout << "\n   User quit." << std::endl;
+            return;
+        }
     }
 
     std::cout << "\n   Summary: " << successCount << "/" << imageFiles.size()
@@ -260,7 +304,13 @@ int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
 
-    std::cout << "=== QiVision Shape Matching - Halcon-style API Test ===" << std::endl;
+    std::cout << "=== QiVision Shape Matching - GUI Display Test ===" << std::endl;
+    std::cout << "Controls: Press 'q' or ESC to quit, any other key to continue" << std::endl;
+    std::cout << "Auto-advance: " << DISPLAY_INTERVAL_MS << "ms per image" << std::endl;
+
+    // Create single window with auto-resize enabled
+    Window win("Shape Match Test");
+    win.SetAutoResize(true);  // Window will auto-adjust to image size
 
     // =========================================================================
     // Test 1: Small Images (640x512) - XLDContour mode
@@ -276,9 +326,9 @@ int main(int argc, char* argv[]) {
 
         Rect2i smallROI(180, 100, 210, 70);
 
-        TestImageSet("Small Images (640x512)",
+        TestImageSet(win, "Small Images (640x512)",
                      "tests/data/matching/image1/",
-                     "tests/data/matching/image1_result/output",
+                     "tests/data/matching/image1/result",
                      smallImages, smallROI,
                      4,                      // numLevels
                      0, RAD(360), 0,         // angleStart, angleExtent, angleStep (0=auto)
@@ -311,9 +361,9 @@ int main(int argc, char* argv[]) {
 
         Rect2i largeROI(1065, 2720, 135, 200);
 
-        TestImageSet("Large Images (2048x4001)",
+        TestImageSet(win, "Large Images (2048x4001)",
                      "tests/data/matching/image2/",
-                     "tests/data/matching/image2_result/output",
+                     "tests/data/matching/image2/result",
                      largeImages, largeROI,
                      5,                             // numLevels
                      0, RAD(360), 0,                // angleStart, angleExtent, angleStep
@@ -405,9 +455,9 @@ int main(int argc, char* argv[]) {
         // ROI: (580, 340) to (650, 400) -> x=580, y=340, width=70, height=60
         Rect2i image3ROI(580, 340, 70, 60);
 
-        TestImageSet("Image3 (1280x1024) - 66 images",
+        TestImageSet(win, "Image3 (1280x1024) - 66 images",
                      "tests/data/matching/image3/",
-                     "tests/data/matching/image3_result/output",
+                     "tests/data/matching/image3/result",
                      image3Files, image3ROI,
                      4,                             // numLevels
                      0, RAD(360), 0,                // angleStart, angleExtent, angleStep
@@ -452,9 +502,9 @@ int main(int argc, char* argv[]) {
         // ROI: (266, 467) to (300, 496) -> x=266, y=467, width=34, height=29
         Rect2i image4ROI(266, 467, 34, 29);
 
-        TestImageSet("Image4 (Rotated) - 20 images",
+        TestImageSet(win, "Image4 (Rotated) - 20 images",
                      "tests/data/matching/image4/",
-                     "tests/data/matching/image4_result/output",
+                     "tests/data/matching/image4/result",
                      image4Files, image4ROI,
                      4,                             // numLevels
                      0, RAD(360), 0,                // angleStart, angleExtent, angleStep
@@ -468,5 +518,8 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "\n=== All Tests Complete ===" << std::endl;
+    std::cout << "Press any key to close..." << std::endl;
+    win.WaitKey(0);  // Wait indefinitely for final key press
+
     return 0;
 }

@@ -112,6 +112,19 @@ public:
      */
     void Move(int32_t x, int32_t y);
 
+    /**
+     * @brief Enable/disable auto-resize mode
+     * @param enable If true, window resizes to fit each image (with max size limit)
+     * @param maxWidth Maximum window width (0 = screen width)
+     * @param maxHeight Maximum window height (0 = screen height)
+     */
+    void SetAutoResize(bool enable, int32_t maxWidth = 0, int32_t maxHeight = 0);
+
+    /**
+     * @brief Check if auto-resize is enabled
+     */
+    bool IsAutoResize() const;
+
     // =========================================================================
     // Static convenience functions
     // =========================================================================

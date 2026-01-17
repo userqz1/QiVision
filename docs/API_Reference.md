@@ -1,7 +1,7 @@
 # QiVision 公开 API 参考手册
 
-> 版本: 0.1.0
-> 最后更新: 2026-01-15
+> 版本: 0.2.0
+> 最后更新: 2026-01-17
 > 命名空间: `Qi::Vision`
 
 ---
@@ -13,6 +13,9 @@
 3. [IO 模块](#3-io-模块) - 图像读写
 4. [Color 模块](#4-color-模块) - 颜色转换
 5. [Filter 模块](#5-filter-模块) - 图像滤波
+6. [Blob 模块](#6-blob-模块) - 区域分析
+7. [Display 模块](#7-display-模块) - 绘图原语
+8. [GUI 模块](#8-gui-模块) - 窗口显示
 
 ---
 
@@ -1615,6 +1618,792 @@ int32_t OptimalKernelSize(double sigma);
 
 ---
 
+## 6. Blob 模块
+
+**命名空间**: `Qi::Vision::Blob`
+**头文件**: `<QiVision/Blob/Blob.h>`
+
+区域分析和形状选择，兼容 Halcon 的 blob analysis 算子。
+
+### 6.1 类型定义
+
+```cpp
+// 形状特征
+enum class ShapeFeature {
+    Area,               // 区域面积（像素）
+    Row,                // 质心行坐标
+    Column,             // 质心列坐标
+    Width,              // 边界框宽度
+    Height,             // 边界框高度
+    Circularity,        // 圆形度: 4*pi*area/perimeter²
+    Compactness,        // 紧凑度: perimeter²/area
+    Convexity,          // 凸度: perimeter_convex/perimeter
+    Rectangularity,     // 矩形度: area/bbox_area
+    Elongation,         // 延伸度: major_axis/minor_axis
+    Orientation,        // 主轴角度 [rad]
+    Ra,                 // 等效椭圆长轴半径
+    Rb,                 // 等效椭圆短轴半径
+    Phi,                // 等效椭圆方向角
+    Anisometry,         // 各向异性: Ra/Rb
+    Bulkiness,          // 膨胀度: pi*Ra*Rb/area
+    StructureFactor,    // 结构因子: Anisometry*Bulkiness-1
+    OuterRadius,        // 最小外接圆半径
+    InnerRadius,        // 最大内接圆半径
+    Holes               // 孔洞数量
+};
+
+// 选择操作
+enum class SelectOperation {
+    And,    // 所有特征都在范围内
+    Or      // 任一特征在范围内
+};
+
+// 排序模式
+enum class SortMode {
+    None,               // 不排序
+    Area,               // 按面积排序
+    Row,                // 按质心行排序
+    Column,             // 按质心列排序
+    FirstPoint,         // 按首点排序
+    LastPoint           // 按末点排序
+};
+```
+
+---
+
+### 6.2 Connection
+
+连通域分析（提取连通组件）。
+
+```cpp
+// 从区域提取连通组件
+std::vector<QRegion> Connection(const QRegion& region);
+
+// 从二值图像提取连通组件
+std::vector<QRegion> Connection(
+    const QImage& binaryImage,
+    Connectivity connectivity = Connectivity::Eight  // Four 或 Eight
+);
+```
+
+**示例**:
+```cpp
+#include <QiVision/Blob/Blob.h>
+using namespace Qi::Vision::Blob;
+
+// 阈值分割
+QRegion binaryRegion = ThresholdToRegion(image, 128, 255);
+
+// 提取连通域
+auto blobs = Connection(binaryRegion);
+std::cout << "Found " << blobs.size() << " blobs\n";
+```
+
+---
+
+### 6.3 CountObj / SelectObj
+
+对象计数和选择。
+
+```cpp
+// 获取区域数量
+inline int32_t CountObj(const std::vector<QRegion>& regions);
+
+// 按索引选择区域（1-based，兼容 Halcon）
+QRegion SelectObj(const std::vector<QRegion>& regions, int32_t index);
+```
+
+**示例**:
+```cpp
+auto blobs = Connection(region);
+int32_t count = CountObj(blobs);       // 获取数量
+
+QRegion first = SelectObj(blobs, 1);   // 获取第 1 个（1-based）
+QRegion last = SelectObj(blobs, count); // 获取最后一个
+```
+
+---
+
+### 6.4 AreaCenter
+
+计算区域面积和质心。
+
+```cpp
+// 单个区域
+void AreaCenter(
+    const QRegion& region,
+    int64_t& area,      // [out] 面积（像素）
+    double& row,        // [out] 质心行
+    double& column      // [out] 质心列
+);
+
+// 多个区域
+void AreaCenter(
+    const std::vector<QRegion>& regions,
+    std::vector<int64_t>& areas,
+    std::vector<double>& rows,
+    std::vector<double>& columns
+);
+```
+
+**示例**:
+```cpp
+int64_t area;
+double row, col;
+AreaCenter(blob, area, row, col);
+
+printf("Area: %lld, Center: (%.2f, %.2f)\n", area, col, row);
+```
+
+---
+
+### 6.5 SmallestRectangle1 / SmallestRectangle2
+
+获取边界框。
+
+```cpp
+// 轴对齐边界框
+void SmallestRectangle1(
+    const QRegion& region,
+    int32_t& row1, int32_t& column1,    // [out] 左上角
+    int32_t& row2, int32_t& column2     // [out] 右下角
+);
+
+// 最小面积旋转边界框
+void SmallestRectangle2(
+    const QRegion& region,
+    double& row, double& column,        // [out] 中心
+    double& phi,                        // [out] 旋转角度 [rad]
+    double& length1, double& length2    // [out] 半轴长度
+);
+```
+
+---
+
+### 6.6 SmallestCircle
+
+获取最小外接圆。
+
+```cpp
+void SmallestCircle(
+    const QRegion& region,
+    double& row, double& column,        // [out] 圆心
+    double& radius                      // [out] 半径
+);
+```
+
+---
+
+### 6.7 形状特征函数
+
+```cpp
+// 圆形度 (0-1，1=完美圆形)
+double Circularity(const QRegion& region);
+
+// 紧凑度 (>=4*pi，圆形最小)
+double Compactness(const QRegion& region);
+
+// 凸度 (0-1)
+double Convexity(const QRegion& region);
+
+// 矩形度 (0-1，1=完美矩形)
+double Rectangularity(const QRegion& region);
+
+// 等效椭圆参数
+void EllipticAxis(
+    const QRegion& region,
+    double& ra,         // [out] 长轴半径
+    double& rb,         // [out] 短轴半径
+    double& phi         // [out] 方向角 [rad]
+);
+
+// 区域方向 [-pi/2, pi/2]
+double OrientationRegion(const QRegion& region);
+
+// 二阶中心矩
+void MomentsRegion2nd(
+    const QRegion& region,
+    double& m11, double& m20, double& m02,  // [out] 中心矩
+    double& ia, double& ib                  // [out] 惯性矩
+);
+
+// 偏心特征
+void Eccentricity(
+    const QRegion& region,
+    double& anisometry,     // [out] Ra/Rb
+    double& bulkiness,      // [out] pi*Ra*Rb/Area
+    double& structureFactor // [out] Anisometry*Bulkiness-1
+);
+```
+
+**示例**:
+```cpp
+double circ = Circularity(blob);
+if (circ > 0.9) {
+    printf("This is a circular blob!\n");
+}
+
+double ra, rb, phi;
+EllipticAxis(blob, ra, rb, phi);
+printf("Ellipse: Ra=%.2f, Rb=%.2f, Phi=%.2f°\n", ra, rb, DEG(phi));
+```
+
+---
+
+### 6.8 SelectShape
+
+按形状特征选择区域。
+
+```cpp
+// 使用枚举
+std::vector<QRegion> SelectShape(
+    const std::vector<QRegion>& regions,
+    ShapeFeature feature,
+    SelectOperation operation,
+    double minValue,
+    double maxValue
+);
+
+// 使用字符串（Halcon 兼容）
+std::vector<QRegion> SelectShape(
+    const std::vector<QRegion>& regions,
+    const std::string& feature,     // "area", "circularity", ...
+    const std::string& operation,   // "and" 或 "or"
+    double minValue,
+    double maxValue
+);
+
+// 快捷函数
+std::vector<QRegion> SelectShapeArea(
+    const std::vector<QRegion>& regions,
+    int64_t minArea, int64_t maxArea
+);
+
+std::vector<QRegion> SelectShapeCircularity(
+    const std::vector<QRegion>& regions,
+    double minCirc, double maxCirc
+);
+
+std::vector<QRegion> SelectShapeRectangularity(
+    const std::vector<QRegion>& regions,
+    double minRect, double maxRect
+);
+```
+
+**示例**:
+```cpp
+// 选择面积 > 100 的 blob
+auto large = SelectShape(blobs, ShapeFeature::Area,
+                         SelectOperation::And, 100, 999999);
+
+// 选择圆形 blob
+auto circular = SelectShape(large, ShapeFeature::Circularity,
+                           SelectOperation::And, 0.8, 1.0);
+
+// 或使用字符串
+auto selected = SelectShape(blobs, "area", "and", 100, 999999);
+```
+
+---
+
+### 6.9 SortRegion
+
+区域排序。
+
+```cpp
+// 使用枚举
+std::vector<QRegion> SortRegion(
+    const std::vector<QRegion>& regions,
+    SortMode mode,
+    bool ascending = true
+);
+
+// 使用字符串（Halcon 兼容）
+std::vector<QRegion> SortRegion(
+    const std::vector<QRegion>& regions,
+    const std::string& sortMode,    // "character", "first_point", ...
+    const std::string& order,       // "true" 或 "false"
+    const std::string& rowOrCol     // "row" 或 "column"
+);
+```
+
+---
+
+### 6.10 工具函数
+
+```cpp
+// 获取单个特征值
+double GetRegionFeature(const QRegion& region, ShapeFeature feature);
+
+// 获取多个区域的特征值
+std::vector<double> GetRegionFeatures(
+    const std::vector<QRegion>& regions,
+    ShapeFeature feature
+);
+
+// 特征名称转换
+ShapeFeature ParseShapeFeature(const std::string& name);
+std::string GetShapeFeatureName(ShapeFeature feature);
+```
+
+---
+
+## 7. Display 模块
+
+**命名空间**: `Qi::Vision`
+**头文件**: `<QiVision/Display/Display.h>`
+
+图像显示和绘图原语，用于调试和可视化。
+
+### 7.1 DrawColor
+
+绘图颜色类型。
+
+```cpp
+struct DrawColor {
+    uint8_t r = 255;
+    uint8_t g = 255;
+    uint8_t b = 255;
+
+    DrawColor();
+    DrawColor(uint8_t r, uint8_t g, uint8_t b);
+    DrawColor(uint8_t gray);  // 灰度
+
+    // 预定义颜色
+    static DrawColor Red();
+    static DrawColor Green();
+    static DrawColor Blue();
+    static DrawColor Yellow();
+    static DrawColor Cyan();
+    static DrawColor Magenta();
+    static DrawColor White();
+    static DrawColor Black();
+    static DrawColor Orange();
+};
+```
+
+---
+
+### 7.2 DispImage
+
+显示图像。
+
+```cpp
+// 显示图像（保存到临时文件并用系统查看器打开）
+bool DispImage(
+    const QImage& image,
+    const std::string& title = "image"
+);
+
+// 设置输出目录
+void SetDispOutputDir(const std::string& path);
+
+// 清理临时显示图像
+void CleanDispImages();
+```
+
+---
+
+### 7.3 DispLine
+
+绘制线段。
+
+```cpp
+// 坐标绘制
+void DispLine(
+    QImage& image,
+    double row1, double col1,       // 起点
+    double row2, double col2,       // 终点
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+
+// 从 Line2d 绘制
+void DispLine(
+    QImage& image,
+    const Line2d& line,
+    double length,
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+```
+
+---
+
+### 7.4 DispCircle / DispEllipse
+
+绘制圆和椭圆。
+
+```cpp
+// 圆形
+void DispCircle(
+    QImage& image,
+    double row, double column,      // 圆心
+    double radius,
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+
+void DispCircle(
+    QImage& image,
+    const Circle2d& circle,
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+
+// 椭圆
+void DispEllipse(
+    QImage& image,
+    double row, double column,      // 中心
+    double phi,                     // 方向角 [rad]
+    double ra, double rb,           // 半轴长度
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+
+void DispEllipse(
+    QImage& image,
+    const Ellipse2d& ellipse,
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+```
+
+---
+
+### 7.5 DispRectangle1 / DispRectangle2
+
+绘制矩形。
+
+```cpp
+// 轴对齐矩形
+void DispRectangle1(
+    QImage& image,
+    double row1, double col1,       // 左上角
+    double row2, double col2,       // 右下角
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+
+void DispRectangle1(
+    QImage& image,
+    const Rect2i& rect,
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+
+// 旋转矩形
+void DispRectangle2(
+    QImage& image,
+    double row, double column,      // 中心
+    double phi,                     // 旋转角度 [rad]
+    double length1, double length2, // 半边长
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+```
+
+---
+
+### 7.6 DispCross / DispArrow
+
+绘制标记。
+
+```cpp
+// 十字标记
+void DispCross(
+    QImage& image,
+    double row, double column,
+    int32_t size,                   // 十字臂长
+    double angle = 0.0,             // 旋转角度 [rad]
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+
+// 箭头
+void DispArrow(
+    QImage& image,
+    double row1, double col1,       // 起点
+    double row2, double col2,       // 终点（箭头尖端）
+    double headSize = 10.0,         // 箭头头部大小
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+```
+
+---
+
+### 7.7 DispPolygon / DispContour
+
+绘制多边形和轮廓。
+
+```cpp
+// 多边形
+void DispPolygon(
+    QImage& image,
+    const std::vector<double>& rows,
+    const std::vector<double>& cols,
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+
+// 单个轮廓
+void DispContour(
+    QImage& image,
+    const QContour& contour,
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+
+// 多个轮廓
+void DispContours(
+    QImage& image,
+    const QContourArray& contours,
+    const DrawColor& color = DrawColor::Green(),
+    int32_t thickness = 1
+);
+```
+
+---
+
+### 7.8 DispPoint / DispText
+
+绘制点和文字。
+
+```cpp
+// 单点
+void DispPoint(
+    QImage& image,
+    double row, double column,
+    const DrawColor& color = DrawColor::Green()
+);
+
+// 多点
+void DispPoints(
+    QImage& image,
+    const std::vector<double>& rows,
+    const std::vector<double>& cols,
+    const DrawColor& color = DrawColor::Green()
+);
+
+// 文字
+void DispText(
+    QImage& image,
+    double row, double column,
+    const std::string& text,
+    const DrawColor& color = DrawColor::Green(),
+    int32_t scale = 1
+);
+```
+
+---
+
+### 7.9 高级绘图函数
+
+```cpp
+// 绘制匹配结果（十字 + 角度指示器）
+void DispMatchResult(
+    QImage& image,
+    double row, double column,
+    double angle,                   // 匹配角度 [rad]
+    double score = 1.0,
+    const DrawColor& color = DrawColor::Green(),
+    int32_t markerSize = 20
+);
+
+// 绘制边缘测量结果
+void DispEdgeResult(
+    QImage& image,
+    double row, double column,
+    const DrawColor& color = DrawColor::Green(),
+    int32_t markerSize = 5
+);
+```
+
+---
+
+### 7.10 图像转换工具
+
+```cpp
+// 灰度转 RGB（用于彩色绘图）
+QImage GrayToRgb(const QImage& gray);
+
+// 准备绘图（灰度自动转 RGB）
+QImage PrepareForDrawing(const QImage& image);
+```
+
+**示例**:
+```cpp
+#include <QiVision/Display/Display.h>
+using namespace Qi::Vision;
+
+// 准备图像
+QImage display = PrepareForDrawing(grayImage);
+
+// 绘制匹配结果
+for (size_t i = 0; i < rows.size(); ++i) {
+    DispMatchResult(display, rows[i], cols[i], angles[i], scores[i],
+                   DrawColor::Green(), 30);
+}
+
+// 绘制测量区域
+DispRectangle2(display, rect.row, rect.col, rect.phi,
+              rect.length1, rect.length2, DrawColor::Yellow(), 2);
+
+// 保存结果
+IO::WriteImage(display, "result.png");
+```
+
+---
+
+## 8. GUI 模块
+
+**命名空间**: `Qi::Vision::GUI`
+**头文件**: `<QiVision/GUI/Window.h>`
+
+轻量级 GUI 窗口，用于图像显示和调试。
+
+**平台支持**:
+- Linux: X11 (Xlib)
+- Windows: Win32 GDI
+
+### 8.1 ScaleMode
+
+图像缩放模式。
+
+```cpp
+enum class ScaleMode {
+    None,       // 不缩放 (1:1 像素)
+    Fit,        // 适应窗口（保持宽高比）
+    Fill,       // 填充窗口（可能裁剪）
+    Stretch     // 拉伸至窗口大小（忽略宽高比）
+};
+```
+
+---
+
+### 8.2 Window 类
+
+窗口类。
+
+```cpp
+class Window {
+public:
+    // 构造函数
+    Window(
+        const std::string& title = "QiVision",
+        int32_t width = 0,      // 0 = 自动（从首张图像获取）
+        int32_t height = 0
+    );
+
+    ~Window();
+
+    // 禁止拷贝，允许移动
+    Window(const Window&) = delete;
+    Window& operator=(const Window&) = delete;
+    Window(Window&& other) noexcept;
+    Window& operator=(Window&& other) noexcept;
+
+    // 显示图像
+    void DispImage(
+        const QImage& image,
+        ScaleMode scaleMode = ScaleMode::Fit
+    );
+
+    // 等待按键
+    int32_t WaitKey(
+        int32_t timeoutMs = 0   // 0 = 永久等待，-1 = 不等待
+    );  // 返回按键码，超时/关闭返回 -1
+
+    // 窗口状态
+    bool IsOpen() const;
+    void Close();
+
+    // 窗口属性
+    void SetTitle(const std::string& title);
+    void Resize(int32_t width, int32_t height);
+    void GetSize(int32_t& width, int32_t& height) const;
+    void Move(int32_t x, int32_t y);
+
+    // 静态便捷函数
+    static int32_t ShowImage(
+        const QImage& image,
+        const std::string& title = "QiVision"
+    );
+
+    static int32_t ShowImage(
+        const QImage& image,
+        const std::string& title,
+        int32_t timeoutMs
+    );
+};
+```
+
+**示例**:
+```cpp
+#include <QiVision/GUI/Window.h>
+using namespace Qi::Vision::GUI;
+
+// 创建窗口
+Window win("Debug", 800, 600);
+
+// 显示图像
+win.DispImage(image);
+
+// 等待任意键
+win.WaitKey();
+
+// 带超时的循环显示
+while (win.WaitKey(30) != 'q') {
+    win.DispImage(processedImage);
+}
+
+// 快速显示（静态方法）
+Window::ShowImage(image, "Preview");
+```
+
+---
+
+### 8.3 便捷全局函数
+
+Halcon 风格的全局函数。
+
+```cpp
+// 显示图像（自动创建/复用窗口）
+void DispImage(
+    const QImage& image,
+    const std::string& windowName = "QiVision"
+);
+
+// 等待按键（任意窗口）
+int32_t WaitKey(int32_t timeoutMs = 0);
+
+// 关闭指定窗口
+void CloseWindow(const std::string& windowName);
+
+// 关闭所有窗口
+void CloseAllWindows();
+```
+
+**示例**:
+```cpp
+#include <QiVision/GUI/Window.h>
+using namespace Qi::Vision::GUI;
+
+// 使用全局函数（简化用法）
+DispImage(image1, "Window1");
+DispImage(image2, "Window2");
+
+// 等待按键
+int key = WaitKey();
+
+// 关闭窗口
+CloseWindow("Window1");
+CloseAllWindows();
+```
+
+---
+
 ## 附录
 
 ### A. 像素类型
@@ -1662,5 +2451,6 @@ enum class ChannelType {
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 0.2.0 | 2026-01-17 | 添加 Blob, Display, GUI 模块文档 |
 | 0.1.0 | 2026-01-15 | 初始版本：Matching, Measure, IO, Color, Filter |
 
