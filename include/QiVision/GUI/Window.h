@@ -36,12 +36,12 @@ enum class ScaleMode {
  * Example usage:
  * @code
  * Window win("Debug", 800, 600);
- * win.Show(image);
+ * win.DispImage(image);
  * win.WaitKey();  // Wait for any key
  *
  * // Or with timeout
  * while (win.WaitKey(30) != 'q') {
- *     win.Show(processedImage);
+ *     win.DispImage(processedImage);
  * }
  * @endcode
  */
@@ -73,7 +73,7 @@ public:
      * @param image Image to display (grayscale or RGB)
      * @param scaleMode How to scale the image
      */
-    void Show(const QImage& image, ScaleMode scaleMode = ScaleMode::Fit);
+    void DispImage(const QImage& image, ScaleMode scaleMode = ScaleMode::Fit);
 
     /**
      * @brief Wait for a key press

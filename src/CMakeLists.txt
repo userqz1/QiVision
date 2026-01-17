@@ -195,18 +195,49 @@ if(QIVISION_ENABLE_OPENMP)
     endif()
 endif()
 
-# X11 for GUI on Linux (optional)
-if(UNIX AND NOT APPLE)
+# =============================================================================
+# Platform-specific GUI support
+# =============================================================================
+
+if(WIN32)
+    # Windows: Win32 GDI (built-in, no extra libs needed)
+    message(STATUS "Platform: Windows - GUI support enabled (Win32 GDI)")
+
+elseif(APPLE)
+    # macOS: Cocoa support (optional, requires .mm compilation)
+    # Currently using stub - full Cocoa support requires Window.mm
+    message(STATUS "Platform: macOS/iOS - GUI stub (Cocoa requires .mm)")
+    target_compile_definitions(QiVision PRIVATE QIVISION_NO_GUI)
+    # Future: Enable Cocoa support
+    # find_library(COCOA_LIBRARY Cocoa)
+    # find_library(APPKIT_LIBRARY AppKit)
+    # if(COCOA_LIBRARY)
+    #     target_link_libraries(QiVision PRIVATE ${COCOA_LIBRARY})
+    #     target_compile_definitions(QiVision PRIVATE QIVISION_HAS_COCOA)
+    # endif()
+
+elseif(ANDROID)
+    # Android: GUI requires Java layer (Activity/View)
+    message(STATUS "Platform: Android - GUI stub (requires Java layer)")
+    target_compile_definitions(QiVision PRIVATE QIVISION_NO_GUI)
+
+elseif(UNIX)
+    # Linux: X11 (optional)
     find_package(X11 QUIET)
     if(X11_FOUND)
         target_link_libraries(QiVision PRIVATE ${X11_LIBRARIES})
         target_include_directories(QiVision PRIVATE ${X11_INCLUDE_DIR})
         target_compile_definitions(QiVision PRIVATE QIVISION_HAS_X11)
-        message(STATUS "X11 found - GUI support enabled")
+        message(STATUS "Platform: Linux - GUI support enabled (X11)")
     else()
-        message(STATUS "X11 not found - GUI support disabled (stub implementation)")
+        message(STATUS "Platform: Linux - GUI stub (X11 not found)")
         target_compile_definitions(QiVision PRIVATE QIVISION_NO_GUI)
     endif()
+
+else()
+    # Unknown platform
+    message(STATUS "Platform: Unknown - GUI stub")
+    target_compile_definitions(QiVision PRIVATE QIVISION_NO_GUI)
 endif()
 
 # Compiler definitions

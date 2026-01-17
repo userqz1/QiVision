@@ -2,8 +2,12 @@
  * @file Window.cpp
  * @brief Cross-platform window implementation
  *
- * Linux: X11 (Xlib)
- * Windows: Win32 GDI
+ * Supported platforms:
+ * - Linux: X11 (Xlib)
+ * - Windows: Win32 GDI
+ * - macOS: Cocoa (AppKit) - requires .mm compilation
+ * - Android: Stub (GUI requires Java layer)
+ * - iOS: Stub (GUI requires Swift/ObjC layer)
  */
 
 #include <QiVision/GUI/Window.h>
@@ -13,13 +17,35 @@
 #include <mutex>
 #include <cstring>
 
-// Platform-specific includes
+// =============================================================================
+// Platform detection
+// =============================================================================
+
 #if defined(_WIN32) || defined(_WIN64)
     #define QIVISION_PLATFORM_WINDOWS
     #ifndef WIN32_LEAN_AND_MEAN
         #define WIN32_LEAN_AND_MEAN
     #endif
     #include <windows.h>
+
+#elif defined(__APPLE__)
+    #include <TargetConditionals.h>
+    #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+        #define QIVISION_PLATFORM_IOS
+        // iOS: GUI requires Swift/ObjC layer, use stub
+    #else
+        #define QIVISION_PLATFORM_MACOS
+        #ifdef QIVISION_HAS_COCOA
+            // macOS with Cocoa support (requires .mm compilation)
+            #import <Cocoa/Cocoa.h>
+        #endif
+    #endif
+
+#elif defined(__ANDROID__)
+    #define QIVISION_PLATFORM_ANDROID
+    // Android: GUI requires Java layer (Activity/View), use stub
+    // Native code can use ANativeWindow but cannot create windows
+
 #elif defined(__linux__)
     #define QIVISION_PLATFORM_LINUX
     #ifdef QIVISION_HAS_X11
@@ -706,7 +732,7 @@ Window::~Window() = default;
 Window::Window(Window&& other) noexcept = default;
 Window& Window::operator=(Window&& other) noexcept = default;
 
-void Window::Show(const QImage& image, ScaleMode scaleMode) {
+void Window::DispImage(const QImage& image, ScaleMode scaleMode) {
     if (impl_) impl_->Show(image, scaleMode);
 }
 
@@ -745,13 +771,13 @@ void Window::Move(int32_t x, int32_t y) {
 
 int32_t Window::ShowImage(const QImage& image, const std::string& title) {
     Window win(title, image.Width(), image.Height());
-    win.Show(image);
+    win.DispImage(image);
     return win.WaitKey();
 }
 
 int32_t Window::ShowImage(const QImage& image, const std::string& title, int32_t timeoutMs) {
     Window win(title, image.Width(), image.Height());
-    win.Show(image);
+    win.DispImage(image);
     return win.WaitKey(timeoutMs);
 }
 
@@ -767,7 +793,7 @@ void DispImage(const QImage& image, const std::string& windowName) {
         auto win = std::make_unique<Window>(windowName, image.Width(), image.Height());
         it = g_windows.emplace(windowName, std::move(win)).first;
     }
-    it->second->Show(image);
+    it->second->DispImage(image);
 }
 
 int32_t WaitKey(int32_t timeoutMs) {

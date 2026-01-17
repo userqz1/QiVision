@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-16 (GUI 模块实现)
+> 最后更新: 2026-01-17 (GUI 多平台支持)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -182,7 +182,7 @@ Tests    █████████████████░░░ 87%
 | **Color/ColorConvert.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 颜色转换 (RGB/HSV/Lab/YCrCb) |
 | **Filter/Filter.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 图像滤波 (Gauss/Mean/Median/Sobel) |
 | **Display/Display.h** | ✅ | ✅ | ⬜ | - | ⬜ | **P0** | 图像显示与绘制 (Halcon 风格 API) |
-| **GUI/Window.h** | ✅ | ✅ | ⬜ | - | ⬜ | **P0** | 窗口调试 (X11/Win32, stub for WSL) |
+| **GUI/Window.h** | ✅ | ✅ | ⬜ | - | ⬜ | **P0** | 窗口调试 (Win32/X11, macOS/Android stub) |
 | Blob/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | Blob 分析 |
 | Edge/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | 2D 边缘检测 |
 | Transform/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | 几何变换 |
@@ -245,6 +245,14 @@ Tests    █████████████████░░░ 87%
 ---
 
 ## 变更日志
+
+### 2026-01-17 (GUI 多平台支持)
+- **GUI/Window.cpp 平台扩展**
+  - 添加平台检测: Windows, macOS, iOS, Android, Linux
+  - Windows: Win32 GDI 完整实现
+  - Linux: X11 完整实现
+  - macOS/iOS/Android: Stub 实现 (Cocoa/Swift/Java 层需要单独集成)
+  - CMakeLists.txt 更新: 平台条件编译和消息输出
 
 ### 2026-01-16 (GUI 模块实现)
 
