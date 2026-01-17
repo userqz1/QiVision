@@ -192,6 +192,69 @@ void SmallestCircle(const QRegion& region,
                      double& row, double& column, double& radius);
 
 /**
+ * @brief Get largest inscribed circle (inner circle)
+ *
+ * Equivalent to Halcon's inner_circle operator.
+ * Uses distance transform to find the point furthest from the boundary.
+ *
+ * @param region Input region
+ * @param[out] row Circle center row
+ * @param[out] column Circle center column
+ * @param[out] radius Circle radius
+ */
+void InnerCircle(const QRegion& region,
+                  double& row, double& column, double& radius);
+
+/**
+ * @brief Compute region contour length (perimeter)
+ *
+ * Equivalent to Halcon's contlength operator.
+ *
+ * @param region Input region
+ * @return Contour length in pixels
+ */
+double ContourLength(const QRegion& region);
+
+/**
+ * @brief Count number of holes in a region
+ *
+ * Equivalent to Halcon's connect_and_holes / euler_number.
+ *
+ * @param region Input region
+ * @return Number of holes (0 if no holes)
+ */
+int32_t CountHoles(const QRegion& region);
+
+/**
+ * @brief Get the Euler number of a region
+ *
+ * Euler number = #connected_components - #holes
+ * For a single region without holes, Euler = 1
+ *
+ * @param region Input region
+ * @return Euler number
+ */
+int32_t EulerNumber(const QRegion& region);
+
+/**
+ * @brief Fill holes in a region
+ *
+ * Equivalent to Halcon's fill_up operator.
+ *
+ * @param region Input region
+ * @return Region with holes filled
+ */
+QRegion FillUp(const QRegion& region);
+
+/**
+ * @brief Get the holes of a region
+ *
+ * @param region Input region
+ * @return Vector of hole regions
+ */
+std::vector<QRegion> GetHoles(const QRegion& region);
+
+/**
  * @brief Compute region circularity
  *
  * Equivalent to Halcon's circularity operator.
@@ -353,6 +416,63 @@ std::vector<QRegion> SelectShapeCircularity(const std::vector<QRegion>& regions,
 std::vector<QRegion> SelectShapeRectangularity(const std::vector<QRegion>& regions,
                                                 double minRect,
                                                 double maxRect);
+
+/**
+ * @brief Select regions by standard deviation of shape features
+ *
+ * Equivalent to Halcon's select_shape_std operator.
+ * Selects regions whose feature value is within N standard deviations of the mean.
+ *
+ * @param regions Input regions
+ * @param feature Feature to analyze
+ * @param deviationFactor Number of standard deviations (e.g., 1.0, 2.0)
+ * @return Selected regions
+ */
+std::vector<QRegion> SelectShapeStd(const std::vector<QRegion>& regions,
+                                     ShapeFeature feature,
+                                     double deviationFactor);
+
+/**
+ * @brief Select regions by multiple features
+ *
+ * @param regions Input regions
+ * @param features Vector of features
+ * @param operation "and" = all must match, "or" = any must match
+ * @param minValues Minimum values for each feature
+ * @param maxValues Maximum values for each feature
+ * @return Selected regions
+ */
+std::vector<QRegion> SelectShapeMulti(const std::vector<QRegion>& regions,
+                                       const std::vector<ShapeFeature>& features,
+                                       SelectOperation operation,
+                                       const std::vector<double>& minValues,
+                                       const std::vector<double>& maxValues);
+
+/**
+ * @brief Select regions by convexity
+ */
+std::vector<QRegion> SelectShapeConvexity(const std::vector<QRegion>& regions,
+                                           double minConvex,
+                                           double maxConvex);
+
+/**
+ * @brief Select regions by elongation
+ */
+std::vector<QRegion> SelectShapeElongation(const std::vector<QRegion>& regions,
+                                            double minElong,
+                                            double maxElong);
+
+/**
+ * @brief Select the N largest/smallest regions by area
+ *
+ * @param regions Input regions
+ * @param n Number of regions to select
+ * @param largest If true, select largest; if false, select smallest
+ * @return Selected regions
+ */
+std::vector<QRegion> SelectShapeProto(const std::vector<QRegion>& regions,
+                                       int32_t n,
+                                       bool largest = true);
 
 // =============================================================================
 // Region Sorting

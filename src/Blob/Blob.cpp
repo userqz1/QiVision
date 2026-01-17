@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <unordered_map>
 
 namespace Qi::Vision::Blob {
@@ -286,10 +287,13 @@ double GetRegionFeature(const QRegion& region, ShapeFeature feature) {
             auto circle = Internal::ComputeMinEnclosingCircle(region);
             return circle.radius;
         }
-        case ShapeFeature::InnerRadius:
-            return 0.0; // TODO: implement inscribed circle
+        case ShapeFeature::InnerRadius: {
+            double row, col, radius;
+            InnerCircle(region, row, col, radius);
+            return radius;
+        }
         case ShapeFeature::Holes:
-            return 0.0; // TODO: implement hole counting
+            return static_cast<double>(CountHoles(region));
         default:
             return 0.0;
     }
@@ -490,6 +494,331 @@ std::vector<QRegion> SortRegion(const std::vector<QRegion>& regions,
     bool ascending = (lowerOrder != "false" && lowerOrder != "descending");
 
     return SortRegion(regions, mode, ascending);
+}
+
+// =============================================================================
+// New Region Features
+// =============================================================================
+
+void InnerCircle(const QRegion& region,
+                  double& row, double& column, double& radius) {
+    if (region.Empty()) {
+        row = column = radius = 0.0;
+        return;
+    }
+
+    // Get bounding box
+    Rect2i bbox = Internal::ComputeBoundingBox(region);
+    if (bbox.width <= 0 || bbox.height <= 0) {
+        row = column = radius = 0.0;
+        return;
+    }
+
+    // Convert region to binary image
+    QImage binary(bbox.width, bbox.height, PixelType::UInt8, ChannelType::Gray);
+    std::memset(binary.Data(), 0, binary.Height() * binary.Stride());
+
+    uint8_t* data = static_cast<uint8_t*>(binary.Data());
+    size_t stride = binary.Stride();
+
+    for (const auto& run : region.Runs()) {
+        int32_t y = run.row - bbox.y;
+        if (y < 0 || y >= bbox.height) continue;
+        int32_t x0 = std::max(0, run.colBegin - bbox.x);
+        int32_t x1 = std::min(bbox.width - 1, run.colEnd - bbox.x);
+        for (int32_t x = x0; x <= x1; ++x) {
+            data[y * stride + x] = 255;
+        }
+    }
+
+    // Compute distance transform (simple L2 approximation using chamfer 3-4)
+    std::vector<float> dist(bbox.width * bbox.height, 0.0f);
+
+    // Initialize: 0 for foreground, infinity for background
+    const float INF = 1e9f;
+    for (int32_t y = 0; y < bbox.height; ++y) {
+        for (int32_t x = 0; x < bbox.width; ++x) {
+            dist[y * bbox.width + x] = (data[y * stride + x] > 0) ? INF : 0.0f;
+        }
+    }
+
+    // Forward pass
+    for (int32_t y = 0; y < bbox.height; ++y) {
+        for (int32_t x = 0; x < bbox.width; ++x) {
+            float& d = dist[y * bbox.width + x];
+            if (x > 0) d = std::min(d, dist[y * bbox.width + (x-1)] + 1.0f);
+            if (y > 0) d = std::min(d, dist[(y-1) * bbox.width + x] + 1.0f);
+            if (x > 0 && y > 0) d = std::min(d, dist[(y-1) * bbox.width + (x-1)] + 1.414f);
+            if (x < bbox.width-1 && y > 0) d = std::min(d, dist[(y-1) * bbox.width + (x+1)] + 1.414f);
+        }
+    }
+
+    // Backward pass
+    for (int32_t y = bbox.height - 1; y >= 0; --y) {
+        for (int32_t x = bbox.width - 1; x >= 0; --x) {
+            float& d = dist[y * bbox.width + x];
+            if (x < bbox.width-1) d = std::min(d, dist[y * bbox.width + (x+1)] + 1.0f);
+            if (y < bbox.height-1) d = std::min(d, dist[(y+1) * bbox.width + x] + 1.0f);
+            if (x < bbox.width-1 && y < bbox.height-1)
+                d = std::min(d, dist[(y+1) * bbox.width + (x+1)] + 1.414f);
+            if (x > 0 && y < bbox.height-1)
+                d = std::min(d, dist[(y+1) * bbox.width + (x-1)] + 1.414f);
+        }
+    }
+
+    // Find maximum distance (center of inscribed circle)
+    float maxDist = 0.0f;
+    int32_t maxX = 0, maxY = 0;
+    for (int32_t y = 0; y < bbox.height; ++y) {
+        for (int32_t x = 0; x < bbox.width; ++x) {
+            if (dist[y * bbox.width + x] > maxDist) {
+                maxDist = dist[y * bbox.width + x];
+                maxX = x;
+                maxY = y;
+            }
+        }
+    }
+
+    row = maxY + bbox.y;
+    column = maxX + bbox.x;
+    radius = maxDist;
+}
+
+double ContourLength(const QRegion& region) {
+    if (region.Empty()) return 0.0;
+    auto features = Internal::ComputeBasicFeatures(region);
+    return features.perimeter;
+}
+
+int32_t CountHoles(const QRegion& region) {
+    if (region.Empty()) return 0;
+
+    // Fill the region and count the difference
+    QRegion filled = FillUp(region);
+    int64_t filledArea = Internal::ComputeArea(filled);
+    int64_t originalArea = Internal::ComputeArea(region);
+
+    if (filledArea == originalArea) return 0;
+
+    // Get holes and count connected components
+    auto holes = GetHoles(region);
+    return static_cast<int32_t>(holes.size());
+}
+
+int32_t EulerNumber(const QRegion& region) {
+    // Euler number = 1 - number_of_holes (for a single connected region)
+    return 1 - CountHoles(region);
+}
+
+QRegion FillUp(const QRegion& region) {
+    if (region.Empty()) return region;
+
+    // Get bounding box
+    Rect2i bbox = Internal::ComputeBoundingBox(region);
+
+    // Create binary image with padding
+    int32_t padW = bbox.width + 2;
+    int32_t padH = bbox.height + 2;
+
+    QImage binary(padW, padH, PixelType::UInt8, ChannelType::Gray);
+    std::memset(binary.Data(), 0, binary.Height() * binary.Stride());
+
+    uint8_t* data = static_cast<uint8_t*>(binary.Data());
+    size_t stride = binary.Stride();
+
+    // Fill region (with offset for padding)
+    for (const auto& run : region.Runs()) {
+        int32_t y = run.row - bbox.y + 1;
+        if (y < 0 || y >= padH) continue;
+        int32_t x0 = std::max(0, run.colBegin - bbox.x + 1);
+        int32_t x1 = std::min(padW - 1, run.colEnd - bbox.x + 1);
+        for (int32_t x = x0; x <= x1; ++x) {
+            data[y * stride + x] = 255;
+        }
+    }
+
+    // Flood fill from corners (mark exterior as 128)
+    std::vector<std::pair<int32_t, int32_t>> stack;
+    stack.push_back({0, 0});
+
+    while (!stack.empty()) {
+        auto [x, y] = stack.back();
+        stack.pop_back();
+
+        if (x < 0 || x >= padW || y < 0 || y >= padH) continue;
+        if (data[y * stride + x] != 0) continue;
+
+        data[y * stride + x] = 128;
+        stack.push_back({x + 1, y});
+        stack.push_back({x - 1, y});
+        stack.push_back({x, y + 1});
+        stack.push_back({x, y - 1});
+    }
+
+    // Anything still 0 is a hole - fill it
+    for (int32_t y = 1; y < padH - 1; ++y) {
+        for (int32_t x = 1; x < padW - 1; ++x) {
+            if (data[y * stride + x] == 0) {
+                data[y * stride + x] = 255;  // Fill hole
+            }
+        }
+    }
+
+    // Convert back to region
+    std::vector<QRegion::Run> runs;
+    for (int32_t y = 1; y < padH - 1; ++y) {
+        int32_t runStart = -1;
+        for (int32_t x = 1; x < padW - 1; ++x) {
+            if (data[y * stride + x] == 255) {
+                if (runStart < 0) runStart = x;
+            } else {
+                if (runStart >= 0) {
+                    runs.push_back({y - 1 + bbox.y, runStart - 1 + bbox.x, x - 2 + bbox.x});
+                    runStart = -1;
+                }
+            }
+        }
+        if (runStart >= 0) {
+            runs.push_back({y - 1 + bbox.y, runStart - 1 + bbox.x, padW - 3 + bbox.x});
+        }
+    }
+
+    return QRegion(std::move(runs));
+}
+
+std::vector<QRegion> GetHoles(const QRegion& region) {
+    if (region.Empty()) return {};
+
+    QRegion filled = FillUp(region);
+    int64_t filledArea = Internal::ComputeArea(filled);
+    int64_t originalArea = Internal::ComputeArea(region);
+
+    if (filledArea == originalArea) return {};
+
+    // Compute difference: filled - original
+    QRegion holes = filled.Difference(region);
+    if (holes.Empty()) return {};
+
+    // Find connected components of holes
+    return Connection(holes);
+}
+
+// =============================================================================
+// Additional Selection Functions
+// =============================================================================
+
+std::vector<QRegion> SelectShapeStd(const std::vector<QRegion>& regions,
+                                     ShapeFeature feature,
+                                     double deviationFactor) {
+    if (regions.empty() || deviationFactor <= 0) return {};
+
+    // Compute feature values
+    std::vector<double> values = GetRegionFeatures(regions, feature);
+
+    // Compute mean
+    double sum = 0.0;
+    for (double v : values) sum += v;
+    double mean = sum / values.size();
+
+    // Compute standard deviation
+    double sqSum = 0.0;
+    for (double v : values) sqSum += (v - mean) * (v - mean);
+    double stdDev = std::sqrt(sqSum / values.size());
+
+    // Select regions within range
+    double minVal = mean - deviationFactor * stdDev;
+    double maxVal = mean + deviationFactor * stdDev;
+
+    std::vector<QRegion> result;
+    for (size_t i = 0; i < regions.size(); ++i) {
+        if (values[i] >= minVal && values[i] <= maxVal) {
+            result.push_back(regions[i]);
+        }
+    }
+
+    return result;
+}
+
+std::vector<QRegion> SelectShapeMulti(const std::vector<QRegion>& regions,
+                                       const std::vector<ShapeFeature>& features,
+                                       SelectOperation operation,
+                                       const std::vector<double>& minValues,
+                                       const std::vector<double>& maxValues) {
+    if (regions.empty() || features.empty()) return {};
+    if (features.size() != minValues.size() || features.size() != maxValues.size()) {
+        return {};
+    }
+
+    std::vector<QRegion> result;
+
+    for (const auto& region : regions) {
+        bool matches = (operation == SelectOperation::And);
+
+        for (size_t i = 0; i < features.size(); ++i) {
+            double value = GetRegionFeature(region, features[i]);
+            bool inRange = (value >= minValues[i] && value <= maxValues[i]);
+
+            if (operation == SelectOperation::And) {
+                if (!inRange) {
+                    matches = false;
+                    break;
+                }
+            } else {  // Or
+                if (inRange) {
+                    matches = true;
+                    break;
+                }
+            }
+        }
+
+        if (matches) {
+            result.push_back(region);
+        }
+    }
+
+    return result;
+}
+
+std::vector<QRegion> SelectShapeConvexity(const std::vector<QRegion>& regions,
+                                           double minConvex,
+                                           double maxConvex) {
+    return SelectShape(regions, ShapeFeature::Convexity, SelectOperation::And, minConvex, maxConvex);
+}
+
+std::vector<QRegion> SelectShapeElongation(const std::vector<QRegion>& regions,
+                                            double minElong,
+                                            double maxElong) {
+    return SelectShape(regions, ShapeFeature::Elongation, SelectOperation::And, minElong, maxElong);
+}
+
+std::vector<QRegion> SelectShapeProto(const std::vector<QRegion>& regions,
+                                       int32_t n,
+                                       bool largest) {
+    if (regions.empty() || n <= 0) return {};
+    if (n >= static_cast<int32_t>(regions.size())) return regions;
+
+    // Get areas and sort
+    std::vector<std::pair<int64_t, size_t>> areaIdx;
+    areaIdx.reserve(regions.size());
+    for (size_t i = 0; i < regions.size(); ++i) {
+        areaIdx.emplace_back(Internal::ComputeArea(regions[i]), i);
+    }
+
+    if (largest) {
+        std::partial_sort(areaIdx.begin(), areaIdx.begin() + n, areaIdx.end(),
+                         [](const auto& a, const auto& b) { return a.first > b.first; });
+    } else {
+        std::partial_sort(areaIdx.begin(), areaIdx.begin() + n, areaIdx.end(),
+                         [](const auto& a, const auto& b) { return a.first < b.first; });
+    }
+
+    std::vector<QRegion> result;
+    result.reserve(n);
+    for (int32_t i = 0; i < n; ++i) {
+        result.push_back(regions[areaIdx[i].second]);
+    }
+
+    return result;
 }
 
 } // namespace Qi::Vision::Blob
