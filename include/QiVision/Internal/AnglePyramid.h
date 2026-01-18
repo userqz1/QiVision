@@ -80,6 +80,7 @@ struct AnglePyramidParams {
     bool enableTiming = false;          ///< Enable detailed timing statistics
     bool extractEdgePoints = true;      ///< Extract edge points (false for search pyramid)
     bool useNMS = true;                 ///< Apply Non-Maximum Suppression (false for shape matching)
+    bool storeDirection = true;         ///< Store gradDir (false for search mode - saves memory)
 
     // Builder pattern
     AnglePyramidParams& SetNumLevels(int32_t n) { numLevels = n; return *this; }
@@ -90,6 +91,7 @@ struct AnglePyramidParams {
     AnglePyramidParams& SetEnableTiming(bool v) { enableTiming = v; return *this; }
     AnglePyramidParams& SetExtractEdgePoints(bool v) { extractEdgePoints = v; return *this; }
     AnglePyramidParams& SetUseNMS(bool v) { useNMS = v; return *this; }
+    AnglePyramidParams& SetStoreDirection(bool v) { storeDirection = v; return *this; }
 };
 
 /**
