@@ -281,9 +281,21 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
         findTiming_.subpixelRefineMs = std::chrono::duration<double, std::milli>(t3 - t2).count();
     }
 
-    // Filter by final score threshold
+    // Apply coverage penalty and filter by final score threshold
+    // Coverage penalty is only applied at final output stage (not during search)
+    // This ensures search doesn't miss true matches due to coverage penalty
     std::vector<MatchResult> results;
-    for (const auto& match : candidates) {
+    for (auto match : candidates) {
+        // Recompute score with coverage at level 0
+        double coverage = 0.0;
+        double similarity = ComputeScoreAtPosition(targetPyramid, 0,
+                                                    match.x, match.y, match.angle, 1.0,
+                                                    0.0, &coverage, false);
+
+        // Apply coverage penalty: score = similarity * coverage^0.75
+        double coveragePenalty = std::pow(coverage, 0.75);
+        match.score = similarity * coveragePenalty;
+
         if (match.score >= params.minScore) {
             results.push_back(match);
         }

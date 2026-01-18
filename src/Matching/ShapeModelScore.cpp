@@ -179,9 +179,12 @@ double ShapeModelImpl::ComputeScoreAtPosition(
         }
     }
 
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
+    double coverage = static_cast<double>(matchedCount) / numPoints;
+    if (outCoverage) *outCoverage = coverage;
     if (totalWeight <= 0) return 0.0;
 
+    // Return pure similarity score (no coverage penalty)
+    // Coverage penalty is applied at final output stage in SearchPyramid
     return static_cast<double>(totalScore) / totalWeight;
 }
 
@@ -298,9 +301,11 @@ double ShapeModelImpl::ComputeScoreBilinearSSE(
         }
     }
 
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
+    double coverage = static_cast<double>(matchedCount) / numPoints;
+    if (outCoverage) *outCoverage = coverage;
     if (totalWeight <= 0) return 0.0;
 
+    // Return pure similarity score (no coverage penalty)
     return static_cast<double>(totalScore) / totalWeight;
 }
 
@@ -415,9 +420,11 @@ double ShapeModelImpl::ComputeScoreWithSinCos(
         }
     }
 
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
+    double coverage = static_cast<double>(matchedCount) / numPoints;
+    if (outCoverage) *outCoverage = coverage;
     if (totalWeight <= 0) return 0.0;
 
+    // Return pure similarity score (no coverage penalty)
     return static_cast<double>(totalScore) / totalWeight;
 }
 
@@ -510,9 +517,11 @@ double ShapeModelImpl::ComputeScoreNearestNeighbor(
         }
     }
 
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
+    double coverage = static_cast<double>(matchedCount) / numPoints;
+    if (outCoverage) *outCoverage = coverage;
     if (totalWeight <= 0) return 0.0;
 
+    // Return pure similarity score (no coverage penalty)
     return static_cast<double>(totalScore) / totalWeight;
 }
 
@@ -629,9 +638,11 @@ double ShapeModelImpl::ComputeScoreQuantized(
         }
     }
 
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
+    double coverage = static_cast<double>(matchedCount) / numPoints;
+    if (outCoverage) *outCoverage = coverage;
     if (totalWeight <= 0) return 0.0;
 
+    // Return pure similarity score (no coverage penalty)
     return static_cast<double>(totalScore) / totalWeight;
 }
 

@@ -132,20 +132,17 @@ int main(int argc, char* argv[]) {
     std::cout << "=== QiVision Interactive Shape Matching ===" << std::endl;
     std::cout << std::endl;
 
-    // Data directory - large images
-    std::string dataDir = "tests/data/matching/image2/";
+    // Data directory - ampoules images
+    std::string dataDir = "tests/data/halcon_images/ampoules/";
     std::vector<std::string> imageFiles = {
-        "2025120119482739.bmp",
-        "20251201194802191.bmp",
-        "20251201194804137.bmp",
-        "20251201194805266.bmp",
-        "20251201194806360.bmp",
-        "2025120119482935.bmp",
-        "20251201194837127.bmp",
-        "20251201194840615.bmp",
-        "20251201194842271.bmp",
-        "20251201194843675.bmp",
-        "20251201194844759.bmp"
+        "ampoules_01.png",
+        "ampoules_02.png",
+        "ampoules_03.png",
+        "ampoules_04.png",
+        "ampoules_05.png",
+        "ampoules_06.png",
+        "ampoules_07.png",
+        "ampoules_08.png"
     };
 
     // Check for command-line ROI specification
@@ -324,7 +321,7 @@ int main(int argc, char* argv[]) {
         FindShapeModel(
             searchGray, model,
             0, RAD(360),            // angleStart, angleExtent
-            0.8, 10, 0.5,           // minScore, numMatches, maxOverlap
+            0.9, 10, 0.5,           // minScore, numMatches, maxOverlap
             "least_squares", 0, 0.9, // subPixel, numLevels, greediness
             rows, cols, angles, scores
         );
