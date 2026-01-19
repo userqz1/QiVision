@@ -68,6 +68,109 @@ inline bool ShouldUseOpenMP(int32_t width, int32_t height) {
 // =============================================================================
 
 #ifdef __AVX2__
+
+// Fast bin quantization: directly compute bin index from gx/gy without full atan2
+// Uses octant-based approach with linear interpolation within each octant
+// For numBins=16: each octant has 2 bins, total 8 octants
+static inline __m256i fast_quantize_bin_avx2(__m256 gy, __m256 gx, int32_t numBins) {
+    const __m256 zero = _mm256_setzero_ps();
+    const __m256 one = _mm256_set1_ps(1.0f);
+    const __m256 eps = _mm256_set1_ps(1e-10f);
+
+    // Compute absolute values
+    const __m256 sign_mask = _mm256_set1_ps(-0.0f);
+    __m256 abs_gx = _mm256_andnot_ps(sign_mask, gx);
+    __m256 abs_gy = _mm256_andnot_ps(sign_mask, gy);
+
+    // Determine octant using sign bits and |gy| vs |gx|
+    // octant: 0-7 based on (sign_x, sign_y, |gy|>|gx|)
+    __m256 gx_neg = _mm256_cmp_ps(gx, zero, _CMP_LT_OQ);
+    __m256 gy_neg = _mm256_cmp_ps(gy, zero, _CMP_LT_OQ);
+    __m256 gy_gt_gx = _mm256_cmp_ps(abs_gy, abs_gx, _CMP_GT_OQ);
+
+    // Convert masks to integers (0 or 1)
+    __m256i gx_neg_i = _mm256_and_si256(_mm256_castps_si256(gx_neg), _mm256_set1_epi32(1));
+    __m256i gy_neg_i = _mm256_and_si256(_mm256_castps_si256(gy_neg), _mm256_set1_epi32(1));
+    __m256i gy_gt_gx_i = _mm256_and_si256(_mm256_castps_si256(gy_gt_gx), _mm256_set1_epi32(1));
+
+    // Compute ratio t = min(|gy|,|gx|) / max(|gy|,|gx|) in [0,1]
+    __m256 num = _mm256_min_ps(abs_gy, abs_gx);
+    __m256 den = _mm256_max_ps(abs_gy, abs_gx);
+    den = _mm256_max_ps(den, eps);  // Avoid division by zero
+    __m256 t = _mm256_div_ps(num, den);
+
+    // Fast atan approximation for t in [0,1]: atan(t) ≈ t * (π/4) * (1 + 0.273*(1-t))
+    // Simplified: atan(t)/（π/4) ≈ t * (1.273 - 0.273*t) = t * 1.273 - t*t*0.273
+    // This gives a value in [0, 1] representing fraction of 45 degrees
+    const __m256 c1 = _mm256_set1_ps(1.273f);
+    const __m256 c2 = _mm256_set1_ps(0.273f);
+    __m256 t2 = _mm256_mul_ps(t, t);
+    __m256 frac = _mm256_sub_ps(_mm256_mul_ps(t, c1), _mm256_mul_ps(t2, c2));
+    frac = _mm256_min_ps(frac, one);  // Clamp to [0, 1]
+
+    // Bins per octant
+    float binsPerOctant = static_cast<float>(numBins) / 8.0f;
+    __m256 vBinsPerOctant = _mm256_set1_ps(binsPerOctant);
+
+    // Sub-bin within octant
+    __m256 subBinF = _mm256_mul_ps(frac, vBinsPerOctant);
+    __m256i subBin = _mm256_cvttps_epi32(subBinF);
+
+    // Compute octant index based on signs and |gy|>|gx|
+    // Octant layout (angle increases counter-clockwise from +x axis):
+    // Oct 0: gx>0, gy>=0, |gx|>=|gy| -> angle [0, 45)
+    // Oct 1: gx>0, gy>0, |gy|>|gx|   -> angle [45, 90)
+    // Oct 2: gx<=0, gy>0, |gy|>|gx|  -> angle [90, 135)
+    // Oct 3: gx<0, gy>=0, |gx|>=|gy| -> angle [135, 180)
+    // Oct 4: gx<0, gy<0, |gx|>=|gy|  -> angle [180, 225)
+    // Oct 5: gx<0, gy<0, |gy|>|gx|   -> angle [225, 270)
+    // Oct 6: gx>=0, gy<0, |gy|>|gx|  -> angle [270, 315)
+    // Oct 7: gx>0, gy<0, |gx|>=|gy|  -> angle [315, 360)
+
+    // Simplified octant calculation using bit manipulation
+    // octant = (gx<0)*4 + (gy<0)*2 + (|gy|>|gx|)*1, then map to actual octant
+    __m256i raw_oct = _mm256_add_epi32(
+        _mm256_add_epi32(
+            _mm256_slli_epi32(gx_neg_i, 2),
+            _mm256_slli_epi32(gy_neg_i, 1)
+        ),
+        gy_gt_gx_i
+    );
+
+    // Map raw_oct to actual octant (handles the non-linear mapping)
+    // raw: 0->0, 1->1, 2->7, 3->6, 4->3, 5->2, 6->4, 7->5
+    // Use lookup: stored as float for blending
+    alignas(32) static const int32_t octant_map[8] = {0, 1, 7, 6, 3, 2, 4, 5};
+
+    // Scalar lookup (AVX2 doesn't have good gather for small tables)
+    alignas(32) int32_t raw_oct_arr[8];
+    alignas(32) int32_t octant_arr[8];
+    _mm256_store_si256(reinterpret_cast<__m256i*>(raw_oct_arr), raw_oct);
+    for (int i = 0; i < 8; ++i) {
+        octant_arr[i] = octant_map[raw_oct_arr[i]];
+    }
+    __m256i octant = _mm256_load_si256(reinterpret_cast<const __m256i*>(octant_arr));
+
+    // Final bin = octant * binsPerOctant + subBin
+    __m256i binsPerOctantI = _mm256_set1_epi32(static_cast<int32_t>(binsPerOctant));
+    __m256i baseBin = _mm256_mullo_epi32(octant, binsPerOctantI);
+
+    // Handle octant direction: even octants go forward, odd octants go backward
+    // For odd octants: subBin = binsPerOctant - 1 - subBin
+    __m256i octant_odd = _mm256_and_si256(octant, _mm256_set1_epi32(1));
+    __m256i odd_mask = _mm256_cmpeq_epi32(octant_odd, _mm256_set1_epi32(1));
+    __m256i subBin_rev = _mm256_sub_epi32(_mm256_sub_epi32(binsPerOctantI, _mm256_set1_epi32(1)), subBin);
+    subBin = _mm256_blendv_epi8(subBin, subBin_rev, odd_mask);
+
+    __m256i bin = _mm256_add_epi32(baseBin, subBin);
+
+    // Clamp to valid range
+    bin = _mm256_max_epi32(bin, _mm256_setzero_si256());
+    bin = _mm256_min_epi32(bin, _mm256_set1_epi32(numBins - 1));
+
+    return bin;
+}
+
 // Fast atan2 approximation for 8 float values
 // Using polynomial approximation, accurate to ~0.01 radians
 static inline __m256 atan2_avx2(__m256 y, __m256 x) {
@@ -576,16 +679,9 @@ void AnglePyramid::Impl::FusedSobelGradMagBin(
     const float* src, int32_t width, int32_t height,
     float* gx, float* gy, float* mag, int16_t* bins, int32_t numBins)
 {
-    const float twoPi = static_cast<float>(2.0 * PI);
-    const float binScale = static_cast<float>(numBins) / twoPi;
-    const int16_t maxBin = static_cast<int16_t>(numBins - 1);
     const bool useParallel = ShouldUseOpenMP(width, height);
 
 #ifdef __AVX2__
-    const __m256 vBinScale = _mm256_set1_ps(binScale);
-    const __m256i vMaxBin = _mm256_set1_epi32(numBins - 1);
-    const __m256i vZero = _mm256_setzero_si256();
-
     auto processRow = [&](int32_t y) {
         const float* row0 = src + (y - 1) * width;
         const float* row1 = src + y * width;
@@ -636,14 +732,8 @@ void AnglePyramid::Impl::FusedSobelGradMagBin(
             __m256 vMag = fast_sqrt_avx2(_mm256_add_ps(gx2, gy2));
             _mm256_storeu_ps(magRow + x, vMag);
 
-            // Direction = atan2(gy, gx) in [0, 2π] (only for bin quantization)
-            __m256 vDir = atan2_avx2(vGy, vGx);
-
-            // Quantize to bins
-            __m256 vBinF = _mm256_mul_ps(vDir, vBinScale);
-            __m256i vBin = _mm256_cvttps_epi32(vBinF);
-            vBin = _mm256_max_epi32(vBin, vZero);
-            vBin = _mm256_min_epi32(vBin, vMaxBin);
+            // Fast bin quantization: directly compute bin from gx/gy
+            __m256i vBin = fast_quantize_bin_avx2(vGy, vGx, numBins);
 
             // Pack to int16
             __m128i lo = _mm256_castsi256_si128(vBin);
@@ -652,7 +742,7 @@ void AnglePyramid::Impl::FusedSobelGradMagBin(
             _mm_storeu_si128(reinterpret_cast<__m128i*>(binRow + x), packed);
         }
 
-        // Scalar fallback for remaining pixels
+        // Scalar fallback for remaining pixels (use fast scalar version)
         for (; x < width - 1; ++x) {
             float p00 = row0[x - 1], p01 = row0[x], p02 = row0[x + 1];
             float p10 = row1[x - 1],               p12 = row1[x + 1];
@@ -665,11 +755,28 @@ void AnglePyramid::Impl::FusedSobelGradMagBin(
             gyRow[x] = gyVal;
             magRow[x] = std::sqrt(gxVal * gxVal + gyVal * gyVal);
 
-            float angle = std::atan2(gyVal, gxVal);
-            if (angle < 0) angle += twoPi;
+            // Fast scalar bin quantization
+            float abs_gx = std::abs(gxVal);
+            float abs_gy = std::abs(gyVal);
+            float den = std::max(abs_gx, abs_gy) + 1e-10f;
+            float t = std::min(abs_gx, abs_gy) / den;
+            float frac = t * (1.273f - 0.273f * t);
+            frac = std::min(frac, 1.0f);
 
-            int32_t bin = static_cast<int32_t>(angle * binScale);
-            binRow[x] = static_cast<int16_t>(std::clamp(bin, 0, static_cast<int32_t>(maxBin)));
+            int gx_neg = (gxVal < 0) ? 1 : 0;
+            int gy_neg = (gyVal < 0) ? 1 : 0;
+            int gy_gt_gx = (abs_gy > abs_gx) ? 1 : 0;
+            int raw_oct = (gx_neg << 2) | (gy_neg << 1) | gy_gt_gx;
+            static const int octant_map[8] = {0, 1, 7, 6, 3, 2, 4, 5};
+            int octant = octant_map[raw_oct];
+
+            int binsPerOctant = numBins / 8;
+            int subBin = static_cast<int>(frac * binsPerOctant);
+            if (octant & 1) {
+                subBin = binsPerOctant - 1 - subBin;
+            }
+            int bin = octant * binsPerOctant + subBin;
+            binRow[x] = static_cast<int16_t>(std::clamp(bin, 0, numBins - 1));
         }
 
         // Border: x=width-1
