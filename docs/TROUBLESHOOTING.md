@@ -224,14 +224,14 @@ Ring buffer 代码保留但不使用。Separable 是当前最优解：
 
 ---
 
-### ❌ 内存对齐优化 hBlur 缓冲区 (2026-01-19)
+### ⏸️ 内存对齐优化 hBlur 缓冲区 (2026-01-19) - 低优先级
 
 **尝试内容:**
 将 Pyramid.cpp 中 `FusedGaussianDownsample2x_Separable` 的 `std::vector<float> hBlur` 替换为 `Platform::AllocateAligned<float>()` (32 字节对齐)。
 
 **预期收益:**
-- AVX2 对齐访问比非对齐更快
-- 减少 cache line 分裂
+- 减少跨 cache line 访问
+- 可安全使用 aligned load/store 指令
 
 **实际结果:**
 
@@ -239,19 +239,34 @@ Ring buffer 代码保留但不使用。Separable 是当前最优解：
 |--------|------|----------|------|
 | Large Images | 144.4 ms | 153.3 ms | ❌ +6.2% 变慢 |
 
-**失败原因分析:**
-1. **代码仍用 unaligned 指令**: `_mm256_loadu_ps` / `_mm256_storeu_ps` 不会从对齐内存获益
-2. **现代 CPU 对齐惩罚极小**: Sandy Bridge/Zen 之后，对齐与非对齐访问性能几乎相同
-3. **瓶颈是内存带宽**: 大图像 (16MB+) 远超 L3 缓存，对齐无法解决 DRAM 带宽瓶颈
-4. **自定义 allocator 开销**: `Platform::AllocateAligned` 可能比 `std::vector` 有额外开销
+**本次失败原因:**
+1. **只对齐内存，未改用 aligned 指令**: 仍用 `_mm256_loadu_ps`，收益上限有限
+2. **未做"标量前导到对齐边界"**: 无法保证每行起点 32B 对齐
+3. **自定义 allocator 开销**: `Platform::AllocateAligned` 可能引入额外开销
+4. **主要瓶颈不在这里**: 当前瓶颈是带宽和指令结构，不是 cache line 跨越
 
-**什么时候内存对齐可能有用:**
-- 使用 `_mm256_load_ps` / `_mm256_store_ps` (aligned 指令) 时
-- 数据在 L1/L2 缓存中频繁访问
-- 有严格的性能要求且已消除其他瓶颈
+**对齐优化的正确理解:**
+
+| 说法 | 更准确的表述 |
+|------|-------------|
+| "loadu 不会从对齐获益" | ❌ loadu 在地址对齐时走类似内部路径，代价接近 |
+| "对齐对 streaming 没帮助" | ❌ 跨 cache line 时仍有 1-3% 收益空间 |
+| "现代 CPU 对齐=非对齐" | ⚠️ 仅当不跨 64B cache line 时成立 |
+
+**对齐真正有价值的场景:**
+- 32B 向量经常跨 64B cache line 边界（起始地址随机偏移时）
+- 同一循环多数组读写，跨线放大 L1D/L2 端口压力
+- 大量小数组临时缓冲，分配器行首对齐差
+
+**正确的做法（如果要优化）:**
+1. 用 32B 对齐分配缓冲区
+2. 内层循环用"标量前导到对齐边界，再用 aligned load"
+3. 用 `_mm256_load_ps` 替代 `_mm256_loadu_ps`
 
 **结论:**
-对于 streaming 工作负载（大图像处理），内存对齐不是有效优化方向。保持 `std::vector` 即可。
+对齐优化**不是错误方向**，但对当前 streaming 带宽型工作负载**收益很小**（预期 1-3%）。
+优先级降为 **P3**，排在 rcp 替代 div、边界分离、减少中间读写之后。
+当 profiling 显示 L1D 端口或跨线 load 有明显 stall 时再考虑。
 
 ---
 
