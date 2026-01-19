@@ -1164,7 +1164,7 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
         return false;
     }
 
-    // Convert to float for processing (with conditional OpenMP)
+    // Convert to float for processing (with AVX2 SIMD + OpenMP)
     auto tToFloat = std::chrono::high_resolution_clock::now();
     QImage floatImage;
     if (image.Type() == PixelType::Float32) {
@@ -1181,6 +1181,34 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
 
         const bool useParallel = ShouldUseOpenMP(w, h);
 
+#ifdef __AVX2__
+        // AVX2 optimized: convert 8 uint8 to 8 float at once
+        auto convertRowAVX2 = [&](int32_t y) {
+            const uint8_t* srcRow = srcData + y * srcStride;
+            float* dstRow = dstData + y * dstStride;
+            int32_t x = 0;
+            for (; x + 8 <= w; x += 8) {
+                __m128i v8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(srcRow + x));
+                __m256i v32 = _mm256_cvtepu8_epi32(v8);
+                __m256 vf = _mm256_cvtepi32_ps(v32);
+                _mm256_storeu_ps(dstRow + x, vf);
+            }
+            // Scalar tail
+            for (; x < w; ++x) {
+                dstRow[x] = static_cast<float>(srcRow[x]);
+            }
+        };
+
+#ifdef _OPENMP
+        if (useParallel) {
+            #pragma omp parallel for schedule(static)
+            for (int32_t y = 0; y < h; ++y) { convertRowAVX2(y); }
+        } else
+#endif
+        { for (int32_t y = 0; y < h; ++y) { convertRowAVX2(y); } }
+
+#else
+        // Scalar fallback
 #ifdef _OPENMP
         if (useParallel) {
             #pragma omp parallel for schedule(static)
@@ -1199,6 +1227,7 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
                 }
             }
         }
+#endif
     }
     if (params.enableTiming) {
         impl_->timing_.toFloatMs = std::chrono::duration<double, std::milli>(
@@ -1212,6 +1241,7 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
     pyramidParams.minDimension = 8;  // Minimum 8 pixels at coarsest level
 
     // Extract float data from the float QImage (handle stride correctly)
+    // Optimized: use memcpy instead of element-by-element copy
     auto tCopy = std::chrono::high_resolution_clock::now();
     int32_t floatWidth = floatImage.Width();
     int32_t floatHeight = floatImage.Height();
@@ -1220,23 +1250,29 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
 
     std::vector<float> floatContiguous(floatWidth * floatHeight);
 
-    const bool useParallelCopy = ShouldUseOpenMP(floatWidth, floatHeight);
-
+    if (floatStride == floatWidth) {
+        // Contiguous memory: single memcpy for entire image
+        std::memcpy(floatContiguous.data(), floatSrcData,
+                    static_cast<size_t>(floatWidth) * floatHeight * sizeof(float));
+    } else {
+        // Strided memory: memcpy row by row
+        const bool useParallelCopy = ShouldUseOpenMP(floatWidth, floatHeight);
 #ifdef _OPENMP
-    if (useParallelCopy) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < floatHeight; ++y) {
-            for (int32_t x = 0; x < floatWidth; ++x) {
-                floatContiguous[y * floatWidth + x] = floatSrcData[y * floatStride + x];
+        if (useParallelCopy) {
+            #pragma omp parallel for schedule(static)
+            for (int32_t y = 0; y < floatHeight; ++y) {
+                std::memcpy(floatContiguous.data() + y * floatWidth,
+                            floatSrcData + y * floatStride,
+                            floatWidth * sizeof(float));
             }
-        }
-    } else
+        } else
 #endif
-    {
-        (void)useParallelCopy;
-        for (int32_t y = 0; y < floatHeight; ++y) {
-            for (int32_t x = 0; x < floatWidth; ++x) {
-                floatContiguous[y * floatWidth + x] = floatSrcData[y * floatStride + x];
+        {
+            (void)useParallelCopy;
+            for (int32_t y = 0; y < floatHeight; ++y) {
+                std::memcpy(floatContiguous.data() + y * floatWidth,
+                            floatSrcData + y * floatStride,
+                            floatWidth * sizeof(float));
             }
         }
     }
