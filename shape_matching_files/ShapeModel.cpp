@@ -228,9 +228,55 @@ ShapeModel CreateShapeModel(
 
     model.Impl()->params_ = params;
 
+    // Enable detailed timing output
+    model.Impl()->timingParams_.enableTiming = true;
+    model.Impl()->timingParams_.printTiming = true;
+
     // Create model
     Point2d origin{0, 0};
     if (!model.Impl()->CreateModel(templateImage, roi, origin)) {
+        return ShapeModel();  // Return invalid model
+    }
+
+    return model;
+}
+
+ShapeModel CreateShapeModel(
+    const QImage& templateImage,
+    const QRegion& region,
+    int32_t numLevels,
+    double angleStart,
+    double angleExtent,
+    double angleStep,
+    const std::string& optimization,
+    const std::string& metric,
+    const std::string& contrast,
+    double minContrast)
+{
+    ShapeModel model;
+
+    // Set up parameters
+    ModelParams params;
+    params.numLevels = numLevels;
+    params.angleStart = angleStart;
+    params.angleExtent = angleExtent;
+    params.angleStep = angleStep;
+    params.optimization = ParseOptimization(optimization);
+    params.metric = ParseMetric(metric);
+
+    // Parse contrast parameter
+    ParseContrast(contrast, params.contrastMode, params.contrastHigh, params.contrastLow, params.minComponentSize);
+    params.minContrast = minContrast;
+
+    model.Impl()->params_ = params;
+
+    // Enable detailed timing output
+    model.Impl()->timingParams_.enableTiming = true;
+    model.Impl()->timingParams_.printTiming = true;
+
+    // Create model with QRegion
+    Point2d origin{0, 0};
+    if (!model.Impl()->CreateModel(templateImage, region, origin)) {
         return ShapeModel();  // Return invalid model
     }
 
@@ -326,65 +372,36 @@ void FindShapeModel(
     // Build target pyramid (with timing)
     auto tPyramidStart = std::chrono::high_resolution_clock::now();
 
-    const bool useLinemod = impl->params_.useLinemod && !impl->linemodFeatures_.empty();
+    Internal::AnglePyramidParams pyramidParams;
+    pyramidParams.numLevels = static_cast<int32_t>(impl->levels_.size());
 
-    std::vector<MatchResult> results;
+    // Use same contrast as model creation to avoid detecting weak edges
+    double searchContrast = (impl->params_.minContrast > 0)
+        ? impl->params_.minContrast
+        : impl->params_.contrastHigh;
+    pyramidParams.minContrast = searchContrast;
+    pyramidParams.smoothSigma = 0.5;
+    pyramidParams.extractEdgePoints = false;
+    pyramidParams.storeDirection = false;  // Search mode: skip storing gradDir
+    pyramidParams.enableTiming = true;  // Enable detailed timing
 
-    if (useLinemod) {
-        Internal::LinemodPyramidParams linemodParams;
-        linemodParams.numLevels = static_cast<int32_t>(impl->linemodFeatures_.size());
-        linemodParams.minMagnitude = static_cast<float>(impl->params_.contrastHigh);
-        linemodParams.spreadT = 4;
-        linemodParams.neighborThreshold = 5;
-        linemodParams.smoothSigma = 1.0;
-        linemodParams.extractFeatures = false;
-
-        Internal::LinemodPyramid targetPyramid;
-        if (!targetPyramid.Build(image, linemodParams)) {
-            return;
-        }
-
-        auto tPyramidEnd = std::chrono::high_resolution_clock::now();
-        auto tSearchStart = tPyramidEnd;
-
-        results = impl->SearchPyramidLinemod(targetPyramid, params);
-
-        auto tSearchEnd = std::chrono::high_resolution_clock::now();
-        fprintf(stderr, "[Find] Pyramid: %.1fms, Search: %.1fms\n",
-                std::chrono::duration<double, std::milli>(tPyramidEnd - tPyramidStart).count(),
-                std::chrono::duration<double, std::milli>(tSearchEnd - tSearchStart).count());
-    } else {
-        Internal::AnglePyramidParams pyramidParams;
-        pyramidParams.numLevels = static_cast<int32_t>(impl->levels_.size());
-
-        double searchContrast = (impl->params_.minContrast > 0)
-            ? impl->params_.minContrast
-            : impl->params_.contrastHigh * 0.5;
-        pyramidParams.minContrast = searchContrast;
-        pyramidParams.smoothSigma = 0.5;
-        pyramidParams.extractEdgePoints = false;
-        pyramidParams.enableTiming = true;  // Enable detailed timing
-        pyramidParams.lightweight = true;   // Use lightweight mode for search (bins + magSq only)
-
-        Internal::AnglePyramid targetPyramid;
-        if (!targetPyramid.Build(image, pyramidParams)) {
-            return;
-        }
-
-        auto tPyramidEnd = std::chrono::high_resolution_clock::now();
-        auto tSearchStart = tPyramidEnd;
-
-        results = impl->SearchPyramid(targetPyramid, params);
-
-        auto tSearchEnd = std::chrono::high_resolution_clock::now();
-
-        // Print detailed pyramid timing
-        const auto& timing = targetPyramid.GetTiming();
-        fprintf(stderr, "[Find] Pyramid: %.1fms (toFloat:%.1f gauss:%.1f sobel:%.1f copy:%.1f), Search: %.1fms\n",
-                std::chrono::duration<double, std::milli>(tPyramidEnd - tPyramidStart).count(),
-                timing.toFloatMs, timing.gaussPyramidMs, timing.sobelMs, timing.copyMs,
-                std::chrono::duration<double, std::milli>(tSearchEnd - tSearchStart).count());
+    Internal::AnglePyramid targetPyramid;
+    if (!targetPyramid.Build(image, pyramidParams)) {
+        return;
     }
+
+    // Print detailed pyramid timing
+    targetPyramid.GetTiming().Print();
+
+    auto tPyramidEnd = std::chrono::high_resolution_clock::now();
+    auto tSearchStart = tPyramidEnd;
+
+    std::vector<MatchResult> results = impl->SearchPyramid(targetPyramid, params);
+
+    auto tSearchEnd = std::chrono::high_resolution_clock::now();
+    fprintf(stderr, "[Find] Pyramid: %.1fms, Search: %.1fms\n",
+            std::chrono::duration<double, std::milli>(tPyramidEnd - tPyramidStart).count(),
+            std::chrono::duration<double, std::milli>(tSearchEnd - tSearchStart).count());
 
     // Convert results to output vectors
     rows.reserve(results.size());

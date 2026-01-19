@@ -1,0 +1,14 @@
+=== ShapeModel Header Files ===
+-rw-r--r-- 1 zq zq 23090 Jan 14 10:11 /home/zq/QiVision/include/QiVision/Matching/MatchTypes.h
+-rw-r--r-- 1 zq zq 15796 Jan 15 10:10 /home/zq/QiVision/include/QiVision/Matching/ShapeModel.h
+
+=== ShapeModel Source Files ===
+-rw-r--r-- 1 zq zq 26384 Jan 16 21:59 /home/zq/QiVision/src/Matching/ShapeModel.cpp
+-rw-r--r-- 1 zq zq 55544 Jan 16 21:59 /home/zq/QiVision/src/Matching/ShapeModelCreate.cpp
+-rw-r--r-- 1 zq zq 28886 Jan 18 17:24 /home/zq/QiVision/src/Matching/ShapeModelScore.cpp
+-rw-r--r-- 1 zq zq 16952 Jan 18 17:25 /home/zq/QiVision/src/Matching/ShapeModelSearch.cpp
+
+=== Internal Dependencies ===
+-rw------- 1 zq zq 12925 Dec 24 15:22 /home/zq/QiVision/include/QiVision/Internal/Gradient.h
+-rw------- 1 zq zq 23197 Jan  8 09:39 /home/zq/QiVision/include/QiVision/Internal/Interpolate.h
+-rw------- 1 zq zq 13944 Dec 26 10:45 /home/zq/QiVision/include/QiVision/Internal/Pyramid.h

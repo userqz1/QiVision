@@ -16,6 +16,7 @@
  */
 
 #include <QiVision/Core/QImage.h>
+#include <QiVision/Core/QRegion.h>
 #include <QiVision/Core/Types.h>
 
 #include <cstdint>
@@ -79,7 +80,7 @@ struct AnglePyramidParams {
     bool enableTiming = false;          ///< Enable detailed timing statistics
     bool extractEdgePoints = true;      ///< Extract edge points (false for search pyramid)
     bool useNMS = true;                 ///< Apply Non-Maximum Suppression (false for shape matching)
-    bool lightweight = false;           ///< Lightweight mode: only store bins + magSq (no gx/gy/dir)
+    bool storeDirection = true;         ///< Store gradDir (false for search mode - saves memory)
 
     // Builder pattern
     AnglePyramidParams& SetNumLevels(int32_t n) { numLevels = n; return *this; }
@@ -90,7 +91,7 @@ struct AnglePyramidParams {
     AnglePyramidParams& SetEnableTiming(bool v) { enableTiming = v; return *this; }
     AnglePyramidParams& SetExtractEdgePoints(bool v) { extractEdgePoints = v; return *this; }
     AnglePyramidParams& SetUseNMS(bool v) { useNMS = v; return *this; }
-    AnglePyramidParams& SetLightweight(bool v) { lightweight = v; return *this; }
+    AnglePyramidParams& SetStoreDirection(bool v) { storeDirection = v; return *this; }
 };
 
 /**
@@ -286,38 +287,40 @@ public:
                          int32_t& width, int32_t& height, int32_t& stride,
                          int32_t& numBins) const;
 
-    /**
-     * @brief Get magnitude (or magSq in lightweight mode) data pointer
-     * @param level Pyramid level
-     * @param magData Output pointer to magnitude data (float)
-     * @param width Output image width
-     * @param height Output image height
-     * @param stride Output stride in elements
-     * @param isSquared Output true if data is magSq (lightweight mode), false if mag
-     * @return true if level is valid and has magnitude data
-     */
-    bool GetMagnitudeData(int32_t level, const float*& magData,
-                          int32_t& width, int32_t& height, int32_t& stride,
-                          bool& isSquared) const;
-
-    /**
-     * @brief Check if pyramid is in lightweight mode (no gx/gy stored)
-     */
-    bool IsLightweight() const;
-
     // =========================================================================
     // Edge Point Extraction
     // =========================================================================
 
     /**
-     * @brief Extract edge points from a level
+     * @brief Extract edge points from a level (rectangular ROI)
      * @param level Pyramid level
-     * @param roi Optional ROI (empty = full image)
+     * @param roi Optional rectangular ROI (empty = full image)
      * @param minContrast Minimum gradient magnitude (0 = use default)
      * @return Vector of edge points
      */
     std::vector<EdgePoint> ExtractEdgePoints(int32_t level,
                                               const Rect2i& roi = Rect2i(),
+                                              double minContrast = 0) const;
+
+    /**
+     * @brief Extract edge points from a level (arbitrary region)
+     * @param level Pyramid level
+     * @param region Region mask (supports any shape: circle, ellipse, polygon, etc.)
+     * @param minContrast Minimum gradient magnitude (0 = use default)
+     * @return Vector of edge points within the region
+     *
+     * @code
+     * // Extract edge points from circular region
+     * QRegion circle = QRegion::Circle(100, 100, 50);
+     * auto points = pyramid.ExtractEdgePoints(0, circle, 20.0);
+     *
+     * // Extract from complex region (union of shapes)
+     * QRegion roi = QRegion::Circle(100, 100, 50) | QRegion::Rectangle(200, 50, 100, 100);
+     * auto points2 = pyramid.ExtractEdgePoints(0, roi);
+     * @endcode
+     */
+    std::vector<EdgePoint> ExtractEdgePoints(int32_t level,
+                                              const QRegion& region,
                                               double minContrast = 0) const;
 
     /**

@@ -648,6 +648,21 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const Rect2i& roi, const P
     // Compute model bounding box for search constraints
     ComputeModelBounds();
 
+    // Compute dynamic coverage threshold based on model complexity
+    // Simple models (few points) need higher coverage to avoid false matches
+    // Complex models (many points) can use lower coverage
+    // This matches Halcon's automatic internal handling
+    if (!levels_.empty() && !levels_[0].points.empty()) {
+        size_t numModelPoints = levels_[0].points.size();
+        if (numModelPoints < 200) {
+            // Scale from 0.85 (50 points) to 0.7 (200 points)
+            minCoverage_ = 0.7 + 0.15 * std::max(0.0, (200.0 - static_cast<double>(numModelPoints)) / 150.0);
+            minCoverage_ = std::min(0.85, minCoverage_);
+        } else {
+            minCoverage_ = 0.7;
+        }
+    }
+
     // Build SoA data for SIMD optimization
     tStep = std::chrono::high_resolution_clock::now();
     for (auto& level : levels_) {
@@ -669,6 +684,167 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const Rect2i& roi, const P
     double angleExtent = params_.angleExtent;
     if (angleExtent <= 0) {
         angleExtent = 2.0 * PI;  // Full rotation range
+    }
+    BuildSearchAngleCache(params_.angleStart, angleExtent, params_.angleStep);
+
+    if (timingParams_.enableTiming) {
+        createTiming_.buildSoAMs = elapsedMs(tStep);
+        createTiming_.totalMs = elapsedMs(tTotal);
+
+        if (timingParams_.printTiming) {
+            createTiming_.Print();
+        }
+    }
+
+    valid_ = true;
+    return true;
+}
+
+// =============================================================================
+// ShapeModelImpl::CreateModel (QRegion version)
+// =============================================================================
+
+bool ShapeModelImpl::CreateModel(const QImage& image, const QRegion& region, const Point2d& origin) {
+    // Handle empty region as full image
+    if (region.Empty()) {
+        return CreateModel(image, Rect2i{}, origin);
+    }
+
+    // Reset timing
+    createTiming_ = ShapeModelCreateTiming();
+    auto tTotal = std::chrono::high_resolution_clock::now();
+    auto tStep = tTotal;
+
+    auto elapsedMs = [](auto start) {
+        return std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - start).count();
+    };
+
+    // Get bounding box of region for template extraction
+    Rect2i bbox = region.BoundingBox();
+
+    // Compute template dimensions from bounding box
+    int32_t templateWidth = bbox.width;
+    int32_t templateHeight = bbox.height;
+    int32_t minTemplateDim = std::min(templateWidth, templateHeight);
+
+    // Build angle pyramid parameters
+    AnglePyramidParams pyramidParams;
+
+    // Compute maximum valid pyramid levels based on template size
+    constexpr int32_t MIN_LEVEL_SIZE = 12;
+    int32_t maxValidLevels = 1;
+    int32_t dim = minTemplateDim;
+    while (dim >= MIN_LEVEL_SIZE * 2 && maxValidLevels < 6) {
+        dim /= 2;
+        maxValidLevels++;
+    }
+
+    // Auto pyramid levels if not specified
+    if (params_.numLevels <= 0) {
+        pyramidParams.numLevels = maxValidLevels;
+    } else {
+        pyramidParams.numLevels = std::min(params_.numLevels, maxValidLevels);
+    }
+    pyramidParams.smoothSigma = 0.5;
+    pyramidParams.useNMS = false;  // Shape matching uses all edge points
+
+    // Contrast handling
+    bool needAutoContrast = (params_.contrastMode == ContrastMode::Auto ||
+                             params_.contrastMode == ContrastMode::AutoHysteresis ||
+                             params_.contrastMode == ContrastMode::AutoMinSize);
+
+    if (needAutoContrast) {
+        pyramidParams.minContrast = 1.0;
+    } else {
+        pyramidParams.minContrast = (params_.contrastLow > 0) ? params_.contrastLow : params_.contrastHigh;
+    }
+
+    // Extract template from bounding box
+    QImage templateImg = image.SubImage(bbox.x, bbox.y, bbox.width, bbox.height);
+    templateSize_ = Size2i{bbox.width, bbox.height};
+
+    if (templateImg.Empty()) {
+        return false;
+    }
+
+    // Build pyramid
+    tStep = std::chrono::high_resolution_clock::now();
+    AnglePyramid pyramid;
+    if (!pyramid.Build(templateImg, pyramidParams)) {
+        return false;
+    }
+    if (timingParams_.enableTiming) {
+        createTiming_.pyramidBuildMs = elapsedMs(tStep);
+    }
+
+    // Store actual levels used
+    params_.numLevels = pyramid.NumLevels();
+
+    // Set origin
+    origin_ = origin;
+    if (origin_.x == 0 && origin_.y == 0) {
+        // Default to center of bounding box
+        origin_.x = templateSize_.width / 2.0;
+        origin_.y = templateSize_.height / 2.0;
+    }
+
+    // Extract model points using QRegion mask
+    // Translate region to template-local coordinates
+    QRegion localRegion = region.Translate(-bbox.x, -bbox.y);
+
+    tStep = std::chrono::high_resolution_clock::now();
+    ExtractModelPointsXLDWithRegion(templateImg, pyramid, localRegion);
+    if (timingParams_.enableTiming) {
+        createTiming_.extractPointsMs = elapsedMs(tStep);
+    }
+
+    if (levels_.empty() || levels_[0].points.empty()) {
+        return false;
+    }
+
+    // Apply optimization
+    tStep = std::chrono::high_resolution_clock::now();
+    if (params_.optimization != OptimizationMode::None) {
+        OptimizeModel();
+    }
+    if (timingParams_.enableTiming) {
+        createTiming_.optimizeMs = elapsedMs(tStep);
+    }
+
+    // Compute model bounding box
+    ComputeModelBounds();
+
+    // Compute dynamic coverage threshold
+    if (!levels_.empty() && !levels_[0].points.empty()) {
+        size_t numModelPoints = levels_[0].points.size();
+        if (numModelPoints < 200) {
+            minCoverage_ = 0.7 + 0.15 * std::max(0.0, (200.0 - static_cast<double>(numModelPoints)) / 150.0);
+            minCoverage_ = std::min(0.85, minCoverage_);
+        } else {
+            minCoverage_ = 0.7;
+        }
+    }
+
+    // Build SoA data
+    tStep = std::chrono::high_resolution_clock::now();
+    for (auto& level : levels_) {
+        level.BuildSoA();
+    }
+
+    // Build lookup tables
+    const int16_t* binData;
+    int32_t w, h, s, numBins;
+    if (pyramid.GetAngleBinData(0, binData, w, h, s, numBins)) {
+        BuildCosLUT(numBins);
+    } else {
+        BuildCosLUT(64);
+    }
+
+    // Build angle cache
+    double angleExtent = params_.angleExtent;
+    if (angleExtent <= 0) {
+        angleExtent = 2.0 * PI;
     }
     BuildSearchAngleCache(params_.angleStart, angleExtent, params_.angleStep);
 
@@ -853,6 +1029,183 @@ void ShapeModelImpl::ExtractModelPointsXLD(const QImage& templateImg, const Angl
         levelModel.points = std::move(allPoints);
 
         // Generate grid points (unique integer coordinates)
+        std::set<std::pair<int32_t, int32_t>> uniqueGridCoords;
+        std::vector<ModelPoint> gridPts;
+        gridPts.reserve(levelModel.points.size());
+
+        for (const auto& pt : levelModel.points) {
+            int32_t gx = static_cast<int32_t>(std::round(pt.x));
+            int32_t gy = static_cast<int32_t>(std::round(pt.y));
+
+            auto key = std::make_pair(gx, gy);
+            if (uniqueGridCoords.find(key) == uniqueGridCoords.end()) {
+                uniqueGridCoords.insert(key);
+                gridPts.emplace_back(static_cast<double>(gx), static_cast<double>(gy),
+                                    pt.angle, pt.magnitude, pt.angleBin, pt.weight);
+            }
+        }
+
+        std::sort(gridPts.begin(), gridPts.end(),
+            [](const ModelPoint& a, const ModelPoint& b) {
+                if (static_cast<int32_t>(a.y) != static_cast<int32_t>(b.y))
+                    return a.y < b.y;
+                return a.x < b.x;
+            });
+
+        levelModel.gridPoints = std::move(gridPts);
+    }
+}
+
+// =============================================================================
+// ShapeModelImpl::ExtractModelPointsXLDWithRegion (with QRegion mask)
+// =============================================================================
+
+void ShapeModelImpl::ExtractModelPointsXLDWithRegion(const QImage& templateImg, const AnglePyramid& pyramid,
+                                                      const QRegion& region) {
+    (void)templateImg;
+
+    levels_.clear();
+    levels_.resize(pyramid.NumLevels());
+
+    const double RESAMPLE_SPACING = 1.0;
+    const int32_t MIN_CONTOUR_POINTS = 4;
+
+    double contrastHigh = params_.contrastHigh;
+    double contrastLow = (params_.contrastLow > 0) ? params_.contrastLow : contrastHigh;
+    double contrastMax = params_.contrastMax;
+    bool useHysteresis = (params_.contrastLow > 0 && params_.contrastLow < params_.contrastHigh);
+
+    for (int32_t level = 0; level < pyramid.NumLevels(); ++level) {
+        const auto& levelData = pyramid.GetLevel(level);
+        auto& levelModel = levels_[level];
+
+        levelModel.width = levelData.width;
+        levelModel.height = levelData.height;
+        levelModel.scale = levelData.scale;
+
+        double levelOriginX = origin_.x * levelData.scale;
+        double levelOriginY = origin_.y * levelData.scale;
+
+        double levelContrastHigh = std::max(2.0, contrastHigh * levelData.scale);
+        double levelContrastLow = std::max(1.0, contrastLow * levelData.scale);
+        double levelContrastMax = contrastMax * levelData.scale;
+
+        // Scale region for this pyramid level
+        QRegion scaledRegion = region.Scale(levelData.scale, levelData.scale);
+
+        // Extract edge points within the region mask
+        auto edgePoints = pyramid.ExtractEdgePoints(level, scaledRegion, levelContrastLow);
+
+        // Step 1: Filter edge points using hysteresis thresholding
+        std::vector<Qi::Vision::Internal::EdgePoint> filteredPoints;
+        filteredPoints.reserve(edgePoints.size());
+
+        if (useHysteresis) {
+            const double gridSize = 1.5;
+            const double gridSizeSq = gridSize * gridSize;
+
+            std::vector<int32_t> strongIndices;
+            std::vector<int32_t> weakIndices;
+
+            for (size_t i = 0; i < edgePoints.size(); ++i) {
+                const auto& ep = edgePoints[i];
+                if (ep.magnitude > levelContrastMax) continue;
+
+                if (ep.magnitude >= levelContrastHigh) {
+                    strongIndices.push_back(static_cast<int32_t>(i));
+                } else if (ep.magnitude >= levelContrastLow) {
+                    weakIndices.push_back(static_cast<int32_t>(i));
+                }
+            }
+
+            std::vector<int8_t> keepFlag(edgePoints.size(), 0);
+            for (int32_t idx : strongIndices) {
+                keepFlag[idx] = 1;
+            }
+
+            std::unordered_map<int64_t, std::vector<int32_t>> weakGrid;
+            auto toGridKey = [gridSize](double x, double y) -> int64_t {
+                int32_t gx = static_cast<int32_t>(std::floor(x / gridSize));
+                int32_t gy = static_cast<int32_t>(std::floor(y / gridSize));
+                return (static_cast<int64_t>(gx) << 32) | static_cast<uint32_t>(gy);
+            };
+
+            for (int32_t idx : weakIndices) {
+                int64_t key = toGridKey(edgePoints[idx].x, edgePoints[idx].y);
+                weakGrid[key].push_back(idx);
+            }
+
+            std::queue<int32_t> bfsQueue;
+            for (int32_t idx : strongIndices) {
+                bfsQueue.push(idx);
+            }
+
+            while (!bfsQueue.empty()) {
+                int32_t currentIdx = bfsQueue.front();
+                bfsQueue.pop();
+
+                const auto& currentPt = edgePoints[currentIdx];
+                int32_t gx = static_cast<int32_t>(std::floor(currentPt.x / gridSize));
+                int32_t gy = static_cast<int32_t>(std::floor(currentPt.y / gridSize));
+
+                for (int32_t dy = -1; dy <= 1; ++dy) {
+                    for (int32_t dx = -1; dx <= 1; ++dx) {
+                        int64_t neighborKey = (static_cast<int64_t>(gx + dx) << 32) |
+                                               static_cast<uint32_t>(gy + dy);
+
+                        auto it = weakGrid.find(neighborKey);
+                        if (it == weakGrid.end()) continue;
+
+                        for (int32_t weakIdx : it->second) {
+                            if (keepFlag[weakIdx] != 0) continue;
+
+                            double ddx = edgePoints[weakIdx].x - currentPt.x;
+                            double ddy = edgePoints[weakIdx].y - currentPt.y;
+                            if (ddx * ddx + ddy * ddy <= gridSizeSq) {
+                                keepFlag[weakIdx] = 1;
+                                bfsQueue.push(weakIdx);
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (size_t i = 0; i < edgePoints.size(); ++i) {
+                if (keepFlag[i] == 1) {
+                    filteredPoints.push_back(edgePoints[i]);
+                }
+            }
+        } else {
+            for (const auto& ep : edgePoints) {
+                if (ep.magnitude >= levelContrastHigh && ep.magnitude <= levelContrastMax) {
+                    filteredPoints.push_back(ep);
+                }
+            }
+        }
+
+        // Step 2: Trace into ordered contours
+        auto contours = TraceContoursXLD(filteredPoints, levelData.width, levelData.height, MIN_CONTOUR_POINTS);
+
+        // Step 3: Resample and collect points
+        std::vector<ModelPoint> allPoints;
+        allPoints.reserve(filteredPoints.size());
+
+        for (const auto& contour : contours) {
+            auto resampled = ResampleContourXLD(contour, RESAMPLE_SPACING);
+
+            if (static_cast<int32_t>(resampled.Size()) < MIN_CONTOUR_POINTS) continue;
+
+            for (size_t i = 0; i < resampled.Size(); ++i) {
+                double relX = resampled.x[i] - levelOriginX;
+                double relY = resampled.y[i] - levelOriginY;
+                allPoints.emplace_back(relX, relY, resampled.angles[i],
+                                       resampled.magnitudes[i], resampled.angleBins[i], 1.0);
+            }
+        }
+
+        levelModel.points = std::move(allPoints);
+
+        // Generate grid points
         std::set<std::pair<int32_t, int32_t>> uniqueGridCoords;
         std::vector<ModelPoint> gridPts;
         gridPts.reserve(levelModel.points.size());
@@ -1071,145 +1424,6 @@ void ShapeModelImpl::BuildSearchAngleCache(double angleStart, double angleExtent
             data.levelBounds[level].maxY = static_cast<int32_t>(std::ceil(maxY));
         }
     }
-}
-
-// =============================================================================
-// ShapeModelImpl::CreateModelLinemod
-// =============================================================================
-
-bool ShapeModelImpl::CreateModelLinemod(const QImage& image, const Rect2i& roi, const Point2d& origin) {
-    // LINEMOD-style model creation (paper-accurate implementation)
-    //
-    // Uses:
-    // - 8-bin orientation quantization (bit flags)
-    // - 3x3 neighbor voting with threshold
-    // - OR spreading for robustness
-    // - SIMILARITY_LUT[8][256] for O(1) scoring
-
-    if (image.Empty() || image.Channels() != 1) {
-        return false;
-    }
-
-    // Extract template region
-    Rect2i actualRoi = roi;
-    if (actualRoi.width <= 0 || actualRoi.height <= 0) {
-        actualRoi = Rect2i(0, 0, image.Width(), image.Height());
-    }
-
-    // Clamp ROI
-    actualRoi.x = std::max(0, actualRoi.x);
-    actualRoi.y = std::max(0, actualRoi.y);
-    actualRoi.width = std::min(actualRoi.width, image.Width() - actualRoi.x);
-    actualRoi.height = std::min(actualRoi.height, image.Height() - actualRoi.y);
-
-    if (actualRoi.width < 8 || actualRoi.height < 8) {
-        return false;
-    }
-
-    templateSize_ = Size2i{actualRoi.width, actualRoi.height};
-
-    // Set origin
-    if (origin.x != 0 || origin.y != 0) {
-        origin_ = origin;
-    } else {
-        origin_ = Point2d{actualRoi.width / 2.0, actualRoi.height / 2.0};
-    }
-
-    // Extract template image
-    QImage templateImg(actualRoi.width, actualRoi.height,
-                       image.Type(), image.GetChannelType());
-    {
-        const uint8_t* src = static_cast<const uint8_t*>(image.Data());
-        uint8_t* dst = static_cast<uint8_t*>(templateImg.Data());
-        const size_t srcStride = image.Stride();
-        const size_t dstStride = templateImg.Stride();
-        const size_t rowBytes = actualRoi.width * (image.Type() == PixelType::Float32 ? 4 : 1);
-
-        for (int32_t y = 0; y < actualRoi.height; ++y) {
-            std::memcpy(dst + y * dstStride,
-                       src + (actualRoi.y + y) * srcStride + actualRoi.x * (rowBytes / actualRoi.width),
-                       rowBytes);
-        }
-    }
-
-    // Build LINEMOD pyramid for template
-    // Compute optimal levels based on template size
-    // Rule: minimum 16 pixels at coarsest level for reliable matching
-    LinemodPyramidParams pyramidParams;
-    constexpr int32_t MIN_LEVEL_SIZE = 16;
-    int32_t minDim = std::min(actualRoi.width, actualRoi.height);
-    int32_t maxValidLevels = 1;
-    int32_t dim = minDim;
-    while (dim >= MIN_LEVEL_SIZE * 2 && maxValidLevels < 6) {
-        dim /= 2;
-        maxValidLevels++;
-    }
-
-    if (params_.numLevels > 0) {
-        // User specified levels - clamp to valid range
-        pyramidParams.numLevels = std::min(params_.numLevels, maxValidLevels);
-    } else {
-        pyramidParams.numLevels = maxValidLevels;
-    }
-    pyramidParams.minMagnitude = static_cast<float>(params_.contrastHigh);
-    pyramidParams.smoothSigma = 1.0;
-    pyramidParams.spreadT = 4;
-    pyramidParams.neighborThreshold = 5;
-    pyramidParams.extractFeatures = true;
-
-    LinemodPyramid pyramid;
-    if (!pyramid.Build(templateImg, pyramidParams)) {
-        return false;
-    }
-
-    // Extract features for each level
-    int32_t numLevels = pyramid.NumLevels();
-    linemodFeatures_.resize(numLevels);
-    levels_.resize(numLevels);
-
-    int32_t maxFeaturesLevel0 = 256;  // Max features at finest level
-    float minDistance = 2.0f;
-
-    for (int32_t level = 0; level < numLevels; ++level) {
-        // Extract features (relative to template center)
-        // Use more features at each level for better robustness
-        int32_t maxFeatures = maxFeaturesLevel0 / (1 << level);
-        maxFeatures = std::max(64, maxFeatures);  // Minimum 64 features per level
-
-        linemodFeatures_[level] = pyramid.ExtractFeatures(
-            level, Rect2i(), maxFeatures, minDistance);
-
-        // Also store in LevelModel for compatibility
-        auto& levelModel = levels_[level];
-        levelModel.width = pyramid.GetWidth(level);
-        levelModel.height = pyramid.GetHeight(level);
-        levelModel.scale = pyramid.GetScale(level);
-
-        // Convert LinemodFeature to ModelPoint for compatibility
-        levelModel.points.clear();
-        levelModel.points.reserve(linemodFeatures_[level].size());
-
-        for (const auto& f : linemodFeatures_[level]) {
-            // Convert 8-bin orientation back to radians
-            double angle = LinemodPyramid::BinToAngle(f.ori);
-
-            levelModel.points.emplace_back(
-                static_cast<double>(f.x),
-                static_cast<double>(f.y),
-                angle,
-                1.0,  // magnitude (not used in LINEMOD)
-                static_cast<int32_t>(f.ori),
-                1.0   // weight
-            );
-        }
-
-        levelModel.BuildSoA();
-    }
-
-    ComputeModelBounds();
-    valid_ = true;
-
-    return true;
 }
 
 // =============================================================================

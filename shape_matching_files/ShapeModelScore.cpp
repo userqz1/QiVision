@@ -78,15 +78,8 @@ double ShapeModelImpl::ComputeScoreAtPosition(
     const float* gyData;
     int32_t width, height, stride;
     if (!pyramid.GetGradientData(level, gxData, gyData, width, height, stride)) {
-        // Lightweight mode - fall back to ComputeScoreQuantized
-        const float cosR = static_cast<float>(std::cos(angle));
-        const float sinR = static_cast<float>(std::sin(angle));
-        double normAngle = angle;
-        while (normAngle < 0) normAngle += 2.0 * PI;
-        while (normAngle >= 2.0 * PI) normAngle -= 2.0 * PI;
-        int32_t rotationBin = static_cast<int32_t>(normAngle * numAngleBins_ / (2.0 * PI)) % numAngleBins_;
-        return ComputeScoreQuantized(pyramid, level, x, y, cosR, sinR, rotationBin,
-                                      greediness, outCoverage, useGridPoints);
+        if (outCoverage) *outCoverage = 0.0;
+        return 0.0;
     }
 
     const float cosR = static_cast<float>(std::cos(angle));
@@ -186,9 +179,12 @@ double ShapeModelImpl::ComputeScoreAtPosition(
         }
     }
 
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
+    double coverage = static_cast<double>(matchedCount) / numPoints;
+    if (outCoverage) *outCoverage = coverage;
     if (totalWeight <= 0) return 0.0;
 
+    // Return pure similarity score (no coverage penalty)
+    // Coverage penalty is applied at final output stage in SearchPyramid
     return static_cast<double>(totalScore) / totalWeight;
 }
 
@@ -213,15 +209,8 @@ double ShapeModelImpl::ComputeScoreBilinearSSE(
     const float* gyData;
     int32_t width, height, stride;
     if (!pyramid.GetGradientData(level, gxData, gyData, width, height, stride)) {
-        // Lightweight mode - fall back to ComputeScoreQuantized
-        const float cosR = static_cast<float>(std::cos(angle));
-        const float sinR = static_cast<float>(std::sin(angle));
-        double normAngle = angle;
-        while (normAngle < 0) normAngle += 2.0 * PI;
-        while (normAngle >= 2.0 * PI) normAngle -= 2.0 * PI;
-        int32_t rotationBin = static_cast<int32_t>(normAngle * numAngleBins_ / (2.0 * PI)) % numAngleBins_;
-        return ComputeScoreQuantized(pyramid, level, x, y, cosR, sinR, rotationBin,
-                                      greediness, outCoverage, useGridPoints);
+        if (outCoverage) *outCoverage = 0.0;
+        return 0.0;
     }
 
     const float cosR = static_cast<float>(std::cos(angle));
@@ -312,9 +301,11 @@ double ShapeModelImpl::ComputeScoreBilinearSSE(
         }
     }
 
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
+    double coverage = static_cast<double>(matchedCount) / numPoints;
+    if (outCoverage) *outCoverage = coverage;
     if (totalWeight <= 0) return 0.0;
 
+    // Return pure similarity score (no coverage penalty)
     return static_cast<double>(totalScore) / totalWeight;
 }
 
@@ -339,13 +330,8 @@ double ShapeModelImpl::ComputeScoreWithSinCos(
     const float* gyData;
     int32_t width, height, stride;
     if (!pyramid.GetGradientData(level, gxData, gyData, width, height, stride)) {
-        // Lightweight mode - fall back to ComputeScoreQuantized
-        // Need to compute rotation bin from cosR/sinR
-        double angle = std::atan2(sinR, cosR);
-        if (angle < 0) angle += 2.0 * PI;
-        int32_t rotationBin = static_cast<int32_t>(angle * numAngleBins_ / (2.0 * PI)) % numAngleBins_;
-        return ComputeScoreQuantized(pyramid, level, x, y, cosR, sinR, rotationBin,
-                                      greediness, outCoverage, useGridPoints);
+        if (outCoverage) *outCoverage = 0.0;
+        return 0.0;
     }
 
     const float scalef = static_cast<float>(scale);
@@ -434,9 +420,11 @@ double ShapeModelImpl::ComputeScoreWithSinCos(
         }
     }
 
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
+    double coverage = static_cast<double>(matchedCount) / numPoints;
+    if (outCoverage) *outCoverage = coverage;
     if (totalWeight <= 0) return 0.0;
 
+    // Return pure similarity score (no coverage penalty)
     return static_cast<double>(totalScore) / totalWeight;
 }
 
@@ -529,9 +517,11 @@ double ShapeModelImpl::ComputeScoreNearestNeighbor(
         }
     }
 
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
+    double coverage = static_cast<double>(matchedCount) / numPoints;
+    if (outCoverage) *outCoverage = coverage;
     if (totalWeight <= 0) return 0.0;
 
+    // Return pure similarity score (no coverage penalty)
     return static_cast<double>(totalScore) / totalWeight;
 }
 
@@ -556,36 +546,19 @@ double ShapeModelImpl::ComputeScoreQuantized(
         return 0.0;
     }
 
-    // Get bin data (required for quantized scoring)
+    const float* gxData;
+    const float* gyData;
+    int32_t width, height, stride;
+    if (!pyramid.GetGradientData(level, gxData, gyData, width, height, stride)) {
+        if (outCoverage) *outCoverage = 0.0;
+        return 0.0;
+    }
+
     const int16_t* binData;
     int32_t binWidth, binHeight, binStride, numBins;
     if (!pyramid.GetAngleBinData(level, binData, binWidth, binHeight, binStride, numBins)) {
         return ComputeScoreWithSinCos(pyramid, level, x, y, cosR, sinR, 1.0, greediness, outCoverage, useGridPoints);
     }
-
-    // Try to get gradient data (for bilinear magnitude interpolation)
-    const float* gxData = nullptr;
-    const float* gyData = nullptr;
-    int32_t gxWidth, gxHeight, gxStride;
-    bool hasGradient = pyramid.GetGradientData(level, gxData, gyData, gxWidth, gxHeight, gxStride);
-
-    // If no gradient, try to get magnitude data directly (lightweight mode)
-    const float* magData = nullptr;
-    int32_t magWidth, magHeight, magStride;
-    bool magIsSquared = false;
-    bool hasMagnitude = false;
-    if (!hasGradient) {
-        hasMagnitude = pyramid.GetMagnitudeData(level, magData, magWidth, magHeight, magStride, magIsSquared);
-        if (!hasMagnitude) {
-            // No gradient and no magnitude data - cannot compute score
-            if (outCoverage) *outCoverage = 0.0;
-            return 0.0;
-        }
-    }
-
-    const int32_t width = hasGradient ? gxWidth : magWidth;
-    const int32_t height = hasGradient ? gxHeight : magHeight;
-    const int32_t stride = hasGradient ? gxStride : magStride;
 
     const float scalef = 1.0f;
     const float xf = static_cast<float>(x);
@@ -622,33 +595,21 @@ double ShapeModelImpl::ComputeScoreQuantized(
         if (imgY < 0) iy--;
 
         if (ix >= 0 && ix <= maxX && iy >= 0 && iy <= maxY) {
-            float magSq;
+            float fx = imgX - ix;
+            float fy = imgY - iy;
 
-            if (hasGradient) {
-                // Full mode: bilinear interpolate gx/gy, compute magSq
-                float fx = imgX - ix;
-                float fy = imgY - iy;
-                float w00 = (1.0f - fx) * (1.0f - fy);
-                float w10 = fx * (1.0f - fy);
-                float w01 = (1.0f - fx) * fy;
-                float w11 = fx * fy;
+            float w00 = (1.0f - fx) * (1.0f - fy);
+            float w10 = fx * (1.0f - fy);
+            float w01 = (1.0f - fx) * fy;
+            float w11 = fx * fy;
 
-                int32_t idx = iy * stride + ix;
-                float gx = w00 * gxData[idx] + w10 * gxData[idx + 1] +
-                           w01 * gxData[idx + stride] + w11 * gxData[idx + stride + 1];
-                float gy = w00 * gyData[idx] + w10 * gyData[idx + 1] +
-                           w01 * gyData[idx + stride] + w11 * gyData[idx + stride + 1];
-                magSq = gx * gx + gy * gy;
-            } else {
-                // Lightweight mode: nearest-neighbor magSq lookup
-                int32_t nearestX = static_cast<int32_t>(imgX + 0.5f);
-                int32_t nearestY = static_cast<int32_t>(imgY + 0.5f);
-                nearestX = std::max(0, std::min(width - 1, nearestX));
-                nearestY = std::max(0, std::min(height - 1, nearestY));
-                float m = magData[nearestY * stride + nearestX];
-                magSq = magIsSquared ? m : (m * m);
-            }
+            int32_t idx = iy * stride + ix;
+            float gx = w00 * gxData[idx] + w10 * gxData[idx + 1] +
+                       w01 * gxData[idx + stride] + w11 * gxData[idx + stride + 1];
+            float gy = w00 * gyData[idx] + w10 * gyData[idx + 1] +
+                       w01 * gyData[idx + stride] + w11 * gyData[idx + stride + 1];
 
+            float magSq = gx * gx + gy * gy;
             if (magSq >= minMagSq) {
                 int32_t nearestX = static_cast<int32_t>(imgX + 0.5f);
                 int32_t nearestY = static_cast<int32_t>(imgY + 0.5f);
@@ -677,9 +638,11 @@ double ShapeModelImpl::ComputeScoreQuantized(
         }
     }
 
-    if (outCoverage) *outCoverage = static_cast<double>(matchedCount) / numPoints;
+    double coverage = static_cast<double>(matchedCount) / numPoints;
+    if (outCoverage) *outCoverage = coverage;
     if (totalWeight <= 0) return 0.0;
 
+    // Return pure similarity score (no coverage penalty)
     return static_cast<double>(totalScore) / totalWeight;
 }
 

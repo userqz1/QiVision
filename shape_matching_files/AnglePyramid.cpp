@@ -125,78 +125,6 @@ static inline __m256 atan2_avx2(__m256 y, __m256 x) {
     return atan_val;
 }
 
-// Ultra-fast direct angle bin quantization (skips float direction)
-// For 64 bins: uses octant + fast approximation
-// Returns integer bin values directly
-static inline __m256i fast_angle_bin_avx2(__m256 gy, __m256 gx, int32_t numBins) {
-    // For 64 bins, each bin = 5.625 degrees
-    // Use octant determination + linear interpolation within octant
-
-    const __m256 abs_sign_mask = _mm256_set1_ps(-0.0f);
-    const __m256 abs_gx = _mm256_andnot_ps(abs_sign_mask, gx);
-    const __m256 abs_gy = _mm256_andnot_ps(abs_sign_mask, gy);
-    const __m256 eps = _mm256_set1_ps(1e-10f);
-
-    // Determine octant (0-7) based on signs and |gy| vs |gx|
-    // Octant 0: gx>0, gy>=0, |gx|>=|gy| -> angle in [0, π/4]
-    // etc.
-
-    __m256 gy_gt_gx = _mm256_cmp_ps(abs_gy, abs_gx, _CMP_GT_OQ);
-    __m256 gx_neg = _mm256_cmp_ps(gx, _mm256_setzero_ps(), _CMP_LT_OQ);
-    __m256 gy_neg = _mm256_cmp_ps(gy, _mm256_setzero_ps(), _CMP_LT_OQ);
-
-    // Compute angle within octant using approximation: atan(t) ≈ t * π/4 for small t
-    // Better approximation: atan(t) ≈ t - t³/3 + t⁵/5... but for bin quantization, linear is enough
-    __m256 max_abs = _mm256_max_ps(abs_gx, abs_gy);
-    __m256 min_abs = _mm256_min_ps(abs_gx, abs_gy);
-    max_abs = _mm256_max_ps(max_abs, eps);  // Avoid div by zero
-
-    // ratio in [0, 1], maps to [0, π/4] within octant
-    __m256 ratio = _mm256_div_ps(min_abs, max_abs);
-
-    // Better linear approximation for atan: atan(t) ≈ 0.9817 * t for t in [0,1]
-    // This gives max error ~3 degrees, acceptable for 64 bins (5.625 deg each)
-    const float binsPerOctant = numBins / 8.0f;
-    __m256 octant_offset = _mm256_mul_ps(ratio, _mm256_set1_ps(binsPerOctant * 0.9817f));
-
-    // Build base octant (integer 0-7)
-    // Octant layout (counterclockwise from +x axis):
-    // 0: +x dominant, +y minor  [0, 45)
-    // 1: +y dominant, +x minor  [45, 90)
-    // 2: +y dominant, -x minor  [90, 135)
-    // 3: -x dominant, +y minor  [135, 180)
-    // 4: -x dominant, -y minor  [180, 225)
-    // 5: -y dominant, -x minor  [225, 270)
-    // 6: -y dominant, +x minor  [270, 315)
-    // 7: +x dominant, -y minor  [315, 360)
-
-    __m256i base = _mm256_setzero_si256();
-
-    // If |gy| > |gx|: add 1 (octants 1,2,5,6)
-    base = _mm256_add_epi32(base, _mm256_and_si256(_mm256_castps_si256(gy_gt_gx), _mm256_set1_epi32(1)));
-
-    // If gx < 0: add 2 (for octants 2,3,4,5) but need to flip for gy_gt_gx
-    __m256i gx_neg_i = _mm256_and_si256(_mm256_castps_si256(gx_neg), _mm256_set1_epi32(1));
-    __m256i gy_gt_gx_i = _mm256_and_si256(_mm256_castps_si256(gy_gt_gx), _mm256_set1_epi32(1));
-    __m256i add_for_gx_neg = _mm256_slli_epi32(_mm256_xor_si256(gx_neg_i, gy_gt_gx_i), 1);
-    add_for_gx_neg = _mm256_add_epi32(add_for_gx_neg, gx_neg_i);  // 2*xor + gx_neg = correct adjustment
-    base = _mm256_add_epi32(base, _mm256_mullo_epi32(gx_neg_i, _mm256_set1_epi32(2)));
-
-    // If gy < 0: add 4 (octants 4,5,6,7)
-    base = _mm256_add_epi32(base, _mm256_and_si256(_mm256_castps_si256(gy_neg), _mm256_set1_epi32(4)));
-
-    // Compute final bin = base * binsPerOctant + offset
-    // But need to handle direction within octant (forward vs backward)
-    __m256 base_f = _mm256_cvtepi32_ps(base);
-    __m256 bin_f = _mm256_fmadd_ps(base_f, _mm256_set1_ps(binsPerOctant), octant_offset);
-
-    // Wrap to [0, numBins)
-    __m256i bin = _mm256_cvttps_epi32(bin_f);
-    bin = _mm256_and_si256(bin, _mm256_set1_epi32(numBins - 1));  // Works if numBins is power of 2
-
-    return bin;
-}
-
 // Fast sqrt for 8 floats using rsqrt + Newton-Raphson
 static inline __m256 fast_sqrt_avx2(__m256 x) {
     // sqrt(x) = x * rsqrt(x)
@@ -256,13 +184,10 @@ public:
                               float* gx, float* gy, float* mag, float* dir, int16_t* bins,
                               int32_t numBins);
 
-    // Lightweight: Only bins + magSq (no gx/gy/dir, no sqrt/atan2)
-    void FusedSobelBinMagSq(const float* src, int32_t width, int32_t height,
-                             int16_t* bins, float* magSq, int32_t numBins);
-
-    // Lightweight build: only stores bins + magSq
-    bool BuildLevelLightweight(const std::vector<float>& srcData, int32_t width, int32_t height,
-                                int32_t level, double scale);
+    // Optimized: Compute Gx/Gy + Mag + Bins (skip Dir for search mode)
+    void FusedSobelGradMagBin(const float* src, int32_t width, int32_t height,
+                               float* gx, float* gy, float* mag, int16_t* bins,
+                               int32_t numBins);
 };
 
 void AnglePyramid::Impl::ComputeGradientMagnitudeDirectionOpt(
@@ -644,45 +569,47 @@ void AnglePyramid::Impl::FusedSobelMagDirBin(
 }
 
 // =============================================================================
-// Lightweight Sobel: Only outputs bins + magSq (no gx/gy/dir, no sqrt/atan2)
-// This is ~3x faster than FusedSobelMagDirBin for large images
+// FusedSobelGradMagBin: Optimized for search (gx/gy + mag + bins, skip dir)
 // =============================================================================
 
-void AnglePyramid::Impl::FusedSobelBinMagSq(
+void AnglePyramid::Impl::FusedSobelGradMagBin(
     const float* src, int32_t width, int32_t height,
-    int16_t* bins, float* magSq, int32_t numBins)
+    float* gx, float* gy, float* mag, int16_t* bins, int32_t numBins)
 {
-    // Octant-based direct bin quantization (no atan2!)
-    // Each octant spans numBins/8 bins
-    const float binsPerOctant = static_cast<float>(numBins) / 8.0f;
+    const float twoPi = static_cast<float>(2.0 * PI);
+    const float binScale = static_cast<float>(numBins) / twoPi;
     const int16_t maxBin = static_cast<int16_t>(numBins - 1);
     const bool useParallel = ShouldUseOpenMP(width, height);
 
 #ifdef __AVX2__
-    (void)binsPerOctant;  // Not used in AVX2 path - using atan2_avx2 instead
+    const __m256 vBinScale = _mm256_set1_ps(binScale);
+    const __m256i vMaxBin = _mm256_set1_epi32(numBins - 1);
+    const __m256i vZero = _mm256_setzero_si256();
 
     auto processRow = [&](int32_t y) {
         const float* row0 = src + (y - 1) * width;
         const float* row1 = src + y * width;
         const float* row2 = src + (y + 1) * width;
 
+        float* gxRow = gx + y * width;
+        float* gyRow = gy + y * width;
+        float* magRow = mag + y * width;
         int16_t* binRow = bins + y * width;
-        float* magSqRow = magSq + y * width;
 
         // Border: x=0
-        binRow[0] = 0;
-        magSqRow[0] = 0.0f;
+        gxRow[0] = 0; gyRow[0] = 0; magRow[0] = 0; binRow[0] = 0;
 
         int32_t x = 1;
 
         // AVX2 vectorized: process 8 pixels at a time
         for (; x + 8 < width; x += 8) {
-            // Sobel 3x3
             __m256 p00 = _mm256_loadu_ps(row0 + x - 1);
             __m256 p01 = _mm256_loadu_ps(row0 + x);
             __m256 p02 = _mm256_loadu_ps(row0 + x + 1);
+
             __m256 p10 = _mm256_loadu_ps(row1 + x - 1);
             __m256 p12 = _mm256_loadu_ps(row1 + x + 1);
+
             __m256 p20 = _mm256_loadu_ps(row2 + x - 1);
             __m256 p21 = _mm256_loadu_ps(row2 + x);
             __m256 p22 = _mm256_loadu_ps(row2 + x + 1);
@@ -699,32 +626,33 @@ void AnglePyramid::Impl::FusedSobelBinMagSq(
             __m256 vert_right = _mm256_sub_ps(p22, p02);
             __m256 vGy = _mm256_add_ps(vert_left, _mm256_add_ps(_mm256_add_ps(vert_mid, vert_mid), vert_right));
 
-            // magSq = gx² + gy² (no sqrt!)
+            // Store Gx/Gy
+            _mm256_storeu_ps(gxRow + x, vGx);
+            _mm256_storeu_ps(gyRow + x, vGy);
+
+            // Magnitude = sqrt(gx^2 + gy^2)
             __m256 gx2 = _mm256_mul_ps(vGx, vGx);
             __m256 gy2 = _mm256_mul_ps(vGy, vGy);
-            __m256 vMagSq = _mm256_add_ps(gx2, gy2);
-            _mm256_storeu_ps(magSqRow + x, vMagSq);
+            __m256 vMag = fast_sqrt_avx2(_mm256_add_ps(gx2, gy2));
+            _mm256_storeu_ps(magRow + x, vMag);
 
-            // Use atan2_avx2 for correct angle quantization (same as full mode)
+            // Direction = atan2(gy, gx) in [0, 2π] (only for bin quantization)
             __m256 vDir = atan2_avx2(vGy, vGx);
-            __m256 vBinScale = _mm256_set1_ps(static_cast<float>(numBins) / static_cast<float>(2.0 * PI));
+
+            // Quantize to bins
             __m256 vBinF = _mm256_mul_ps(vDir, vBinScale);
-
-            // Convert to int and clamp
             __m256i vBin = _mm256_cvttps_epi32(vBinF);
-            vBin = _mm256_max_epi32(vBin, _mm256_setzero_si256());
-            vBin = _mm256_min_epi32(vBin, _mm256_set1_epi32(maxBin));
+            vBin = _mm256_max_epi32(vBin, vZero);
+            vBin = _mm256_min_epi32(vBin, vMaxBin);
 
-            // Pack to int16 (32->16)
+            // Pack to int16
             __m128i lo = _mm256_castsi256_si128(vBin);
             __m128i hi = _mm256_extracti128_si256(vBin, 1);
-            __m128i packed16 = _mm_packs_epi32(lo, hi);  // 8 x int16
-            _mm_storeu_si128(reinterpret_cast<__m128i*>(binRow + x), packed16);
+            __m128i packed = _mm_packs_epi32(lo, hi);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(binRow + x), packed);
         }
 
-        // Scalar fallback - use atan2 for correctness
-        const float twoPi = static_cast<float>(2.0 * PI);
-        const float binScale = static_cast<float>(numBins) / twoPi;
+        // Scalar fallback for remaining pixels
         for (; x < width - 1; ++x) {
             float p00 = row0[x - 1], p01 = row0[x], p02 = row0[x + 1];
             float p10 = row1[x - 1],               p12 = row1[x + 1];
@@ -733,35 +661,34 @@ void AnglePyramid::Impl::FusedSobelBinMagSq(
             float gxVal = (p02 - p00) + 2.0f * (p12 - p10) + (p22 - p20);
             float gyVal = (p20 - p00) + 2.0f * (p21 - p01) + (p22 - p02);
 
-            magSqRow[x] = gxVal * gxVal + gyVal * gyVal;
+            gxRow[x] = gxVal;
+            gyRow[x] = gyVal;
+            magRow[x] = std::sqrt(gxVal * gxVal + gyVal * gyVal);
 
-            // Use atan2 for correctness (scalar fallback is not performance-critical)
             float angle = std::atan2(gyVal, gxVal);
             if (angle < 0) angle += twoPi;
-            int bin = static_cast<int>(angle * binScale);
-            binRow[x] = static_cast<int16_t>(std::clamp(bin, 0, static_cast<int>(maxBin)));
+
+            int32_t bin = static_cast<int32_t>(angle * binScale);
+            binRow[x] = static_cast<int16_t>(std::clamp(bin, 0, static_cast<int32_t>(maxBin)));
         }
 
         // Border: x=width-1
-        binRow[width-1] = 0;
-        magSqRow[width-1] = 0.0f;
+        gxRow[width-1] = 0; gyRow[width-1] = 0; magRow[width-1] = 0; binRow[width-1] = 0;
     };
 
 #else
-    // Scalar version
-    const float twoPi = static_cast<float>(2.0 * PI);
-    const float binScale = static_cast<float>(numBins) / twoPi;
-
+    // Non-AVX2 scalar version
     auto processRow = [&](int32_t y) {
         const float* row0 = src + (y - 1) * width;
         const float* row1 = src + y * width;
         const float* row2 = src + (y + 1) * width;
 
+        float* gxRow = gx + y * width;
+        float* gyRow = gy + y * width;
+        float* magRow = mag + y * width;
         int16_t* binRow = bins + y * width;
-        float* magSqRow = magSq + y * width;
 
-        binRow[0] = 0;
-        magSqRow[0] = 0.0f;
+        gxRow[0] = 0; gyRow[0] = 0; magRow[0] = 0; binRow[0] = 0;
 
         for (int32_t x = 1; x < width - 1; ++x) {
             float p00 = row0[x - 1], p01 = row0[x], p02 = row0[x + 1];
@@ -771,23 +698,26 @@ void AnglePyramid::Impl::FusedSobelBinMagSq(
             float gxVal = (p02 - p00) + 2.0f * (p12 - p10) + (p22 - p20);
             float gyVal = (p20 - p00) + 2.0f * (p21 - p01) + (p22 - p02);
 
-            magSqRow[x] = gxVal * gxVal + gyVal * gyVal;
+            gxRow[x] = gxVal;
+            gyRow[x] = gyVal;
+            magRow[x] = std::sqrt(gxVal * gxVal + gyVal * gyVal);
 
-            // Use atan2 for correct angle quantization (same as full mode)
             float angle = std::atan2(gyVal, gxVal);
             if (angle < 0) angle += twoPi;
-            int bin = static_cast<int>(angle * binScale);
-            binRow[x] = static_cast<int16_t>(std::clamp(bin, 0, static_cast<int>(maxBin)));
+
+            int32_t bin = static_cast<int32_t>(angle * binScale);
+            binRow[x] = static_cast<int16_t>(std::clamp(bin, 0, static_cast<int32_t>(maxBin)));
         }
 
-        binRow[width-1] = 0;
-        magSqRow[width-1] = 0.0f;
+        gxRow[width-1] = 0; gyRow[width-1] = 0; magRow[width-1] = 0; binRow[width-1] = 0;
     };
 #endif
 
     // First row: set to zero
+    std::memset(gx, 0, width * sizeof(float));
+    std::memset(gy, 0, width * sizeof(float));
+    std::memset(mag, 0, width * sizeof(float));
     std::memset(bins, 0, width * sizeof(int16_t));
-    std::memset(magSq, 0, width * sizeof(float));
 
     // Process interior rows
 #ifdef _OPENMP
@@ -807,8 +737,8 @@ void AnglePyramid::Impl::FusedSobelBinMagSq(
 
     // Last row: set to zero
     int32_t lastRow = height - 1;
+    std::memset(mag + lastRow * width, 0, width * sizeof(float));
     std::memset(bins + lastRow * width, 0, width * sizeof(int16_t));
-    std::memset(magSq + lastRow * width, 0, width * sizeof(float));
 }
 
 // =============================================================================
@@ -824,128 +754,101 @@ bool AnglePyramid::Impl::BuildLevelFused(const std::vector<float>& srcData, int3
     levelData.scale = scale;
 
     size_t pixelCount = static_cast<size_t>(width) * height;
+    const bool storeDir = params_.storeDirection;
 
-    // Allocate contiguous buffers
+    // Debug: Validate inputs
+    if (srcData.size() < pixelCount) {
+        fprintf(stderr, "[BuildLevelFused] ERROR: srcData size %zu < pixelCount %zu\n",
+                srcData.size(), pixelCount);
+        return false;
+    }
+    if (width < 3 || height < 3) {
+        fprintf(stderr, "[BuildLevelFused] ERROR: width=%d, height=%d too small\n", width, height);
+        return false;
+    }
+
+    // Allocate contiguous buffers (always need gx/gy/mag/bins for scoring)
     std::vector<float> gxBuffer(pixelCount);
     std::vector<float> gyBuffer(pixelCount);
     std::vector<float> magBuffer(pixelCount);
-    std::vector<float> dirBuffer(pixelCount);
+    std::vector<float> dirBuffer(storeDir ? pixelCount : 1);
     std::vector<int16_t> binBuffer(pixelCount);
 
-    // Fused computation: Sobel + Mag + Dir + Quantize in one pass
-    FusedSobelMagDirBin(srcData.data(), width, height,
-                        gxBuffer.data(), gyBuffer.data(),
-                        magBuffer.data(), dirBuffer.data(),
-                        binBuffer.data(), params_.angleBins);
+    // Fused computation: Sobel + Mag + [Dir] + Quantize in one pass
+    if (storeDir) {
+        // Full computation with direction storage
+        FusedSobelMagDirBin(srcData.data(), width, height,
+                            gxBuffer.data(), gyBuffer.data(),
+                            magBuffer.data(), dirBuffer.data(),
+                            binBuffer.data(), params_.angleBins);
+    } else {
+        // Optimized: compute gx/gy/mag/bins, skip storing dir
+        FusedSobelGradMagBin(srcData.data(), width, height,
+                             gxBuffer.data(), gyBuffer.data(),
+                             magBuffer.data(), binBuffer.data(), params_.angleBins);
+    }
 
-    // Create QImages and copy data
+    // Create QImages (gx/gy always needed for scoring)
     levelData.gradX = QImage(width, height, PixelType::Float32, ChannelType::Gray);
     levelData.gradY = QImage(width, height, PixelType::Float32, ChannelType::Gray);
     levelData.gradMag = QImage(width, height, PixelType::Float32, ChannelType::Gray);
-    levelData.gradDir = QImage(width, height, PixelType::Float32, ChannelType::Gray);
     levelData.angleBinImage = QImage(width, height, PixelType::Int16, ChannelType::Gray);
+    if (storeDir) {
+        levelData.gradDir = QImage(width, height, PixelType::Float32, ChannelType::Gray);
+    }
 
     float* gxDst = static_cast<float*>(levelData.gradX.Data());
     float* gyDst = static_cast<float*>(levelData.gradY.Data());
     float* magDst = static_cast<float*>(levelData.gradMag.Data());
-    float* dirDst = static_cast<float*>(levelData.gradDir.Data());
     int16_t* binDst = static_cast<int16_t*>(levelData.angleBinImage.Data());
-
     int32_t gxStride = levelData.gradX.Stride() / sizeof(float);
     int32_t gyStride = levelData.gradY.Stride() / sizeof(float);
     int32_t magStride = levelData.gradMag.Stride() / sizeof(float);
-    int32_t dirStride = levelData.gradDir.Stride() / sizeof(float);
     int32_t binStride = levelData.angleBinImage.Stride() / sizeof(int16_t);
 
     const bool useParallel = ShouldUseOpenMP(width, height);
 
-    auto copyRow = [&](int32_t y) {
-        for (int32_t x = 0; x < width; ++x) {
-            size_t srcIdx = y * width + x;
-            gxDst[y * gxStride + x] = gxBuffer[srcIdx];
-            gyDst[y * gyStride + x] = gyBuffer[srcIdx];
-            magDst[y * magStride + x] = magBuffer[srcIdx];
-            dirDst[y * dirStride + x] = dirBuffer[srcIdx];
-            binDst[y * binStride + x] = binBuffer[srcIdx];
-        }
-    };
+    if (storeDir) {
+        float* dirDst = static_cast<float*>(levelData.gradDir.Data());
+        int32_t dirStride = levelData.gradDir.Stride() / sizeof(float);
+
+        auto copyRowFull = [&](int32_t y) {
+            for (int32_t x = 0; x < width; ++x) {
+                size_t srcIdx = y * width + x;
+                gxDst[y * gxStride + x] = gxBuffer[srcIdx];
+                gyDst[y * gyStride + x] = gyBuffer[srcIdx];
+                magDst[y * magStride + x] = magBuffer[srcIdx];
+                dirDst[y * dirStride + x] = dirBuffer[srcIdx];
+                binDst[y * binStride + x] = binBuffer[srcIdx];
+            }
+        };
 
 #ifdef _OPENMP
-    if (useParallel) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < height; ++y) {
-            copyRow(y);
-        }
-    } else
+        if (useParallel) {
+            #pragma omp parallel for schedule(static)
+            for (int32_t y = 0; y < height; ++y) { copyRowFull(y); }
+        } else
 #endif
-    {
-        (void)useParallel;
-        for (int32_t y = 0; y < height; ++y) {
-            copyRow(y);
-        }
-    }
-
-    levels_.push_back(std::move(levelData));
-    return true;
-}
-
-// =============================================================================
-// BuildLevelLightweight: Only stores bins + magSq (no gx/gy/dir)
-// This reduces memory write from 5 arrays to 2 arrays (~60% reduction)
-// =============================================================================
-
-bool AnglePyramid::Impl::BuildLevelLightweight(const std::vector<float>& srcData, int32_t width, int32_t height,
-                                                int32_t level, double scale) {
-    PyramidLevelData levelData;
-    levelData.level = level;
-    levelData.width = width;
-    levelData.height = height;
-    levelData.scale = scale;
-
-    size_t pixelCount = static_cast<size_t>(width) * height;
-
-    // Only allocate bins + magSq buffers (no gx/gy/dir)
-    std::vector<int16_t> binBuffer(pixelCount);
-    std::vector<float> magSqBuffer(pixelCount);
-
-    // Lightweight computation: Sobel + direct bin quantization + magSq (no sqrt, no atan2)
-    FusedSobelBinMagSq(srcData.data(), width, height,
-                        binBuffer.data(), magSqBuffer.data(), params_.angleBins);
-
-    // Only create angleBinImage and gradMag (stores magSq, not mag)
-    // gradX, gradY, gradDir remain empty (not allocated)
-    levelData.angleBinImage = QImage(width, height, PixelType::Int16, ChannelType::Gray);
-    levelData.gradMag = QImage(width, height, PixelType::Float32, ChannelType::Gray);  // Actually magSq
-
-    int16_t* binDst = static_cast<int16_t*>(levelData.angleBinImage.Data());
-    float* magSqDst = static_cast<float*>(levelData.gradMag.Data());
-
-    int32_t binStride = levelData.angleBinImage.Stride() / sizeof(int16_t);
-    int32_t magSqStride = levelData.gradMag.Stride() / sizeof(float);
-
-    const bool useParallel = ShouldUseOpenMP(width, height);
-
-    auto copyRow = [&](int32_t y) {
-        for (int32_t x = 0; x < width; ++x) {
-            size_t srcIdx = y * width + x;
-            binDst[y * binStride + x] = binBuffer[srcIdx];
-            magSqDst[y * magSqStride + x] = magSqBuffer[srcIdx];
-        }
-    };
+        { for (int32_t y = 0; y < height; ++y) { copyRowFull(y); } }
+    } else {
+        // Optimized: copy gx/gy/mag/bins (skip dir)
+        auto copyRowOpt = [&](int32_t y) {
+            for (int32_t x = 0; x < width; ++x) {
+                size_t srcIdx = y * width + x;
+                gxDst[y * gxStride + x] = gxBuffer[srcIdx];
+                gyDst[y * gyStride + x] = gyBuffer[srcIdx];
+                magDst[y * magStride + x] = magBuffer[srcIdx];
+                binDst[y * binStride + x] = binBuffer[srcIdx];
+            }
+        };
 
 #ifdef _OPENMP
-    if (useParallel) {
-        #pragma omp parallel for schedule(static)
-        for (int32_t y = 0; y < height; ++y) {
-            copyRow(y);
-        }
-    } else
+        if (useParallel) {
+            #pragma omp parallel for schedule(static)
+            for (int32_t y = 0; y < height; ++y) { copyRowOpt(y); }
+        } else
 #endif
-    {
-        (void)useParallel;
-        for (int32_t y = 0; y < height; ++y) {
-            copyRow(y);
-        }
+        { for (int32_t y = 0; y < height; ++y) { copyRowOpt(y); } }
     }
 
     levels_.push_back(std::move(levelData));
@@ -1261,73 +1164,45 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
         return false;
     }
 
-    // Convert to float and copy to contiguous memory in ONE pass (optimized)
+    // Convert to float for processing (with conditional OpenMP)
     auto tToFloat = std::chrono::high_resolution_clock::now();
-    int32_t w = grayImage.Width();
-    int32_t h = grayImage.Height();
-    std::vector<float> floatContiguous(static_cast<size_t>(w) * h);
-
+    QImage floatImage;
     if (image.Type() == PixelType::Float32) {
-        // Already float - just copy to contiguous
-        const float* srcData = static_cast<const float*>(grayImage.Data());
-        int32_t srcStride = grayImage.Stride() / sizeof(float);
-        const bool useParallel = ShouldUseOpenMP(w, h);
-
-#ifdef _OPENMP
-        if (useParallel) {
-            #pragma omp parallel for schedule(static)
-            for (int32_t y = 0; y < h; ++y) {
-                std::memcpy(floatContiguous.data() + y * w, srcData + y * srcStride, w * sizeof(float));
-            }
-        } else
-#endif
-        {
-            (void)useParallel;
-            for (int32_t y = 0; y < h; ++y) {
-                std::memcpy(floatContiguous.data() + y * w, srcData + y * srcStride, w * sizeof(float));
-            }
-        }
+        floatImage = grayImage;
     } else {
-        // uint8 → float conversion with AVX2 optimization, directly to contiguous buffer
+        floatImage = QImage(grayImage.Width(), grayImage.Height(),
+                            PixelType::Float32, ChannelType::Gray);
         const uint8_t* srcData = static_cast<const uint8_t*>(grayImage.Data());
+        float* dstData = static_cast<float*>(floatImage.Data());
         int32_t srcStride = grayImage.Stride();
+        int32_t dstStride = floatImage.Stride() / sizeof(float);
+        int32_t h = grayImage.Height();
+        int32_t w = grayImage.Width();
+
         const bool useParallel = ShouldUseOpenMP(w, h);
-
-        auto convertRow = [&](int32_t y) {
-            const uint8_t* srcRow = srcData + y * srcStride;
-            float* dstRow = floatContiguous.data() + y * w;
-
-            int32_t x = 0;
-#ifdef __AVX2__
-            // AVX2: convert 8 pixels at a time
-            for (; x + 8 <= w; x += 8) {
-                __m128i v8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(srcRow + x));
-                __m256i v32 = _mm256_cvtepu8_epi32(v8);
-                __m256 vf = _mm256_cvtepi32_ps(v32);
-                _mm256_storeu_ps(dstRow + x, vf);
-            }
-#endif
-            // Scalar fallback
-            for (; x < w; ++x) {
-                dstRow[x] = static_cast<float>(srcRow[x]);
-            }
-        };
 
 #ifdef _OPENMP
         if (useParallel) {
             #pragma omp parallel for schedule(static)
-            for (int32_t y = 0; y < h; ++y) { convertRow(y); }
+            for (int32_t y = 0; y < h; ++y) {
+                for (int32_t x = 0; x < w; ++x) {
+                    dstData[y * dstStride + x] = static_cast<float>(srcData[y * srcStride + x]);
+                }
+            }
         } else
 #endif
         {
             (void)useParallel;
-            for (int32_t y = 0; y < h; ++y) { convertRow(y); }
+            for (int32_t y = 0; y < h; ++y) {
+                for (int32_t x = 0; x < w; ++x) {
+                    dstData[y * dstStride + x] = static_cast<float>(srcData[y * srcStride + x]);
+                }
+            }
         }
     }
     if (params.enableTiming) {
         impl_->timing_.toFloatMs = std::chrono::duration<double, std::milli>(
             std::chrono::high_resolution_clock::now() - tToFloat).count();
-        impl_->timing_.copyMs = 0.0;  // Merged into toFloat
     }
 
     // Build Gaussian pyramid using the existing Pyramid module
@@ -1336,9 +1211,44 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
     pyramidParams.sigma = std::max(1.0, params.smoothSigma);
     pyramidParams.minDimension = 8;  // Minimum 8 pixels at coarsest level
 
-    // Use the float overload of BuildGaussianPyramid (data already contiguous)
+    // Extract float data from the float QImage (handle stride correctly)
+    auto tCopy = std::chrono::high_resolution_clock::now();
+    int32_t floatWidth = floatImage.Width();
+    int32_t floatHeight = floatImage.Height();
+    int32_t floatStride = floatImage.Stride() / sizeof(float);
+    const float* floatSrcData = static_cast<const float*>(floatImage.Data());
+
+    std::vector<float> floatContiguous(floatWidth * floatHeight);
+
+    const bool useParallelCopy = ShouldUseOpenMP(floatWidth, floatHeight);
+
+#ifdef _OPENMP
+    if (useParallelCopy) {
+        #pragma omp parallel for schedule(static)
+        for (int32_t y = 0; y < floatHeight; ++y) {
+            for (int32_t x = 0; x < floatWidth; ++x) {
+                floatContiguous[y * floatWidth + x] = floatSrcData[y * floatStride + x];
+            }
+        }
+    } else
+#endif
+    {
+        (void)useParallelCopy;
+        for (int32_t y = 0; y < floatHeight; ++y) {
+            for (int32_t x = 0; x < floatWidth; ++x) {
+                floatContiguous[y * floatWidth + x] = floatSrcData[y * floatStride + x];
+            }
+        }
+    }
+    if (params.enableTiming) {
+        impl_->timing_.copyMs = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - tCopy).count();
+    }
+
+    // Use the float overload of BuildGaussianPyramid
     auto tGaussPyramid = std::chrono::high_resolution_clock::now();
-    ImagePyramid gaussPyramid = BuildGaussianPyramid(floatContiguous.data(), w, h, pyramidParams);
+    ImagePyramid gaussPyramid = BuildGaussianPyramid(floatContiguous.data(),
+                                                      floatWidth, floatHeight, pyramidParams);
     if (params.enableTiming) {
         impl_->timing_.gaussPyramidMs = std::chrono::duration<double, std::milli>(
             std::chrono::high_resolution_clock::now() - tGaussPyramid).count();
@@ -1354,17 +1264,9 @@ bool AnglePyramid::Build(const QImage& image, const AnglePyramidParams& params) 
 
     for (int32_t level = 0; level < gaussPyramid.NumLevels(); ++level) {
         const auto& pyramidLevel = gaussPyramid.GetLevel(level);
-        bool success;
-        if (params.lightweight) {
-            // Lightweight mode: only bins + magSq, no gx/gy/dir (much faster for search pyramid)
-            success = impl_->BuildLevelLightweight(pyramidLevel.data, pyramidLevel.width, pyramidLevel.height,
-                                                    level, scale);
-        } else {
-            // Full mode: Sobel + Mag + Dir + Quantize (for model creation or when gx/gy needed)
-            success = impl_->BuildLevelFused(pyramidLevel.data, pyramidLevel.width, pyramidLevel.height,
-                                              level, scale);
-        }
-        if (!success) {
+        // Use fused version: Sobel + Mag + Dir + Quantize in one pass
+        if (!impl_->BuildLevelFused(pyramidLevel.data, pyramidLevel.width, pyramidLevel.height,
+                                    level, scale)) {
             Clear();
             return false;
         }
@@ -1609,12 +1511,6 @@ bool AnglePyramid::GetGradientData(int32_t level, const float*& gxData, const fl
     }
 
     const auto& levelData = impl_->levels_[level];
-
-    // In lightweight mode, gradX/gradY are not allocated
-    if (levelData.gradX.Empty() || levelData.gradY.Empty()) {
-        return false;
-    }
-
     gxData = static_cast<const float*>(levelData.gradX.Data());
     gyData = static_cast<const float*>(levelData.gradY.Data());
     width = levelData.width;
@@ -1639,31 +1535,6 @@ bool AnglePyramid::GetAngleBinData(int32_t level, const int16_t*& binData,
     numBins = impl_->params_.angleBins;
 
     return true;
-}
-
-bool AnglePyramid::GetMagnitudeData(int32_t level, const float*& magData,
-                                     int32_t& width, int32_t& height, int32_t& stride,
-                                     bool& isSquared) const {
-    if (level < 0 || level >= static_cast<int32_t>(impl_->levels_.size())) {
-        return false;
-    }
-
-    const auto& levelData = impl_->levels_[level];
-    if (levelData.gradMag.Empty()) {
-        return false;
-    }
-
-    magData = static_cast<const float*>(levelData.gradMag.Data());
-    width = levelData.width;
-    height = levelData.height;
-    stride = levelData.gradMag.Stride() / sizeof(float);
-    isSquared = impl_->params_.lightweight;  // lightweight stores magSq, full stores mag
-
-    return true;
-}
-
-bool AnglePyramid::IsLightweight() const {
-    return impl_->params_.lightweight;
 }
 
 std::vector<EdgePoint> AnglePyramid::ExtractEdgePoints(int32_t level,
@@ -1743,6 +1614,114 @@ std::vector<EdgePoint> AnglePyramid::ExtractEdgePoints(int32_t level,
 
         for (int32_t y = y0; y < y1; ++y) {
             for (int32_t x = x0; x < x1; ++x) {
+                float mag = magData[y * magStride + x];
+
+                if (mag >= threshold) {
+                    float dir = dirData[y * dirStride + x];
+                    int16_t bin = binData[y * binStride + x];
+
+                    result.emplace_back(
+                        static_cast<double>(x),
+                        static_cast<double>(y),
+                        static_cast<double>(dir),
+                        static_cast<double>(mag),
+                        static_cast<int32_t>(bin)
+                    );
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+std::vector<EdgePoint> AnglePyramid::ExtractEdgePoints(int32_t level,
+                                                        const QRegion& region,
+                                                        double minContrast) const {
+    std::vector<EdgePoint> result;
+
+    if (level < 0 || level >= static_cast<int32_t>(impl_->levels_.size())) {
+        return result;
+    }
+
+    if (region.Empty()) {
+        // Empty region = full image, delegate to Rect2i version
+        return ExtractEdgePoints(level, Rect2i(), minContrast);
+    }
+
+    const auto& levelData = impl_->levels_[level];
+
+    // Get region bounding box for fast culling
+    Rect2i bbox = region.BoundingBox();
+    int32_t x0 = std::max(1, bbox.x);
+    int32_t y0 = std::max(1, bbox.y);
+    int32_t x1 = std::min(levelData.width - 1, bbox.x + bbox.width);
+    int32_t y1 = std::min(levelData.height - 1, bbox.y + bbox.height);
+
+    double threshold = (minContrast > 0) ? minContrast : impl_->params_.minContrast;
+
+    const float* magData = static_cast<const float*>(levelData.gradMag.Data());
+    const float* dirData = static_cast<const float*>(levelData.gradDir.Data());
+    const int16_t* binData = static_cast<const int16_t*>(levelData.angleBinImage.Data());
+
+    int32_t magStride = levelData.gradMag.Stride() / sizeof(float);
+    int32_t dirStride = levelData.gradDir.Stride() / sizeof(float);
+    int32_t binStride = levelData.angleBinImage.Stride() / sizeof(int16_t);
+
+    const bool useParallel = ShouldUseOpenMP(levelData.width, levelData.height);
+
+#ifdef _OPENMP
+    if (useParallel) {
+        // Use OpenMP with thread-local vectors
+        #pragma omp parallel
+        {
+            std::vector<EdgePoint> localPoints;
+            localPoints.reserve(1000);
+
+            #pragma omp for schedule(static) nowait
+            for (int32_t y = y0; y < y1; ++y) {
+                for (int32_t x = x0; x < x1; ++x) {
+                    // Check if point is within region
+                    if (!region.Contains(x, y)) {
+                        continue;
+                    }
+
+                    float mag = magData[y * magStride + x];
+
+                    if (mag >= threshold) {
+                        float dir = dirData[y * dirStride + x];
+                        int16_t bin = binData[y * binStride + x];
+
+                        localPoints.emplace_back(
+                            static_cast<double>(x),
+                            static_cast<double>(y),
+                            static_cast<double>(dir),
+                            static_cast<double>(mag),
+                            static_cast<int32_t>(bin)
+                        );
+                    }
+                }
+            }
+
+            #pragma omp critical
+            {
+                result.insert(result.end(), localPoints.begin(), localPoints.end());
+            }
+        }
+    } else
+#endif
+    {
+        // Small image: single-threaded execution
+        (void)useParallel;
+        result.reserve(1000);
+
+        for (int32_t y = y0; y < y1; ++y) {
+            for (int32_t x = x0; x < x1; ++x) {
+                // Check if point is within region
+                if (!region.Contains(x, y)) {
+                    continue;
+                }
+
                 float mag = magData[y * magStride + x];
 
                 if (mag >= threshold) {

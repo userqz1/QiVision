@@ -19,6 +19,7 @@
  */
 
 #include <QiVision/Core/QImage.h>
+#include <QiVision/Core/QRegion.h>
 #include <QiVision/Core/Types.h>
 
 #include <cstdint>
@@ -113,10 +114,10 @@ ShapeModel CreateShapeModel(
 );
 
 /**
- * @brief Create a shape model from ROI
+ * @brief Create a shape model from rectangular ROI
  *
  * @param templateImage Source image
- * @param roi           Region of interest
+ * @param roi           Rectangular region of interest
  * @param numLevels     Number of pyramid levels (0 = auto)
  * @param angleStart    Smallest rotation angle [rad]
  * @param angleExtent   Extent of rotation angles [rad]
@@ -130,6 +131,47 @@ ShapeModel CreateShapeModel(
 ShapeModel CreateShapeModel(
     const QImage& templateImage,
     const Rect2i& roi,
+    int32_t numLevels,
+    double angleStart,
+    double angleExtent,
+    double angleStep,
+    const std::string& optimization,
+    const std::string& metric,
+    const std::string& contrast,
+    double minContrast
+);
+
+/**
+ * @brief Create a shape model from arbitrary region (QRegion)
+ *
+ * Supports any shape: circle, ellipse, polygon, union of shapes, etc.
+ *
+ * @param templateImage Source image
+ * @param region        Region of interest (supports any shape)
+ * @param numLevels     Number of pyramid levels (0 = auto)
+ * @param angleStart    Smallest rotation angle [rad]
+ * @param angleExtent   Extent of rotation angles [rad]
+ * @param angleStep     Step length of angles [rad] (0 = auto)
+ * @param optimization  Point reduction mode
+ * @param metric        Match metric
+ * @param contrast      Threshold for edge extraction
+ * @param minContrast   Minimum contrast in search images
+ * @return Shape model handle
+ *
+ * @code
+ * // Create circular ROI
+ * QRegion circle = QRegion::Circle(320, 240, 100);
+ * ShapeModel model = CreateShapeModel(image, circle, 4, 0, RAD(360), 0,
+ *                                     "auto", "use_polarity", "auto", 10);
+ *
+ * // Create complex ROI (union of shapes)
+ * QRegion roi = QRegion::Circle(100, 100, 50) | QRegion::Rectangle(200, 50, 100, 100);
+ * ShapeModel model2 = CreateShapeModel(image, roi, ...);
+ * @endcode
+ */
+ShapeModel CreateShapeModel(
+    const QImage& templateImage,
+    const QRegion& region,
     int32_t numLevels,
     double angleStart,
     double angleExtent,

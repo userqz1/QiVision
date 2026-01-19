@@ -4,7 +4,6 @@
  *
  * Contains:
  * - SearchPyramid
- * - SearchPyramidWithResponseMap
  * - SearchLevel
  */
 
@@ -80,82 +79,6 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
     // Search grid at top level
     int32_t stepSize = 2;
 
-    // =========================================================================
-    // ResponseMap-based coarse search (O(1) lookup instead of bilinear interp)
-    // NOTE: Disabled - ResponseMap build overhead (~400ms for large images)
-    //       exceeds the savings from O(1) lookup during search.
-    // =========================================================================
-    ResponseMap responseMap;
-    bool useResponseMap = false;  // Disabled: build overhead too high
-
-    if (useResponseMap) {
-        // Prepare rotated models for all search angles
-        const auto& topLevelModel = levels_[startLevel];
-        auto rotatedModels = ResponseMap::PrepareAllRotations(
-            topLevelModel.points, params.angleStart, params.angleExtent, coarseAngleStep);
-
-        // Coarse threshold for ResponseMap (not too low to avoid too many candidates)
-        const double coarseThreshold = params.minScore * 0.6;
-
-        #pragma omp parallel
-        {
-            std::vector<MatchResult> localCandidates;
-
-            #pragma omp for schedule(dynamic)
-            for (size_t angleIdx = 0; angleIdx < rotatedModels.size(); ++angleIdx) {
-                const auto& rotatedModel = rotatedModels[angleIdx];
-
-                // Use precomputed bounds from rotated model
-                int32_t searchXMin = std::max(0, -static_cast<int32_t>(rotatedModel.minX));
-                int32_t searchXMax = std::min(targetWidth - 1,
-                                               targetWidth - 1 - static_cast<int32_t>(rotatedModel.maxX));
-                int32_t searchYMin = std::max(0, -static_cast<int32_t>(rotatedModel.minY));
-                int32_t searchYMax = std::min(targetHeight - 1,
-                                               targetHeight - 1 - static_cast<int32_t>(rotatedModel.maxY));
-
-                if (searchXMin > searchXMax || searchYMin > searchYMax) {
-                    continue;
-                }
-
-                // Fast coarse search using ResponseMap (O(1) per point)
-                for (int32_t y = searchYMin; y <= searchYMax; y += stepSize) {
-                    for (int32_t x = searchXMin; x <= searchXMax; x += stepSize) {
-                        double coverage = 0.0;
-                        double score = responseMap.ComputeScore(rotatedModel, startLevel,
-                                                                 x, y, &coverage);
-
-                        // Lower threshold for coarse filtering
-                        if (score >= coarseThreshold && coverage >= 0.5) {
-                            MatchResult result;
-                            result.x = x;
-                            result.y = y;
-                            result.angle = rotatedModel.angle;
-                            result.score = score;
-                            result.pyramidLevel = startLevel;
-                            localCandidates.push_back(result);
-                        }
-                    }
-                }
-            }
-
-            #pragma omp critical
-            {
-                candidates.insert(candidates.end(), localCandidates.begin(), localCandidates.end());
-            }
-        }
-
-        // Sort and limit candidates before precise verification
-        std::sort(candidates.begin(), candidates.end());
-        if (candidates.size() > 200) {
-            candidates.resize(200);
-        }
-
-        // Skip precise verification at coarse level - let pyramid refinement handle it
-        // Just keep candidates that passed ResponseMap threshold
-
-    } else {
-    // Fallback: original bilinear interpolation method
-
     // Use pregenerated angle cache if available (Halcon pregeneration strategy)
     // This avoids computing cos/sin and bounds for each angle during search
     const bool usePregenCache = !searchAngleCache_.empty() &&
@@ -215,7 +138,7 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
                                                                x, y, cosR, sinR, 1.0, params.greediness, &coverage,
                                                                false);
 
-                        if (score >= params.minScore * 0.7 && coverage >= 0.7) {
+                        if (score >= params.minScore * 0.7 && coverage >= minCoverage_) {
                             MatchResult result;
                             result.x = x;
                             result.y = y;
@@ -283,7 +206,7 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
                                                                x, y, cosR, sinR, 1.0, params.greediness, &coverage,
                                                                false);
 
-                        if (score >= params.minScore * 0.7 && coverage >= 0.7) {
+                        if (score >= params.minScore * 0.7 && coverage >= minCoverage_) {
                             MatchResult result;
                             result.x = x;
                             result.y = y;
@@ -302,7 +225,6 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
             }
         }
     }
-    } // end else (fallback to bilinear)
 
     // Sort candidates by score
     std::sort(candidates.begin(), candidates.end());
@@ -359,9 +281,21 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
         findTiming_.subpixelRefineMs = std::chrono::duration<double, std::milli>(t3 - t2).count();
     }
 
-    // Filter by final score threshold
+    // Apply coverage penalty and filter by final score threshold
+    // Coverage penalty is only applied at final output stage (not during search)
+    // This ensures search doesn't miss true matches due to coverage penalty
     std::vector<MatchResult> results;
-    for (const auto& match : candidates) {
+    for (auto match : candidates) {
+        // Recompute score with coverage at level 0
+        double coverage = 0.0;
+        double similarity = ComputeScoreAtPosition(targetPyramid, 0,
+                                                    match.x, match.y, match.angle, 1.0,
+                                                    0.0, &coverage, false);
+
+        // Apply coverage penalty: score = similarity * coverage^0.75
+        double coveragePenalty = std::pow(coverage, 0.75);
+        match.score = similarity * coveragePenalty;
+
         if (match.score >= params.minScore) {
             results.push_back(match);
         }
@@ -390,191 +324,6 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
         };
         fprintf(stderr, "[Timing] Coarse: %.1fms (%zu candidates), Refine: %.1fms, SubPix: %.1fms, NMS: %.1fms | Total: %.1fms\n",
                 ms(t0, t1), coarseCandidates, ms(t1, t2), ms(t2, t3), ms(t3, t4), ms(t0, t4));
-    }
-
-    return results;
-}
-
-// =============================================================================
-// ShapeModelImpl::SearchPyramidWithResponseMap
-// =============================================================================
-
-std::vector<MatchResult> ShapeModelImpl::SearchPyramidWithResponseMap(
-    const AnglePyramid& targetPyramid,
-    const ResponseMap& responseMap,
-    const SearchParams& params) const
-{
-    if (!valid_ || levels_.empty()) {
-        return {};
-    }
-
-    // Start from coarsest level
-    int32_t startLevel = std::min(static_cast<int32_t>(levels_.size()) - 1,
-                                   targetPyramid.NumLevels() - 1);
-    startLevel = std::min(startLevel, responseMap.NumLevels() - 1);
-
-    double angleStep = params.angleStep;
-    if (angleStep <= 0) {
-        angleStep = EstimateAngleStep(std::max(templateSize_.width, templateSize_.height));
-    }
-
-    // Precompute rotated models for all angles
-    const auto& topLevelModel = levels_[startLevel];
-    auto rotatedModels = ResponseMap::PrepareAllRotations(
-        topLevelModel.points, params.angleStart, params.angleExtent, angleStep);
-
-    // Coarse search at top level using Response Map
-    std::vector<MatchResult> candidates;
-    int32_t targetWidth = responseMap.GetWidth(startLevel);
-    int32_t targetHeight = responseMap.GetHeight(startLevel);
-
-    int32_t stepSize = 2;
-
-    #pragma omp parallel
-    {
-        std::vector<MatchResult> localCandidates;
-
-        #pragma omp for schedule(dynamic)
-        for (size_t angleIdx = 0; angleIdx < rotatedModels.size(); ++angleIdx) {
-            const auto& rotatedModel = rotatedModels[angleIdx];
-
-            int32_t searchXMin = std::max(0, -static_cast<int32_t>(rotatedModel.minX));
-            int32_t searchXMax = std::min(targetWidth - 1,
-                                           targetWidth - 1 - static_cast<int32_t>(rotatedModel.maxX));
-            int32_t searchYMin = std::max(0, -static_cast<int32_t>(rotatedModel.minY));
-            int32_t searchYMax = std::min(targetHeight - 1,
-                                           targetHeight - 1 - static_cast<int32_t>(rotatedModel.maxY));
-
-            if (searchXMin > searchXMax || searchYMin > searchYMax) {
-                continue;
-            }
-
-            for (int32_t y = searchYMin; y <= searchYMax; y += stepSize) {
-                for (int32_t x = searchXMin; x <= searchXMax; x += stepSize) {
-                    double coverage = 0.0;
-                    double score = responseMap.ComputeScore(rotatedModel, startLevel,
-                                                            x, y, &coverage);
-
-                    if (score >= params.minScore * 0.5 && coverage >= 0.7) {
-                        MatchResult result;
-                        result.x = x;
-                        result.y = y;
-                        result.angle = rotatedModel.angle;
-                        result.score = score;
-                        result.pyramidLevel = startLevel;
-                        localCandidates.push_back(result);
-                    }
-                }
-            }
-        }
-
-        #pragma omp critical
-        {
-            candidates.insert(candidates.end(), localCandidates.begin(), localCandidates.end());
-        }
-    }
-
-    std::sort(candidates.begin(), candidates.end());
-
-    if (candidates.size() > 1000) {
-        candidates.resize(1000);
-    }
-
-    // Refine through pyramid levels using PRECISE scoring
-    for (int32_t level = startLevel - 1; level >= 0; --level) {
-        std::vector<MatchResult> refined;
-        refined.reserve(candidates.size());
-
-        double scaleFactor = 2.0;
-        int32_t searchRadius = 2;
-        double angleRadius = 0.1;
-
-        int32_t levelWidth = targetPyramid.GetWidth(level);
-        int32_t levelHeight = targetPyramid.GetHeight(level);
-
-        for (const auto& candidate : candidates) {
-            double baseX = candidate.x * scaleFactor;
-            double baseY = candidate.y * scaleFactor;
-            double baseAngle = candidate.angle;
-
-            MatchResult bestMatch;
-            bestMatch.score = -1.0;
-            double bestCoverage = 0.0;
-
-            for (int32_t dy = -searchRadius; dy <= searchRadius; ++dy) {
-                for (int32_t dx = -searchRadius; dx <= searchRadius; ++dx) {
-                    double px = baseX + dx;
-                    double py = baseY + dy;
-
-                    if (px < 0 || px >= levelWidth || py < 0 || py >= levelHeight) {
-                        continue;
-                    }
-
-                    for (double dAngle = -angleRadius; dAngle <= angleRadius; dAngle += 0.02) {
-                        double angle = baseAngle + dAngle;
-                        double coverage = 0.0;
-                        double score = ComputeScoreAtPosition(targetPyramid, level,
-                                                              px, py, angle, 1.0,
-                                                              params.greediness, &coverage);
-
-                        if (coverage >= 0.7 && score > bestMatch.score) {
-                            bestMatch.x = px;
-                            bestMatch.y = py;
-                            bestMatch.angle = angle;
-                            bestMatch.score = score;
-                            bestMatch.pyramidLevel = level;
-                            bestCoverage = coverage;
-                        }
-                    }
-                }
-            }
-
-            if (bestMatch.score >= params.minScore * 0.5 && bestCoverage >= 0.6) {
-                refined.push_back(bestMatch);
-            }
-        }
-
-        candidates = std::move(refined);
-
-        std::sort(candidates.begin(), candidates.end());
-        if (candidates.size() > 500) {
-            candidates.resize(500);
-        }
-    }
-
-    // Final refinement at level 0
-    for (auto& match : candidates) {
-        double coverage = 0.0;
-        match.score = ComputeScoreAtPosition(targetPyramid, 0,
-                                              match.x, match.y, match.angle, 1.0,
-                                              0.0, &coverage);
-
-        if (params.subpixelMethod != SubpixelMethod::None) {
-            RefinePosition(targetPyramid, match, params.subpixelMethod);
-        }
-
-        double scale = levels_[0].scale;
-        if (scale != 1.0) {
-            match.x /= scale;
-            match.y /= scale;
-        }
-    }
-
-    // Filter by final score threshold
-    std::vector<MatchResult> results;
-    for (const auto& match : candidates) {
-        if (match.score >= params.minScore) {
-            results.push_back(match);
-        }
-    }
-
-    // Use half of model's smaller dimension as minimum distance
-    double nmsDistance = std::min(templateSize_.width, templateSize_.height) * 0.5;
-    nmsDistance = std::max(nmsDistance, 10.0);  // At least 10 pixels
-    results = NonMaxSuppression(results, nmsDistance);
-
-    if (params.maxMatches > 0 && static_cast<int32_t>(results.size()) > params.maxMatches) {
-        results.resize(params.maxMatches);
     }
 
     return results;
@@ -646,7 +395,7 @@ std::vector<MatchResult> ShapeModelImpl::SearchLevel(
                                                            x, y, angle, 1.0, params.greediness, &coverage,
                                                            false);
 
-                    if (coverage >= 0.7 && score > bestMatch.score) {
+                    if (coverage >= minCoverage_ && score > bestMatch.score) {
                         bestMatch.x = x;
                         bestMatch.y = y;
                         bestMatch.angle = angle;
@@ -670,321 +419,6 @@ std::vector<MatchResult> ShapeModelImpl::SearchLevel(
     }
 
     return refined;
-}
-
-// =============================================================================
-// ShapeModelImpl::SearchPyramidLinemod
-// =============================================================================
-
-std::vector<MatchResult> ShapeModelImpl::SearchPyramidLinemod(
-    const LinemodPyramid& targetPyramid,
-    const SearchParams& params) const
-{
-    if (!valid_ || levels_.empty() || linemodFeatures_.empty()) {
-        return {};
-    }
-
-    // Performance timing
-    auto t0 = std::chrono::high_resolution_clock::now();
-    auto t1 = t0, t2 = t0, t3 = t0;
-
-    // Start from coarsest level that has enough features for reliable matching
-    // Too few features (e.g., 4 at level 4) leads to poor discrimination
-    constexpr int32_t MIN_FEATURES_FOR_COARSE = 32;
-
-    int32_t startLevel = std::min(static_cast<int32_t>(linemodFeatures_.size()) - 1,
-                                   targetPyramid.NumLevels() - 1);
-
-    // Find a level with enough features
-    while (startLevel > 0 &&
-           (linemodFeatures_[startLevel].empty() ||
-            static_cast<int32_t>(linemodFeatures_[startLevel].size()) < MIN_FEATURES_FOR_COARSE)) {
-        startLevel--;
-    }
-
-    if (startLevel < 0 || linemodFeatures_[startLevel].empty()) {
-        return {};
-    }
-
-    std::vector<MatchResult> candidates;
-
-    // COARSE angle step for LINEMOD: ~6 degrees
-    // Since LINEMOD uses 8-bin (45 degree) quantization, coarser angle steps are acceptable
-    constexpr double COARSE_ANGLE_STEP_DEG = 6.0;
-    constexpr double COARSE_ANGLE_STEP = COARSE_ANGLE_STEP_DEG * PI / 180.0;
-
-    double angleStep = std::max(params.angleStep, COARSE_ANGLE_STEP);
-
-    // Build angle list for parallel processing
-    std::vector<double> angles;
-    for (double angle = params.angleStart;
-         angle <= params.angleStart + params.angleExtent;
-         angle += angleStep) {
-        angles.push_back(angle);
-    }
-
-    int32_t targetWidth = targetPyramid.GetWidth(startLevel);
-    int32_t targetHeight = targetPyramid.GetHeight(startLevel);
-
-    // Search grid step - OR spreading with T=4 provides tolerance for ±2 pixel offset.
-    // At level 2 (1/4 resolution), step=3 is acceptable for coarse search.
-    // Refinement will find the exact position.
-    constexpr int32_t stepSize = 3;
-
-    // Get model features for top level
-    const auto& modelFeatures = linemodFeatures_[startLevel];
-
-    // Compute model bounds for search region validation
-    int32_t modelMinX = 0, modelMaxX = 0, modelMinY = 0, modelMaxY = 0;
-    for (const auto& f : modelFeatures) {
-        modelMinX = std::min(modelMinX, static_cast<int32_t>(f.x));
-        modelMaxX = std::max(modelMaxX, static_cast<int32_t>(f.x));
-        modelMinY = std::min(modelMinY, static_cast<int32_t>(f.y));
-        modelMaxY = std::max(modelMaxY, static_cast<int32_t>(f.y));
-    }
-
-    // LINEMOD coarse search threshold
-    // With bit operation method (match/no-match), threshold should be lower
-    // since we're doing exact orientation bit matching, not graded LUT scoring.
-    // OR spreading provides spatial tolerance but not angular tolerance.
-    // Use 0.7-0.8 for coarse search to find candidates, then refine.
-    double coarseThreshold = std::max(0.75, params.minScore * 0.8);
-
-    // OpenMP parallelization over angles
-    #pragma omp parallel
-    {
-        std::vector<MatchResult> localCandidates;
-
-        #pragma omp for schedule(dynamic)
-        for (size_t ai = 0; ai < angles.size(); ++ai) {
-            const double angle = angles[ai];
-
-            // OPTIMIZATION: Precompute rotated template for this angle (paper approach)
-            // This moves cos/sin/round outside the position loop
-            auto rotatedFeatures = LinemodPyramid::RotateFeatures(modelFeatures, angle);
-
-            // Compute rotated bounds from precomputed features
-            int32_t rotMinX = 0, rotMaxX = 0, rotMinY = 0, rotMaxY = 0;
-            for (const auto& f : rotatedFeatures) {
-                rotMinX = std::min(rotMinX, static_cast<int32_t>(f.x));
-                rotMaxX = std::max(rotMaxX, static_cast<int32_t>(f.x));
-                rotMinY = std::min(rotMinY, static_cast<int32_t>(f.y));
-                rotMaxY = std::max(rotMaxY, static_cast<int32_t>(f.y));
-            }
-
-            // Valid search region
-            int32_t searchXMin = std::max(0, -rotMinX);
-            int32_t searchXMax = std::min(targetWidth - 1, targetWidth - 1 - rotMaxX);
-            int32_t searchYMin = std::max(0, -rotMinY);
-            int32_t searchYMax = std::min(targetHeight - 1, targetHeight - 1 - rotMaxY);
-
-            if (searchXMin > searchXMax || searchYMin > searchYMax) {
-                continue;
-            }
-
-            // Search all positions using SIMD batch scoring
-            // Process 8 consecutive X positions at once (true SIMD)
-            // Only keep positions aligned with stepSize to reduce candidates
-            alignas(32) double scores8[8];
-
-            for (int32_t y = searchYMin; y <= searchYMax; y += stepSize) {
-                // 对齐到 stepSize 边界，确保 x % stepSize == searchXMin % stepSize
-                int32_t xOffset = searchXMin % stepSize;
-                int32_t x = searchXMin;
-
-                // SIMD batch: 一次处理 8 个连续位置
-                for (; x + 7 <= searchXMax; x += 8) {
-                    targetPyramid.ComputeScoresBatch8(rotatedFeatures, startLevel, x, y, scores8);
-
-                    // 只检查与 stepSize 对齐的位置
-                    for (int32_t i = 0; i < 8; ++i) {
-                        // 检查是否对齐到 stepSize
-                        if (((x + i) % stepSize) != xOffset) continue;
-
-                        if (scores8[i] >= coarseThreshold) {
-                            MatchResult result;
-                            result.x = x + i;
-                            result.y = y;
-                            result.angle = angle;
-                            result.score = scores8[i];
-                            result.pyramidLevel = startLevel;
-                            localCandidates.push_back(result);
-                        }
-                    }
-                }
-
-                // 处理剩余位置（标量，对齐到 stepSize）
-                for (; x <= searchXMax; x += stepSize) {
-                    double score = targetPyramid.ComputeScorePrecomputed(
-                        rotatedFeatures, startLevel, x, y);
-
-                    if (score >= coarseThreshold) {
-                        MatchResult result;
-                        result.x = x;
-                        result.y = y;
-                        result.angle = angle;
-                        result.score = score;
-                        result.pyramidLevel = startLevel;
-                        localCandidates.push_back(result);
-                    }
-                }
-            }
-        }
-
-        #pragma omp critical
-        {
-            candidates.insert(candidates.end(), localCandidates.begin(), localCandidates.end());
-        }
-    }
-
-    // Sort candidates by score (descending)
-    std::sort(candidates.begin(), candidates.end());
-
-    t1 = std::chrono::high_resolution_clock::now();
-    size_t coarseCandidates = candidates.size();
-
-    if (timingParams_.enableTiming) {
-        findTiming_.coarseSearchMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-        findTiming_.numCoarseCandidates = static_cast<int32_t>(coarseCandidates);
-    }
-
-    // Limit candidates for efficiency - be more aggressive
-    if (candidates.size() > 200) {
-        candidates.resize(200);
-    }
-
-    // Refine through pyramid levels using LINEMOD scoring
-    for (int32_t level = startLevel - 1; level >= 0; --level) {
-        if (level >= static_cast<int32_t>(linemodFeatures_.size()) ||
-            linemodFeatures_[level].empty()) {
-            continue;
-        }
-
-        std::vector<MatchResult> refined;
-        refined.reserve(candidates.size());
-
-        double scaleFactor = 2.0;
-        int32_t searchRadius = (level == 0) ? 3 : 2;
-        double angleRadius = (level == 0) ? 0.05 : 0.1;  // ~3 or ~6 degrees
-        double levelAngleStep = (level == 0) ? 0.01 : 0.025;
-
-        int32_t levelWidth = targetPyramid.GetWidth(level);
-        int32_t levelHeight = targetPyramid.GetHeight(level);
-        const auto& levelFeatures = linemodFeatures_[level];
-
-        // Build angle list for this level's refinement
-        std::vector<double> refineAngles;
-        for (double dAngle = -angleRadius; dAngle <= angleRadius; dAngle += levelAngleStep) {
-            refineAngles.push_back(dAngle);
-        }
-
-        // Precompute rotated features for each angle offset
-        // Note: we'll combine with candidate's base angle
-        std::vector<std::vector<LinemodFeature>> rotatedTemplates;
-        rotatedTemplates.resize(refineAngles.size());
-
-        for (const auto& candidate : candidates) {
-            double baseX = candidate.x * scaleFactor;
-            double baseY = candidate.y * scaleFactor;
-            double baseAngle = candidate.angle;
-
-            // Precompute rotated templates for all angle variations around this candidate
-            for (size_t ai = 0; ai < refineAngles.size(); ++ai) {
-                double angle = baseAngle + refineAngles[ai];
-                rotatedTemplates[ai] = LinemodPyramid::RotateFeatures(levelFeatures, angle);
-            }
-
-            MatchResult bestMatch;
-            bestMatch.score = -1.0;
-
-            for (int32_t dy = -searchRadius; dy <= searchRadius; ++dy) {
-                for (int32_t dx = -searchRadius; dx <= searchRadius; ++dx) {
-                    int32_t px = static_cast<int32_t>(baseX) + dx;
-                    int32_t py = static_cast<int32_t>(baseY) + dy;
-
-                    if (px < 0 || px >= levelWidth || py < 0 || py >= levelHeight) {
-                        continue;
-                    }
-
-                    // Use precomputed templates for scoring
-                    for (size_t ai = 0; ai < refineAngles.size(); ++ai) {
-                        double score = targetPyramid.ComputeScorePrecomputed(
-                            rotatedTemplates[ai], level, px, py);
-
-                        if (score > bestMatch.score) {
-                            bestMatch.x = px;
-                            bestMatch.y = py;
-                            bestMatch.angle = baseAngle + refineAngles[ai];
-                            bestMatch.score = score;
-                            bestMatch.pyramidLevel = level;
-                        }
-                    }
-                }
-            }
-
-            if (bestMatch.score >= params.minScore * 0.8) {
-                refined.push_back(bestMatch);
-            }
-        }
-
-        candidates = std::move(refined);
-
-        std::sort(candidates.begin(), candidates.end());
-        size_t limit = (level == 0) ? 50 : 100;
-        if (candidates.size() > limit) {
-            candidates.resize(limit);
-        }
-    }
-
-    t2 = std::chrono::high_resolution_clock::now();
-
-    if (timingParams_.enableTiming) {
-        findTiming_.pyramidRefineMs = std::chrono::duration<double, std::milli>(t2 - t1).count();
-    }
-
-    // Convert from pyramid level 0 to image coordinates
-    double scale = levels_.empty() ? 1.0 : levels_[0].scale;
-    for (auto& match : candidates) {
-        if (scale != 1.0) {
-            match.x /= scale;
-            match.y /= scale;
-        }
-    }
-
-    // Filter by final score threshold
-    std::vector<MatchResult> results;
-    for (const auto& match : candidates) {
-        if (match.score >= params.minScore) {
-            results.push_back(match);
-        }
-    }
-
-    // Apply non-maximum suppression
-    // Use half of model's smaller dimension as minimum distance
-    double nmsDistance = std::min(templateSize_.width, templateSize_.height) * 0.5;
-    nmsDistance = std::max(nmsDistance, 10.0);  // At least 10 pixels
-    results = NonMaxSuppression(results, nmsDistance);
-
-    // Limit results
-    if (params.maxMatches > 0 && static_cast<int32_t>(results.size()) > params.maxMatches) {
-        results.resize(params.maxMatches);
-    }
-
-    t3 = std::chrono::high_resolution_clock::now();
-
-    if (timingParams_.enableTiming) {
-        findTiming_.nmsMs = std::chrono::duration<double, std::milli>(t3 - t2).count();
-    }
-
-    if (timingParams_.printTiming) {
-        auto ms = [](auto start, auto end) {
-            return std::chrono::duration<double, std::milli>(end - start).count();
-        };
-        fprintf(stderr, "[LINEMOD Timing] Coarse: %.1fms (%zu candidates), Refine: %.1fms, NMS: %.1fms | Total: %.1fms\n",
-                ms(t0, t1), coarseCandidates, ms(t1, t2), ms(t2, t3), ms(t0, t3));
-    }
-
-    return results;
 }
 
 } // namespace Internal
