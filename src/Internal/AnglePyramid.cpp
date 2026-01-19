@@ -69,6 +69,27 @@ inline bool ShouldUseOpenMP(int32_t width, int32_t height) {
 
 #ifdef __AVX2__
 
+// Fast reciprocal using rcp_ps + Newton-Raphson iteration
+// More accurate than raw rcp_ps (~0.0003% error vs ~0.4% error)
+// Faster than _mm256_div_ps by ~2-4x
+static inline __m256 fast_rcp_avx2(__m256 x) {
+    // Initial estimate: rcp_ps has ~12 bits of precision
+    __m256 rcp = _mm256_rcp_ps(x);
+
+    // Newton-Raphson iteration: rcp' = rcp * (2 - x * rcp)
+    // This gives ~23 bits of precision (enough for float)
+    __m256 two = _mm256_set1_ps(2.0f);
+    __m256 x_rcp = _mm256_mul_ps(x, rcp);
+    rcp = _mm256_mul_ps(rcp, _mm256_sub_ps(two, x_rcp));
+
+    return rcp;
+}
+
+// Fast division: a / b = a * rcp(b) with Newton-Raphson
+static inline __m256 fast_div_avx2(__m256 a, __m256 b) {
+    return _mm256_mul_ps(a, fast_rcp_avx2(b));
+}
+
 // Fast bin quantization: directly compute bin index from gx/gy without full atan2
 // Uses octant-based approach with linear interpolation within each octant
 // For numBins=16: each octant has 2 bins, total 8 octants
@@ -97,7 +118,7 @@ static inline __m256i fast_quantize_bin_avx2(__m256 gy, __m256 gx, int32_t numBi
     __m256 num = _mm256_min_ps(abs_gy, abs_gx);
     __m256 den = _mm256_max_ps(abs_gy, abs_gx);
     den = _mm256_max_ps(den, eps);  // Avoid division by zero
-    __m256 t = _mm256_div_ps(num, den);
+    __m256 t = fast_div_avx2(num, den);  // rcp + Newton-Raphson
 
     // Fast atan approximation for t in [0,1]: atan(t) ≈ t * (π/4) * (1 + 0.273*(1-t))
     // Simplified: atan(t)/（π/4) ≈ t * (1.273 - 0.273*t) = t * 1.273 - t*t*0.273
@@ -198,7 +219,7 @@ static inline __m256 atan2_avx2(__m256 y, __m256 x) {
     den = _mm256_max_ps(den, _mm256_set1_ps(1e-10f));
 
     // t = num / den (in range [0, 1])
-    __m256 t = _mm256_div_ps(num, den);
+    __m256 t = fast_div_avx2(num, den);  // rcp + Newton-Raphson
     __m256 t2 = _mm256_mul_ps(t, t);
 
     // Polynomial: atan(t) ≈ t * (c1 + t² * (c3 + t² * (c5 + t² * c7)))

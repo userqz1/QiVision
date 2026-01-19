@@ -70,12 +70,147 @@ inline bool ShouldUseParallel(int32_t width, int32_t height) {
 #ifdef __AVX2__
 
 /**
- * @brief 优化版融合高斯下采样 - 减少50%内存使用 + 垂直AVX2向量化
+ * @brief Ring Buffer 版本 - 减少中间缓冲区内存
  *
- * 关键优化:
- * 1. 水平pass: 计算所有行，但只存储偶数列位置 (输出宽度 = dstWidth)
- * 2. 垂直pass: AVX2向量化，一次处理8个输出像素
- * 3. 临时缓冲: dstWidth * srcHeight (相比原来减少50%)
+ * 内存使用: dstWidth * 5 (约 20KB) vs dstWidth * srcHeight (约 16MB)
+ *
+ * 关键实现要点 (避免上次失败的坑):
+ *   1. 水平 pass 用标量代码 (和 Separable 一样)，不要用 gather
+ *   2. 垂直 pass 用 5 次连续 load，不要用 gather
+ *   3. 用指针轮转代替模运算，模运算只在 dy 层做
+ */
+static void FusedGaussianDownsample2x_RingBuffer(
+    const float* __restrict src, int32_t srcWidth, int32_t srcHeight,
+    float* __restrict dst)
+{
+    const int32_t dstWidth = srcWidth / 2;
+    const int32_t dstHeight = srcHeight / 2;
+
+    if (dstWidth <= 0 || dstHeight <= 0) return;
+
+    // 5-tap 高斯核
+    const float k[5] = {1.0f/16.0f, 4.0f/16.0f, 6.0f/16.0f, 4.0f/16.0f, 1.0f/16.0f};
+    const float k0 = k[0], k1 = k[1], k2 = k[2], k3 = k[3], k4 = k[4];
+
+    // Ring buffer: 5 行
+    std::vector<float> ringBuffer(static_cast<size_t>(dstWidth) * 5);
+    float* ring[5];  // 指针数组，用于轮转
+    for (int i = 0; i < 5; ++i) {
+        ring[i] = ringBuffer.data() + i * dstWidth;
+    }
+
+    // 预计算安全区间
+    const int32_t safeDxBegin = 1;
+    const int32_t safeDxEnd = std::max(1, (srcWidth - 2) / 2);
+
+    // 水平模糊函数 - 和 Separable 完全一样，不用 gather
+    auto computeHorizontalRow = [&](int32_t srcY, float* outRow) {
+        int32_t y = srcY;
+        if (y < 0) y = -y;
+        if (y >= srcHeight) y = 2 * srcHeight - 2 - y;
+        y = std::clamp(y, 0, srcHeight - 1);
+
+        const float* __restrict srcRow = src + y * srcWidth;
+
+        // 左边界
+        for (int32_t dx = 0; dx < safeDxBegin && dx < dstWidth; ++dx) {
+            int32_t sx = dx * 2;
+            int32_t p0 = sx - 2 < 0 ? -(sx - 2) : sx - 2;
+            int32_t p1 = sx - 1 < 0 ? -(sx - 1) : sx - 1;
+            outRow[dx] = k0*srcRow[p0] + k1*srcRow[p1] + k2*srcRow[sx] +
+                         k3*srcRow[sx + 1] + k4*srcRow[sx + 2];
+        }
+
+        // 中间安全区间 - 指针递增，连续访问
+        if (safeDxBegin < safeDxEnd && safeDxEnd <= dstWidth) {
+            const float* p = srcRow + safeDxBegin * 2;
+            for (int32_t dx = safeDxBegin; dx < safeDxEnd; ++dx, p += 2) {
+                outRow[dx] = k0*p[-2] + k1*p[-1] + k2*p[0] + k3*p[1] + k4*p[2];
+            }
+        }
+
+        // 右边界
+        for (int32_t dx = safeDxEnd; dx < dstWidth; ++dx) {
+            int32_t sx = dx * 2;
+            int32_t p3 = sx + 1 >= srcWidth ? 2*srcWidth - 2 - (sx + 1) : sx + 1;
+            int32_t p4 = sx + 2 >= srcWidth ? 2*srcWidth - 2 - (sx + 2) : sx + 2;
+            p3 = std::clamp(p3, 0, srcWidth - 1);
+            p4 = std::clamp(p4, 0, srcWidth - 1);
+            outRow[dx] = k0*srcRow[sx - 2] + k1*srcRow[sx - 1] + k2*srcRow[sx] +
+                         k3*srcRow[p3] + k4*srcRow[p4];
+        }
+    };
+
+    // 预填充 ring buffer: 源行 -2, -1, 0, 1, 2
+    for (int i = 0; i < 5; ++i) {
+        computeHorizontalRow(i - 2, ring[i]);
+    }
+
+    // AVX2 常量
+    const __m256 vk0 = _mm256_set1_ps(k[0]);
+    const __m256 vk1 = _mm256_set1_ps(k[1]);
+    const __m256 vk2 = _mm256_set1_ps(k[2]);
+    const __m256 vk3 = _mm256_set1_ps(k[3]);
+    const __m256 vk4 = _mm256_set1_ps(k[4]);
+
+    // 处理每个输出行
+    for (int32_t dy = 0; dy < dstHeight; ++dy) {
+        float* outRow = dst + dy * dstWidth;
+
+        // 垂直模糊: 5 次连续 load (不用 gather!)
+        // ring[0..4] 已经指向正确的 5 行
+        int32_t dx = 0;
+        for (; dx + 8 <= dstWidth; dx += 8) {
+            __m256 v0 = _mm256_loadu_ps(ring[0] + dx);
+            __m256 v1 = _mm256_loadu_ps(ring[1] + dx);
+            __m256 v2 = _mm256_loadu_ps(ring[2] + dx);
+            __m256 v3 = _mm256_loadu_ps(ring[3] + dx);
+            __m256 v4 = _mm256_loadu_ps(ring[4] + dx);
+
+            __m256 sum = _mm256_mul_ps(v0, vk0);
+            sum = _mm256_fmadd_ps(v1, vk1, sum);
+            sum = _mm256_fmadd_ps(v2, vk2, sum);
+            sum = _mm256_fmadd_ps(v3, vk3, sum);
+            sum = _mm256_fmadd_ps(v4, vk4, sum);
+
+            _mm256_storeu_ps(outRow + dx, sum);
+        }
+
+        // 标量处理剩余
+        for (; dx < dstWidth; ++dx) {
+            outRow[dx] = ring[0][dx]*k0 + ring[1][dx]*k1 + ring[2][dx]*k2 +
+                         ring[3][dx]*k3 + ring[4][dx]*k4;
+        }
+
+        // 更新 ring buffer: 指针轮转 (不用模运算!)
+        if (dy + 1 < dstHeight) {
+            int32_t nextSy = (dy + 1) * 2;
+
+            // 保存将被覆盖的两个指针
+            float* old0 = ring[0];
+            float* old1 = ring[1];
+
+            // 轮转指针: ring[2]->ring[0], ring[3]->ring[1], ring[4]->ring[2]
+            ring[0] = ring[2];
+            ring[1] = ring[3];
+            ring[2] = ring[4];
+
+            // 计算新的两行到 old0 和 old1
+            computeHorizontalRow(nextSy + 1, old0);
+            computeHorizontalRow(nextSy + 2, old1);
+
+            // 新指针放到 ring[3] 和 ring[4]
+            ring[3] = old0;
+            ring[4] = old1;
+        }
+    }
+}
+
+/**
+ * @brief 2-pass 分离高斯下采样 (AVX2 优化)
+ *
+ * 使用分离卷积: 先水平模糊，再垂直模糊+下采样
+ * 顺序内存访问对 cache prefetcher 友好
  */
 static void FusedGaussianDownsample2x_Separable(
     const float* __restrict src, int32_t srcWidth, int32_t srcHeight,
@@ -291,6 +426,8 @@ static void FusedGaussianDownsample2x(
     float* dst)
 {
 #ifdef __AVX2__
+    // Separable 版本: 两个大循环，streaming 特性强，流水线跑满
+    // Ring buffer 在当前场景稳定慢 5%，保留代码但不使用
     FusedGaussianDownsample2x_Separable(src, srcWidth, srcHeight, dst);
 #else
     FusedGaussianDownsample2x_Scalar(src, srcWidth, srcHeight, dst);

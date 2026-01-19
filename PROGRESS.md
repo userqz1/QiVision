@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-17 (GUI 交互功能)
+> 最后更新: 2026-01-19 (rcp+NR 快速除法优化)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -245,6 +245,17 @@ Tests    █████████████████░░░ 87%
 ---
 
 ## 变更日志
+
+### 2026-01-19 (rcp+NR 快速除法优化)
+- **Internal/AnglePyramid.cpp 性能优化**:
+  - 新增 `fast_rcp_avx2()`: rcp_ps + Newton-Raphson 迭代，精度 ~23 位
+  - 新增 `fast_div_avx2()`: 快速除法 a * rcp(b)
+  - 替换 `fast_quantize_bin_avx2` 和 `atan2_avx2` 中的 `_mm256_div_ps`
+  - **性能提升**:
+    - Small Images (640x512): 7.2ms → 6.3ms (-12.5%)
+    - Large Images (2048x4001): ~147ms → 144.4ms (-1.8%)
+  - **精度保持**: 所有测试 100% 通过
+- **文档更新**: TROUBLESHOOTING.md 记录成功优化
 
 ### 2026-01-17 (GUI 交互功能)
 - **GUI/Window.h 交互增强**:

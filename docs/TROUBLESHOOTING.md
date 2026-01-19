@@ -178,6 +178,48 @@ LINEMOD uses 8-bin orientation quantization (45° per bin). When the template an
 
 ---
 
+### ❌ Ring Buffer 替代 2-pass Separable 高斯下采样 (2026-01-19)
+
+**尝试内容:**
+将 GaussPyramid 的 2-pass 分离高斯滤波改为 5 行 ring buffer 版本，理论上可减少内存占用从 O(width*height) 到 O(width*5)。
+
+**预期收益:**
+- 内存占用降低 800x (2048x4001 图像: 16.4 MB → 20 KB)
+- 更好的 cache 局部性
+- 减少内存带宽需求
+
+**实际结果 (两次尝试):**
+
+| 版本 | Small | Large | 问题 |
+|------|-------|-------|------|
+| Separable (基线) | 7.6 ms | 147.4 ms | - |
+| Ring v1 (错误: 用 gather) | 6.1 ms | 152.4 ms | gather 太慢 |
+| Ring v2 (正确: 连续 load) | 8.3 ms | 154.8 ms | 仍慢 5% |
+
+**第一次失败 - 实现错误:**
+水平 pass 用了 `_mm256_i32gather_ps` 做 stride=2 访问，这是灾难性的错误。
+Gather 指令把本应连续的 load 变成了每个 lane 随机取值，开销极大。
+
+**第二次失败 - 正确实现仍慢的原因:**
+1. **循环融合破坏了 streaming**: Separable 是两个大循环，像 memcpy 一样流水线跑满；
+   Ring buffer 每个 dy 都要交替做 read 5 rows + write 2 rows + rotate pointers，
+   更像小型调度器，指令开销和前端压力更大
+2. **Small 也变慢说明不是带宽问题**: 如果是 DRAM/L3 瓶颈，Small 应该不受影响
+3. **函数调用开销**: 每个 dy 调用两次 computeHorizontalRow lambda
+
+**什么时候 ring buffer 可能赢:**
+- 图像 > 8000x8000 (hBlur 超过 L3 容量)
+- 多线程场景下 cache 严重竞争
+- 当 Gauss 真正成为带宽瓶颈时
+
+**结论:**
+Ring buffer 代码保留但不使用。Separable 是当前最优解：
+- 性能更好 (稳定快 5%)
+- 代码更简单
+- 维护成本更低
+
+---
+
 ## 成功的优化（可参考）
 
 ### ✅ 消除 Copy 阶段 + OpenMP chunk size 优化 (2025-01-19)
@@ -204,3 +246,39 @@ LINEMOD uses 8-bin orientation quantization (45° per bin). When the template an
 - 每层 BuildLevelFused 从 2 个 parallel for 减少到 1 个
 - 消除了 5 个临时 buffer（gxBuffer, gyBuffer, magBuffer, binBuffer, dirBuffer）的分配和拷贝
 - schedule(static, 64) 增大 chunk 减少调度开销
+
+---
+
+### ✅ rcp_ps + Newton-Raphson 替代 div_ps (2026-01-19)
+
+**优化内容:**
+将 `fast_quantize_bin_avx2` 和 `atan2_avx2` 中的 `_mm256_div_ps` 替换为 `_mm256_rcp_ps` + Newton-Raphson 迭代。
+
+**技术原理:**
+```cpp
+// 快速倒数: rcp_ps 约 12 位精度，Newton-Raphson 迭代提升到 ~23 位
+__m256 rcp = _mm256_rcp_ps(x);
+rcp = rcp * (2 - x * rcp);  // Newton-Raphson
+
+// 快速除法: a / b = a * rcp(b)
+__m256 result = _mm256_mul_ps(a, rcp);
+```
+
+**优化前后对比:**
+
+| 测试集 | 优化前 | 优化后 | 提升 |
+|--------|--------|--------|------|
+| Small Images (640x512) | 7.2 ms | 6.3 ms | **-12.5%** |
+| Large Images (2048x4001) | ~147 ms | 144.4 ms | -1.8% |
+| Image3 (1280x1024) | 33.1 ms | 32.2 ms | -2.7% |
+| Image4 (Rotated) | 35.1 ms | 37.0 ms | +5.4% |
+
+**关键发现:**
+- Small 图像提升最显著（除法在总计算中占比较高）
+- Large 图像提升较小（内存带宽仍是主要瓶颈）
+- 所有测试 100% 精度保持
+- rcp + NR 比 div 快约 2-4x，但实际提升取决于除法在总时间中的占比
+
+**修改的函数:**
+- `fast_quantize_bin_avx2()` - 计算 t = min/max 比值
+- `atan2_avx2()` - 计算 t = num/den 比值
