@@ -70,11 +70,12 @@ inline bool ShouldUseParallel(int32_t width, int32_t height) {
 #ifdef __AVX2__
 
 /**
- * @brief 更快的融合版本 - 使用可分离核两遍扫描
+ * @brief 优化版融合高斯下采样 - 减少50%内存使用 + 垂直AVX2向量化
  *
- * 虽然还是两遍，但比完整模糊+下采样快，因为:
- * 1. 第一遍只计算偶数行的水平模糊
- * 2. 第二遍在偶数行上做垂直模糊+下采样
+ * 关键优化:
+ * 1. 水平pass: 计算所有行，但只存储偶数列位置 (输出宽度 = dstWidth)
+ * 2. 垂直pass: AVX2向量化，一次处理8个输出像素
+ * 3. 临时缓冲: dstWidth * srcHeight (相比原来减少50%)
  */
 static void FusedGaussianDownsample2x_Separable(
     const float* __restrict src, int32_t srcWidth, int32_t srcHeight,
@@ -87,68 +88,53 @@ static void FusedGaussianDownsample2x_Separable(
 
     const bool useParallel = ShouldUseParallel(srcWidth, srcHeight);
 
-    // 临时缓冲: 只存储需要的行 (每隔一行的水平模糊结果)
-    // 但为了垂直滤波的边界，我们需要额外的行
-    // 实际需要: srcHeight 行的水平模糊
-    std::vector<float> hBlur(static_cast<size_t>(srcWidth) * srcHeight);
+    // 优化1: 临时缓冲只存储偶数列 (dstWidth * srcHeight)
+    // 相比原来 srcWidth * srcHeight 减少 50%
+    std::vector<float> hBlur(static_cast<size_t>(dstWidth) * srcHeight);
 
-    // Pass 1: 水平 5-tap 高斯 (处理所有行，因为垂直需要)
+    // 5-tap 高斯核 [1, 4, 6, 4, 1] / 16
     const float k[5] = {1.0f/16.0f, 4.0f/16.0f, 6.0f/16.0f, 4.0f/16.0f, 1.0f/16.0f};
 
+    // Pass 1: 水平高斯，只存储偶数列 (dx → sx = dx*2)
+    // 使用标量 + 边界分离，避免 _mm256_set_ps 的开销
+    const float k0 = k[0], k1 = k[1], k2 = k[2], k3 = k[3], k4 = k[4];
+
+    // 预计算安全区间: sx-2 >= 0 且 sx+2 < srcWidth
+    // sx = dx*2, 需要 dx*2 - 2 >= 0 => dx >= 1
+    // 需要 dx*2 + 2 < srcWidth => dx < (srcWidth - 2) / 2
+    const int32_t safeDxBegin = 1;
+    const int32_t safeDxEnd = std::max(1, (srcWidth - 2) / 2);
+
     auto hPass = [&](int32_t y) {
-        const float* srcRow = src + y * srcWidth;
-        float* dstRow = hBlur.data() + y * srcWidth;
+        const float* __restrict srcRow = src + y * srcWidth;
+        float* __restrict outRow = hBlur.data() + y * dstWidth;
 
-        // 左边界
-        for (int32_t x = 0; x < 2; ++x) {
-            float sum = 0.0f;
-            for (int32_t i = 0; i < 5; ++i) {
-                int32_t px = x + i - 2;
-                if (px < 0) px = -px;
-                sum += srcRow[std::clamp(px, 0, srcWidth-1)] * k[i];
+        // 左边界 [0, safeDxBegin) - 需要反射
+        for (int32_t dx = 0; dx < safeDxBegin && dx < dstWidth; ++dx) {
+            int32_t sx = dx * 2;
+            int32_t p0 = sx - 2 < 0 ? -(sx - 2) : sx - 2;
+            int32_t p1 = sx - 1 < 0 ? -(sx - 1) : sx - 1;
+            outRow[dx] = k0*srcRow[p0] + k1*srcRow[p1] + k2*srcRow[sx] +
+                         k3*srcRow[sx + 1] + k4*srcRow[sx + 2];
+        }
+
+        // 中间安全区间 [safeDxBegin, safeDxEnd) - 无边界检查，指针递增
+        if (safeDxBegin < safeDxEnd && safeDxEnd <= dstWidth) {
+            const float* p = srcRow + safeDxBegin * 2;
+            for (int32_t dx = safeDxBegin; dx < safeDxEnd; ++dx, p += 2) {
+                outRow[dx] = k0*p[-2] + k1*p[-1] + k2*p[0] + k3*p[1] + k4*p[2];
             }
-            dstRow[x] = sum;
         }
 
-        // 中间部分 - AVX2
-        int32_t x = 2;
-        const __m256 vk0 = _mm256_set1_ps(k[0]);
-        const __m256 vk1 = _mm256_set1_ps(k[1]);
-        const __m256 vk2 = _mm256_set1_ps(k[2]);
-        const __m256 vk3 = _mm256_set1_ps(k[3]);
-        const __m256 vk4 = _mm256_set1_ps(k[4]);
-
-        for (; x + 8 + 2 <= srcWidth; x += 8) {
-            __m256 v0 = _mm256_loadu_ps(srcRow + x - 2);
-            __m256 v1 = _mm256_loadu_ps(srcRow + x - 1);
-            __m256 v2 = _mm256_loadu_ps(srcRow + x);
-            __m256 v3 = _mm256_loadu_ps(srcRow + x + 1);
-            __m256 v4 = _mm256_loadu_ps(srcRow + x + 2);
-
-            __m256 sum = _mm256_mul_ps(v0, vk0);
-            sum = _mm256_fmadd_ps(v1, vk1, sum);
-            sum = _mm256_fmadd_ps(v2, vk2, sum);
-            sum = _mm256_fmadd_ps(v3, vk3, sum);
-            sum = _mm256_fmadd_ps(v4, vk4, sum);
-
-            _mm256_storeu_ps(dstRow + x, sum);
-        }
-
-        // 标量处理剩余
-        for (; x < srcWidth - 2; ++x) {
-            dstRow[x] = srcRow[x-2]*k[0] + srcRow[x-1]*k[1] + srcRow[x]*k[2] +
-                        srcRow[x+1]*k[3] + srcRow[x+2]*k[4];
-        }
-
-        // 右边界
-        for (; x < srcWidth; ++x) {
-            float sum = 0.0f;
-            for (int32_t i = 0; i < 5; ++i) {
-                int32_t px = x + i - 2;
-                if (px >= srcWidth) px = 2 * srcWidth - 2 - px;
-                sum += srcRow[std::clamp(px, 0, srcWidth-1)] * k[i];
-            }
-            dstRow[x] = sum;
+        // 右边界 [safeDxEnd, dstWidth) - 需要反射
+        for (int32_t dx = safeDxEnd; dx < dstWidth; ++dx) {
+            int32_t sx = dx * 2;
+            int32_t p3 = sx + 1 >= srcWidth ? 2*srcWidth - 2 - (sx + 1) : sx + 1;
+            int32_t p4 = sx + 2 >= srcWidth ? 2*srcWidth - 2 - (sx + 2) : sx + 2;
+            p3 = std::max(0, std::min(p3, srcWidth - 1));
+            p4 = std::max(0, std::min(p4, srcWidth - 1));
+            outRow[dx] = k0*srcRow[sx - 2] + k1*srcRow[sx - 1] + k2*srcRow[sx] +
+                         k3*srcRow[p3] + k4*srcRow[p4];
         }
     };
 
@@ -162,33 +148,50 @@ static void FusedGaussianDownsample2x_Separable(
         for (int32_t y = 0; y < srcHeight; ++y) { hPass(y); }
     }
 
-    // Pass 2: 垂直 5-tap 高斯 + 下采样 (只计算输出位置)
-    // 预计算行索引
-    std::vector<int32_t> rowY(dstHeight * 5);
-    for (int32_t dy = 0; dy < dstHeight; ++dy) {
+    // Pass 2: 垂直高斯 + 下采样，AVX2 向量化
+    // 输出 dy 对应源行 sy = dy * 2，需要行: sy-2, sy-1, sy, sy+1, sy+2
+    auto vPass = [&](int32_t dy) {
+        float* outRow = dst + dy * dstWidth;
         int32_t sy = dy * 2;
+
+        // 预计算 5 个源行指针 (带边界处理)
+        const float* rows[5];
         for (int i = 0; i < 5; ++i) {
             int32_t y = sy + i - 2;
             if (y < 0) y = -y;
             if (y >= srcHeight) y = 2 * srcHeight - 2 - y;
-            rowY[dy * 5 + i] = std::clamp(y, 0, srcHeight - 1);
-        }
-    }
-
-    auto vPass = [&](int32_t dy) {
-        float* outRow = dst + dy * dstWidth;
-
-        // 获取 5 个源行
-        const float* rows[5];
-        for (int i = 0; i < 5; ++i) {
-            rows[i] = hBlur.data() + rowY[dy * 5 + i] * srcWidth;
+            y = std::clamp(y, 0, srcHeight - 1);
+            rows[i] = hBlur.data() + y * dstWidth;
         }
 
-        // 处理每个输出像素 (每隔一个源像素)
-        for (int32_t dx = 0; dx < dstWidth; ++dx) {
-            int32_t sx = dx * 2;
-            outRow[dx] = rows[0][sx]*k[0] + rows[1][sx]*k[1] + rows[2][sx]*k[2] +
-                         rows[3][sx]*k[3] + rows[4][sx]*k[4];
+        // AVX2 向量化: 一次处理 8 个输出像素
+        const __m256 vk0 = _mm256_set1_ps(k[0]);
+        const __m256 vk1 = _mm256_set1_ps(k[1]);
+        const __m256 vk2 = _mm256_set1_ps(k[2]);
+        const __m256 vk3 = _mm256_set1_ps(k[3]);
+        const __m256 vk4 = _mm256_set1_ps(k[4]);
+
+        int32_t dx = 0;
+        for (; dx + 8 <= dstWidth; dx += 8) {
+            __m256 v0 = _mm256_loadu_ps(rows[0] + dx);
+            __m256 v1 = _mm256_loadu_ps(rows[1] + dx);
+            __m256 v2 = _mm256_loadu_ps(rows[2] + dx);
+            __m256 v3 = _mm256_loadu_ps(rows[3] + dx);
+            __m256 v4 = _mm256_loadu_ps(rows[4] + dx);
+
+            __m256 sum = _mm256_mul_ps(v0, vk0);
+            sum = _mm256_fmadd_ps(v1, vk1, sum);
+            sum = _mm256_fmadd_ps(v2, vk2, sum);
+            sum = _mm256_fmadd_ps(v3, vk3, sum);
+            sum = _mm256_fmadd_ps(v4, vk4, sum);
+
+            _mm256_storeu_ps(outRow + dx, sum);
+        }
+
+        // 标量处理剩余
+        for (; dx < dstWidth; ++dx) {
+            outRow[dx] = rows[0][dx]*k[0] + rows[1][dx]*k[1] + rows[2][dx]*k[2] +
+                         rows[3][dx]*k[3] + rows[4][dx]*k[4];
         }
     };
 
@@ -221,22 +224,23 @@ static void FusedGaussianDownsample2x_Scalar(
     const float k[5] = {1.0f/16.0f, 4.0f/16.0f, 6.0f/16.0f, 4.0f/16.0f, 1.0f/16.0f};
     const bool useParallel = ShouldUseParallel(srcWidth, srcHeight);
 
-    // 临时水平模糊缓冲
-    std::vector<float> hBlur(static_cast<size_t>(srcWidth) * srcHeight);
+    // 优化: 临时缓冲只存储偶数列 (dstWidth * srcHeight)
+    std::vector<float> hBlur(static_cast<size_t>(dstWidth) * srcHeight);
 
-    // Pass 1: 水平模糊
+    // Pass 1: 水平模糊，只存储偶数列位置
     auto hPass = [&](int32_t y) {
         const float* srcRow = src + y * srcWidth;
-        float* dstRow = hBlur.data() + y * srcWidth;
-        for (int32_t x = 0; x < srcWidth; ++x) {
+        float* dstRow = hBlur.data() + y * dstWidth;
+        for (int32_t dx = 0; dx < dstWidth; ++dx) {
+            int32_t sx = dx * 2;  // 只计算偶数列
             float sum = 0.0f;
             for (int i = 0; i < 5; ++i) {
-                int32_t px = x + i - 2;
+                int32_t px = sx + i - 2;
                 if (px < 0) px = -px;
                 if (px >= srcWidth) px = 2 * srcWidth - 2 - px;
                 sum += srcRow[std::clamp(px, 0, srcWidth-1)] * k[i];
             }
-            dstRow[x] = sum;
+            dstRow[dx] = sum;
         }
     };
 
@@ -256,13 +260,12 @@ static void FusedGaussianDownsample2x_Scalar(
         int32_t sy = dy * 2;
 
         for (int32_t dx = 0; dx < dstWidth; ++dx) {
-            int32_t sx = dx * 2;
             float sum = 0.0f;
             for (int i = 0; i < 5; ++i) {
                 int32_t py = sy + i - 2;
                 if (py < 0) py = -py;
                 if (py >= srcHeight) py = 2 * srcHeight - 2 - py;
-                sum += hBlur[std::clamp(py, 0, srcHeight-1) * srcWidth + sx] * k[i];
+                sum += hBlur[std::clamp(py, 0, srcHeight-1) * dstWidth + dx] * k[i];
             }
             outRow[dx] = sum;
         }
