@@ -4,6 +4,7 @@
  */
 
 #include <QiVision/Internal/Fitting.h>
+#include <QiVision/Internal/Eigen.h>
 #include <QiVision/Platform/Random.h>
 
 #include <algorithm>
@@ -1009,6 +1010,7 @@ CircleFitResult FitCircleHuber(const std::vector<Point2d>& points,
 
     auto residuals = ComputeCircleResiduals(points, result.circle);
     FillResidualStats(result, residuals, params);
+    result.weights = weights;  // Save weights for outlier visualization
     result.numInliers = result.numPoints;
 
     return result;
@@ -1062,6 +1064,7 @@ CircleFitResult FitCircleTukey(const std::vector<Point2d>& points,
 
     auto residuals = ComputeCircleResiduals(points, result.circle);
     FillResidualStats(result, residuals, params);
+    result.weights = weights;  // Save weights for outlier visualization
 
     double scale = RobustScaleMAD(residuals);
     if (scale < 1e-10) scale = 1.0;
@@ -1511,6 +1514,576 @@ EllipseFitResult FitEllipseRANSAC(const std::vector<Point2d>& points,
 
     auto residuals = ComputeEllipseResiduals(points, result.ellipse);
     FillResidualStats(result, residuals, params);
+
+    return result;
+}
+
+// =============================================================================
+// Robust Ellipse Fitting (IRLS)
+// =============================================================================
+
+// Helper: Weighted Ellipse Fitzgibbon fitting
+static EllipseFitResult FitEllipseWeightedInternal(const std::vector<Point2d>& points,
+                                                    const std::vector<double>& weights,
+                                                    const FitParams& params) {
+    EllipseFitResult result;
+    result.success = false;
+    result.numPoints = static_cast<int>(points.size());
+
+    if (points.size() < ELLIPSE_FIT_MIN_POINTS) {
+        return result;
+    }
+
+    // Compute weighted centroid for normalization
+    double sumW = 0.0;
+    double cx = 0.0, cy = 0.0;
+    for (size_t i = 0; i < points.size(); ++i) {
+        double w = weights[i];
+        sumW += w;
+        cx += w * points[i].x;
+        cy += w * points[i].y;
+    }
+    if (sumW < 1e-15) {
+        return result;
+    }
+    cx /= sumW;
+    cy /= sumW;
+
+    // Build weighted design matrix D and constraint matrix C
+    // Fitzgibbon: minimize x^T D^T D x subject to x^T C x = 1
+    // where D is [x^2, xy, y^2, x, y, 1] and C enforces 4ac - b^2 = 1
+    Mat<6, 6> S;  // Scatter matrix
+    S.Zero();
+
+    for (size_t i = 0; i < points.size(); ++i) {
+        double w = weights[i];
+        if (w < 1e-10) continue;
+
+        double sqrtW = std::sqrt(w);
+        double x = points[i].x - cx;
+        double y = points[i].y - cy;
+
+        // Design vector [x^2, xy, y^2, x, y, 1]
+        Vec<6> d;
+        d[0] = x * x;
+        d[1] = x * y;
+        d[2] = y * y;
+        d[3] = x;
+        d[4] = y;
+        d[5] = 1.0;
+
+        // Add weighted outer product to scatter matrix
+        for (int r = 0; r < 6; ++r) {
+            for (int c = 0; c < 6; ++c) {
+                S(r, c) += w * d[r] * d[c];
+            }
+        }
+    }
+
+    // Partition S into blocks: S = [S1 S2; S2^T S3]
+    // S1: 3x3 (quadratic terms), S3: 3x3 (linear terms)
+    Mat<3, 3> S1, S2, S3;
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            S1(r, c) = S(r, c);
+            S2(r, c) = S(r, c + 3);
+            S3(r, c) = S(r + 3, c + 3);
+        }
+    }
+
+    // Constraint matrix C1 = [0 0 2; 0 -1 0; 2 0 0]
+    Mat<3, 3> C1;
+    C1.Zero();
+    C1(0, 2) = 2.0;
+    C1(1, 1) = -1.0;
+    C1(2, 0) = 2.0;
+
+    // Solve generalized eigenvalue problem: S1 a1 = lambda C1 a1
+    // where a1 relates to S3 via: a2 = -S3^-1 S2^T a1
+
+    // Check if S3 is invertible by computing determinant
+    double det3 = S3(0,0) * (S3(1,1)*S3(2,2) - S3(1,2)*S3(2,1))
+                - S3(0,1) * (S3(1,0)*S3(2,2) - S3(1,2)*S3(2,0))
+                + S3(0,2) * (S3(1,0)*S3(2,1) - S3(1,1)*S3(2,0));
+    if (std::abs(det3) < 1e-15) {
+        // Fallback to standard fitting
+        return FitEllipseFitzgibbon(points, params);
+    }
+
+    Mat<3, 3> S3inv = S3.Inverse();
+    Mat<3, 3> T = S1 - S2 * S3inv * S2.Transpose();
+
+    // Solve T a1 = lambda C1 a1
+    // Equivalent to C1^-1 T a1 = lambda a1
+    Mat<3, 3> C1inv;
+    C1inv.Zero();
+    C1inv(0, 2) = 0.5;
+    C1inv(1, 1) = -1.0;
+    C1inv(2, 0) = 0.5;
+
+    Mat<3, 3> M = C1inv * T;
+
+    // Find eigenvalues and eigenvectors using EigenSymmetric3x3
+    // Convert Mat<3,3> to Mat33 (same type)
+    auto eigenResult = EigenSymmetric3x3(M);
+    if (!eigenResult.valid) {
+        return FitEllipseFitzgibbon(points, params);
+    }
+
+    // Find eigenvector with positive eigenvalue satisfying ellipse constraint
+    // Eigenvectors: v1, v2, v3 with eigenvalues lambda1, lambda2, lambda3
+    Vec<3> a1;
+    bool found = false;
+
+    // Check each eigenvector
+    Vec<3> eigenvectors[3] = {eigenResult.v1, eigenResult.v2, eigenResult.v3};
+    for (int i = 0; i < 3; ++i) {
+        Vec<3> v = eigenvectors[i];
+
+        // Check constraint: 4*a*c - b^2 > 0 (ellipse condition)
+        double cond = 4.0 * v[0] * v[2] - v[1] * v[1];
+        if (cond > 0) {
+            a1 = v;
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        return FitEllipseFitzgibbon(points, params);
+    }
+
+    // Compute a2 = -S3^-1 S2^T a1
+    Vec<3> a2 = -(S3inv * S2.Transpose()) * a1;
+
+    // Full coefficients [A, B, C, D, E, F] for Ax^2 + Bxy + Cy^2 + Dx + Ey + F = 0
+    double A = a1[0];
+    double B = a1[1];
+    double C = a1[2];
+    double D = a2[0];
+    double E = a2[1];
+    double F = a2[2];
+
+    // Transform back from centered coordinates
+    // Original equation in (x-cx, y-cy): A(x-cx)^2 + B(x-cx)(y-cy) + C(y-cy)^2 + D(x-cx) + E(y-cy) + F = 0
+    // Expand and collect terms
+    double A_orig = A;
+    double B_orig = B;
+    double C_orig = C;
+    double D_orig = -2.0 * A * cx - B * cy + D;
+    double E_orig = -2.0 * C * cy - B * cx + E;
+    double F_orig = A * cx * cx + B * cx * cy + C * cy * cy - D * cx - E * cy + F;
+
+    // Convert to standard ellipse parameters
+    // Center: solve gradient = 0
+    double denom = 4.0 * A_orig * C_orig - B_orig * B_orig;
+    if (std::abs(denom) < 1e-15) {
+        return FitEllipseFitzgibbon(points, params);
+    }
+
+    double ecx = (B_orig * E_orig - 2.0 * C_orig * D_orig) / denom;
+    double ecy = (B_orig * D_orig - 2.0 * A_orig * E_orig) / denom;
+
+    // Angle: theta = 0.5 * atan2(B, A - C)
+    double theta = 0.5 * std::atan2(B_orig, A_orig - C_orig);
+
+    // Semi-axes from eigenvalues of quadratic form
+    double cosT = std::cos(theta);
+    double sinT = std::sin(theta);
+
+    double A_rot = A_orig * cosT * cosT + B_orig * cosT * sinT + C_orig * sinT * sinT;
+    double C_rot = A_orig * sinT * sinT - B_orig * cosT * sinT + C_orig * cosT * cosT;
+
+    // F at center
+    double F_center = A_orig * ecx * ecx + B_orig * ecx * ecy + C_orig * ecy * ecy +
+                      D_orig * ecx + E_orig * ecy + F_orig;
+
+    if (F_center > 0 || A_rot < 1e-15 || C_rot < 1e-15) {
+        return FitEllipseFitzgibbon(points, params);
+    }
+
+    double a = std::sqrt(-F_center / A_rot);
+    double b = std::sqrt(-F_center / C_rot);
+
+    // Ensure a >= b
+    if (a < b) {
+        std::swap(a, b);
+        theta += M_PI / 2.0;
+    }
+
+    // Normalize angle to [-pi/2, pi/2]
+    while (theta > M_PI / 2.0) theta -= M_PI;
+    while (theta < -M_PI / 2.0) theta += M_PI;
+
+    result.ellipse.center = {ecx, ecy};
+    result.ellipse.a = a;
+    result.ellipse.b = b;
+    result.ellipse.angle = theta;
+    result.success = true;
+
+    auto residuals = ComputeEllipseResiduals(points, result.ellipse);
+    FillResidualStats(result, residuals, params);
+
+    return result;
+}
+
+EllipseFitResult FitEllipseHuber(const std::vector<Point2d>& points,
+                                  double sigma,
+                                  const FitParams& params) {
+    EllipseFitResult result;
+    result.success = false;
+    result.numPoints = static_cast<int>(points.size());
+
+    if (points.size() < ELLIPSE_FIT_MIN_POINTS) {
+        return result;
+    }
+
+    // Initial fit using Fitzgibbon
+    result = FitEllipseFitzgibbon(points, params);
+    if (!result.success) return result;
+
+    const int maxIter = 20;
+    const double tol = 1e-6;
+    std::vector<double> weights(points.size(), 1.0);
+
+    for (int iter = 0; iter < maxIter; ++iter) {
+        auto residuals = ComputeEllipseResiduals(points, result.ellipse);
+
+        double scale = sigma;
+        if (scale <= 0) {
+            scale = RobustScaleMAD(residuals);
+            if (scale < 1e-10) scale = 1.0;
+        }
+
+        double maxWeightChange = 0.0;
+        for (size_t i = 0; i < points.size(); ++i) {
+            double r = residuals[i] / scale;
+            double newWeight = HuberWeight(r);
+            maxWeightChange = std::max(maxWeightChange, std::abs(newWeight - weights[i]));
+            weights[i] = newWeight;
+        }
+
+        auto newResult = FitEllipseWeightedInternal(points, weights, params);
+        if (!newResult.success) {
+            // Keep previous result
+            break;
+        }
+        result = newResult;
+
+        if (maxWeightChange < tol) break;
+    }
+
+    auto residuals = ComputeEllipseResiduals(points, result.ellipse);
+    FillResidualStats(result, residuals, params);
+    result.weights = weights;
+    result.numInliers = result.numPoints;
+
+    return result;
+}
+
+EllipseFitResult FitEllipseTukey(const std::vector<Point2d>& points,
+                                  double sigma,
+                                  const FitParams& params) {
+    EllipseFitResult result;
+    result.success = false;
+    result.numPoints = static_cast<int>(points.size());
+
+    if (points.size() < ELLIPSE_FIT_MIN_POINTS) {
+        return result;
+    }
+
+    // Initial fit using Fitzgibbon
+    result = FitEllipseFitzgibbon(points, params);
+    if (!result.success) return result;
+
+    const int maxIter = 20;
+    const double tol = 1e-6;
+    std::vector<double> weights(points.size(), 1.0);
+
+    for (int iter = 0; iter < maxIter; ++iter) {
+        auto residuals = ComputeEllipseResiduals(points, result.ellipse);
+
+        double scale = sigma;
+        if (scale <= 0) {
+            scale = RobustScaleMAD(residuals);
+            if (scale < 1e-10) scale = 1.0;
+        }
+
+        double maxWeightChange = 0.0;
+        int numNonZero = 0;
+        for (size_t i = 0; i < points.size(); ++i) {
+            double r = residuals[i] / scale;
+            double newWeight = TukeyWeight(r);
+            maxWeightChange = std::max(maxWeightChange, std::abs(newWeight - weights[i]));
+            weights[i] = newWeight;
+            if (newWeight > 0) ++numNonZero;
+        }
+
+        if (numNonZero < ELLIPSE_FIT_MIN_POINTS) break;
+
+        auto newResult = FitEllipseWeightedInternal(points, weights, params);
+        if (!newResult.success) {
+            break;
+        }
+        result = newResult;
+
+        if (maxWeightChange < tol) break;
+    }
+
+    auto residuals = ComputeEllipseResiduals(points, result.ellipse);
+    FillResidualStats(result, residuals, params);
+    result.weights = weights;
+
+    double scale = RobustScaleMAD(residuals);
+    if (scale < 1e-10) scale = 1.0;
+    result.numInliers = 0;
+    for (size_t i = 0; i < points.size(); ++i) {
+        if (TukeyWeight(residuals[i] / scale) > 0) ++result.numInliers;
+    }
+
+    return result;
+}
+
+// =============================================================================
+// Rectangle Fitting
+// =============================================================================
+
+std::array<std::vector<Point2d>, 4> SegmentPointsByRectangleSide(
+    const std::vector<Point2d>& points,
+    const RotatedRect2d& rect) {
+
+    std::array<std::vector<Point2d>, 4> segments;  // top, right, bottom, left
+
+    double cosPhi = std::cos(rect.angle);
+    double sinPhi = std::sin(rect.angle);
+
+    // Half-dimensions
+    double halfW = rect.width / 2.0;   // along major axis (phi direction)
+    double halfH = rect.height / 2.0;  // perpendicular to phi
+
+    // Rectangle corners in local frame: (+halfW, +halfH), (+halfW, -halfH), etc.
+    // Sides: top (y=+halfH), right (x=+halfW), bottom (y=-halfH), left (x=-halfW)
+
+    for (const auto& p : points) {
+        // Transform to local (rectangle-aligned) coordinates
+        double dx = p.x - rect.center.x;
+        double dy = p.y - rect.center.y;
+        double localX = dx * cosPhi + dy * sinPhi;   // along phi
+        double localY = -dx * sinPhi + dy * cosPhi;  // perpendicular to phi
+
+        // Compute distance to each side
+        double distTop = std::abs(localY - halfH);
+        double distBottom = std::abs(localY + halfH);
+        double distRight = std::abs(localX - halfW);
+        double distLeft = std::abs(localX + halfW);
+
+        // Also check if point is within the side's extent
+        bool withinHorizontal = (localX >= -halfW - halfW * 0.5) && (localX <= halfW + halfW * 0.5);
+        bool withinVertical = (localY >= -halfH - halfH * 0.5) && (localY <= halfH + halfH * 0.5);
+
+        // Find minimum distance and assign to corresponding side
+        double minDist = std::min({distTop, distBottom, distRight, distLeft});
+
+        if (minDist == distTop && withinHorizontal) {
+            segments[0].push_back(p);  // top
+        } else if (minDist == distRight && withinVertical) {
+            segments[1].push_back(p);  // right
+        } else if (minDist == distBottom && withinHorizontal) {
+            segments[2].push_back(p);  // bottom
+        } else if (minDist == distLeft && withinVertical) {
+            segments[3].push_back(p);  // left
+        } else {
+            // Point is near a corner - assign to nearest side
+            if (minDist == distTop) segments[0].push_back(p);
+            else if (minDist == distRight) segments[1].push_back(p);
+            else if (minDist == distBottom) segments[2].push_back(p);
+            else segments[3].push_back(p);
+        }
+    }
+
+    return segments;
+}
+
+std::optional<RotatedRect2d> RectangleFromLines(const std::array<Line2d, 4>& lines) {
+    // lines: [top, right, bottom, left]
+    // Intersections: top-right, right-bottom, bottom-left, left-top
+
+    auto intersect = [](const Line2d& l1, const Line2d& l2) -> std::optional<Point2d> {
+        // l1: a1*x + b1*y + c1 = 0
+        // l2: a2*x + b2*y + c2 = 0
+        double det = l1.a * l2.b - l2.a * l1.b;
+        if (std::abs(det) < 1e-10) return std::nullopt;
+
+        double x = (l1.b * l2.c - l2.b * l1.c) / det;
+        double y = (l2.a * l1.c - l1.a * l2.c) / det;
+        return Point2d{x, y};
+    };
+
+    // Four corners
+    auto p0 = intersect(lines[0], lines[1]);  // top-right
+    auto p1 = intersect(lines[1], lines[2]);  // right-bottom
+    auto p2 = intersect(lines[2], lines[3]);  // bottom-left
+    auto p3 = intersect(lines[3], lines[0]);  // left-top
+
+    if (!p0 || !p1 || !p2 || !p3) {
+        return std::nullopt;
+    }
+
+    // Center is average of diagonals' midpoints
+    Point2d center;
+    center.x = (p0->x + p1->x + p2->x + p3->x) / 4.0;
+    center.y = (p0->y + p1->y + p2->y + p3->y) / 4.0;
+
+    // Compute side lengths
+    double side01 = std::hypot(p1->x - p0->x, p1->y - p0->y);  // right side
+    double side12 = std::hypot(p2->x - p1->x, p2->y - p1->y);  // bottom side
+    double side23 = std::hypot(p3->x - p2->x, p3->y - p2->y);  // left side
+    double side30 = std::hypot(p0->x - p3->x, p0->y - p3->y);  // top side
+
+    // Average width and height
+    double width = (side30 + side12) / 2.0;   // top and bottom (along phi)
+    double height = (side01 + side23) / 2.0;  // right and left (perpendicular)
+
+    // Angle from top line (line[0])
+    // Line normal is (a, b), line direction is (-b, a)
+    double angle = std::atan2(-lines[0].b, lines[0].a);  // direction of top line
+
+    RotatedRect2d result;
+    result.center = center;
+    result.width = width;
+    result.height = height;
+    result.angle = angle;
+
+    return result;
+}
+
+RectangleFitResult FitRectangle(const std::vector<Point2d>& points,
+                                 const RotatedRect2d& initialRect,
+                                 FitMethod method,
+                                 const FitParams& params) {
+    RectangleFitResult result;
+    result.success = false;
+    result.numPoints = static_cast<int>(points.size());
+
+    if (points.size() < 4) {
+        return result;
+    }
+
+    // Segment points by side
+    auto segments = SegmentPointsByRectangleSide(points, initialRect);
+
+    // Check minimum points per side
+    for (int i = 0; i < 4; ++i) {
+        if (segments[i].size() < 2) {
+            // Not enough points on this side - use initial estimate
+            result.rect = initialRect;
+            result.success = true;
+            result.numInliers = static_cast<int>(points.size());
+            return result;
+        }
+    }
+
+    // Fit lines to each side
+    std::array<Line2d, 4> lines;
+    for (int i = 0; i < 4; ++i) {
+        LineFitResult lineResult;
+
+        if (method == FitMethod::Huber) {
+            lineResult = FitLineHuber(segments[i], 0.0, params);
+        } else if (method == FitMethod::Tukey) {
+            lineResult = FitLineTukey(segments[i], 0.0, params);
+        } else {
+            lineResult = FitLine(segments[i], params);
+        }
+
+        if (!lineResult.success) {
+            // Fallback to basic fitting
+            lineResult = FitLine(segments[i], params);
+        }
+
+        if (!lineResult.success) {
+            result.rect = initialRect;
+            result.success = true;
+            result.numInliers = static_cast<int>(points.size());
+            return result;
+        }
+
+        lines[i] = lineResult.line;
+        result.sideResults[i] = lineResult;
+    }
+
+    // Compute rectangle from lines
+    auto rectOpt = RectangleFromLines(lines);
+    if (!rectOpt) {
+        result.rect = initialRect;
+        result.success = true;
+        result.numInliers = static_cast<int>(points.size());
+        return result;
+    }
+
+    result.rect = rectOpt.value();
+    result.success = true;
+
+    // Compute residuals (distance to nearest side)
+    std::vector<double> residuals(points.size());
+    double cosPhi = std::cos(result.rect.angle);
+    double sinPhi = std::sin(result.rect.angle);
+    double halfW = result.rect.width / 2.0;
+    double halfH = result.rect.height / 2.0;
+
+    for (size_t i = 0; i < points.size(); ++i) {
+        double dx = points[i].x - result.rect.center.x;
+        double dy = points[i].y - result.rect.center.y;
+        double localX = dx * cosPhi + dy * sinPhi;
+        double localY = -dx * sinPhi + dy * cosPhi;
+
+        double distX = std::max(0.0, std::abs(localX) - halfW);
+        double distY = std::max(0.0, std::abs(localY) - halfH);
+        residuals[i] = std::sqrt(distX * distX + distY * distY);
+    }
+
+    FillResidualStats(result, residuals, params);
+    result.numInliers = result.numPoints;
+
+    return result;
+}
+
+RectangleFitResult FitRectangleIterative(const std::vector<Point2d>& points,
+                                          const RotatedRect2d& initialRect,
+                                          int maxIterations,
+                                          double convergenceThreshold,
+                                          const FitParams& params) {
+    RectangleFitResult result;
+    result.success = false;
+    result.numPoints = static_cast<int>(points.size());
+
+    if (points.size() < 4) {
+        return result;
+    }
+
+    RotatedRect2d currentRect = initialRect;
+
+    for (int iter = 0; iter < maxIterations; ++iter) {
+        result = FitRectangle(points, currentRect, FitMethod::Huber, params);
+        if (!result.success) {
+            break;
+        }
+
+        // Check convergence
+        double dx = result.rect.center.x - currentRect.center.x;
+        double dy = result.rect.center.y - currentRect.center.y;
+        double dw = result.rect.width - currentRect.width;
+        double dh = result.rect.height - currentRect.height;
+        double da = result.rect.angle - currentRect.angle;
+
+        double change = std::sqrt(dx*dx + dy*dy + dw*dw + dh*dh + da*da * 100.0);
+
+        if (change < convergenceThreshold) {
+            break;
+        }
+
+        currentRect = result.rect;
+    }
 
     return result;
 }

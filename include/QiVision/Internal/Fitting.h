@@ -32,6 +32,7 @@
 #include <QiVision/Internal/Matrix.h>
 #include <QiVision/Internal/Solver.h>
 
+#include <array>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -140,6 +141,7 @@ struct FitResultBase {
 
     std::vector<double> residuals;  ///< Per-point residuals (optional)
     std::vector<bool> inlierMask;   ///< Inlier mask (optional, for RANSAC)
+    std::vector<double> weights;    ///< Per-point weights (optional, for Huber/Tukey)
 };
 
 /**
@@ -557,6 +559,35 @@ EllipseFitResult FitEllipse(const std::vector<Point2d>& points,
                              const FitParams& params = FitParams());
 
 /**
+ * @brief Fit ellipse using Huber robust estimator
+ *
+ * Uses IRLS with Huber weight function on geometric distances.
+ *
+ * @param points Input points
+ * @param sigma Scale estimate (if <= 0, computed automatically via MAD)
+ * @param params Fitting parameters
+ * @return EllipseFitResult with weights
+ */
+EllipseFitResult FitEllipseHuber(const std::vector<Point2d>& points,
+                                  double sigma = 0.0,
+                                  const FitParams& params = FitParams());
+
+/**
+ * @brief Fit ellipse using Tukey biweight robust estimator
+ *
+ * Uses IRLS with Tukey biweight function.
+ * Completely rejects outliers beyond threshold.
+ *
+ * @param points Input points
+ * @param sigma Scale estimate (if <= 0, computed automatically via MAD)
+ * @param params Fitting parameters
+ * @return EllipseFitResult with weights
+ */
+EllipseFitResult FitEllipseTukey(const std::vector<Point2d>& points,
+                                  double sigma = 0.0,
+                                  const FitParams& params = FitParams());
+
+/**
  * @brief Fit ellipse using RANSAC
  *
  * @param points Input points
@@ -567,6 +598,94 @@ EllipseFitResult FitEllipse(const std::vector<Point2d>& points,
 EllipseFitResult FitEllipseRANSAC(const std::vector<Point2d>& points,
                                    const RansacParams& ransacParams = RansacParams(),
                                    const FitParams& params = FitParams());
+
+// =============================================================================
+// Rectangle Fitting Functions
+// =============================================================================
+
+/**
+ * @brief Rectangle fitting result
+ */
+struct RectangleFitResult : public FitResultBase {
+    RotatedRect2d rect;               ///< Fitted rectangle (center, size, angle)
+
+    /// Get center
+    Point2d Center() const { return rect.center; }
+
+    /// Get half-length along major axis
+    double Length1() const { return rect.width / 2.0; }
+
+    /// Get half-length along minor axis
+    double Length2() const { return rect.height / 2.0; }
+
+    /// Get rotation angle in radians
+    double Angle() const { return rect.angle; }
+
+    /// Per-side fit results (4 lines)
+    std::array<LineFitResult, 4> sideResults;
+};
+
+/**
+ * @brief Fit rectangle from edge points using robust line fitting
+ *
+ * Algorithm:
+ * 1. Segment points into 4 groups by initial rectangle estimate
+ * 2. Fit 4 lines using robust method (Huber/Tukey)
+ * 3. Compute rectangle from line intersections
+ * 4. Optionally refine by iterating
+ *
+ * @param points Input edge points
+ * @param initialRect Initial rectangle estimate (center, size, angle)
+ * @param method Robust fitting method (Huber or Tukey)
+ * @param params Fitting parameters
+ * @return RectangleFitResult with fitted rectangle
+ */
+RectangleFitResult FitRectangle(const std::vector<Point2d>& points,
+                                 const RotatedRect2d& initialRect,
+                                 FitMethod method = FitMethod::Huber,
+                                 const FitParams& params = FitParams());
+
+/**
+ * @brief Fit rectangle with iterative refinement
+ *
+ * Iterates segmentation and fitting until convergence.
+ *
+ * @param points Input edge points
+ * @param initialRect Initial rectangle estimate
+ * @param maxIterations Maximum refinement iterations
+ * @param convergenceThreshold Stop when parameters change less than this
+ * @param params Fitting parameters
+ * @return RectangleFitResult
+ */
+RectangleFitResult FitRectangleIterative(const std::vector<Point2d>& points,
+                                          const RotatedRect2d& initialRect,
+                                          int maxIterations = 10,
+                                          double convergenceThreshold = 0.01,
+                                          const FitParams& params = FitParams());
+
+/**
+ * @brief Segment points into 4 groups by rectangle side
+ *
+ * Assigns each point to the nearest side of the rectangle.
+ *
+ * @param points Input edge points
+ * @param rect Reference rectangle
+ * @return Array of 4 point vectors (top, right, bottom, left sides)
+ */
+std::array<std::vector<Point2d>, 4> SegmentPointsByRectangleSide(
+    const std::vector<Point2d>& points,
+    const RotatedRect2d& rect);
+
+/**
+ * @brief Compute rectangle from 4 fitted lines
+ *
+ * Computes the best-fit rectangle from 4 lines by finding intersections
+ * and computing center, dimensions, and orientation.
+ *
+ * @param lines 4 fitted lines (top, right, bottom, left)
+ * @return Rectangle parameters, or nullopt if lines don't form valid rectangle
+ */
+std::optional<RotatedRect2d> RectangleFromLines(const std::array<Line2d, 4>& lines);
 
 // =============================================================================
 // Generic RANSAC Framework

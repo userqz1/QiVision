@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-20 (Metrology 自动阈值增强)
+> 最后更新: 2026-01-20 (Ellipse/Rectangle2 鲁棒拟合)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -245,6 +245,27 @@ Tests    █████████████████░░░ 87%
 ---
 
 ## 变更日志
+
+### 2026-01-20 (Ellipse/Rectangle2 鲁棒拟合)
+
+- **Internal/Fitting 模块扩展**
+  - **新增 FitEllipseHuber/FitEllipseTukey**: 椭圆鲁棒拟合 (IRLS)
+    - 使用加权 Fitzgibbon 算法
+    - Huber 权重函数适合中等离群点
+    - Tukey 权重函数完全拒绝极端离群点
+  - **新增 FitRectangle/FitRectangleIterative**: 矩形鲁棒拟合
+    - 边缘点按矩形边分割 (SegmentPointsByRectangleSide)
+    - 4条线独立拟合 (Huber/Tukey)
+    - 从4条线计算矩形参数 (RectangleFromLines)
+    - 迭代精化直至收敛
+  - **新增 RectangleFitResult 结构体**: 包含4条边的 LineFitResult
+
+- **Measure/Metrology 模块完善**
+  - **Ellipse 测量**: 使用 FitEllipseHuber 替代 FitEllipseFitzgibbon
+  - **Rectangle2 测量**: 完整实现 (之前仅占位符)
+    - 需要至少8个边缘点（每边2个）
+    - 使用 FitRectangleIterative 迭代拟合
+    - 输出包含 RMS 误差和拟合质量分数
 
 ### 2026-01-20 (Metrology 自动阈值增强)
 

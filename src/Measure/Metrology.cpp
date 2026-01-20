@@ -694,16 +694,20 @@ bool MetrologyModel::Apply(const QImage& image) {
             case MetrologyObjectType::Ellipse: {
                 MetrologyEllipseResult result;
                 if (edgePoints.size() >= 5) {
-                    auto fitResult = Internal::FitEllipseFitzgibbon(edgePoints);
+                    // Use robust Huber fitting for outlier handling
+                    auto fitResult = Internal::FitEllipseHuber(edgePoints);
                     if (fitResult.success) {
                         result.row = fitResult.ellipse.center.y;
                         result.column = fitResult.ellipse.center.x;
                         result.phi = fitResult.ellipse.angle;
                         result.ra = fitResult.ellipse.a;
                         result.rb = fitResult.ellipse.b;
-                        result.numUsed = static_cast<int32_t>(edgePoints.size());
+                        result.numUsed = static_cast<int32_t>(fitResult.numInliers);
                         result.rmsError = fitResult.residualRMS;
                         result.score = result.numUsed > 0 ? 1.0 / (1.0 + result.rmsError) : 0.0;
+
+                        // Store weights for GetPointWeights
+                        impl_->pointWeights[idx] = fitResult.weights;
                     }
                 }
                 impl_->ellipseResults[idx].push_back(result);
@@ -712,39 +716,51 @@ bool MetrologyModel::Apply(const QImage& image) {
 
             case MetrologyObjectType::Rectangle2: {
                 MetrologyRectangle2Result result;
-                // Rectangle fitting is more complex - fit 4 lines and compute rectangle
-                if (edgePoints.size() >= 4) {
-                    // For now, use a simple approach: fit all points and estimate rectangle
-                    // A more sophisticated approach would segment points by side
+                if (edgePoints.size() >= 8) {  // At least 2 points per side
                     auto* rectObj = static_cast<MetrologyObjectRectangle2*>(&obj);
 
-                    // Use original parameters as initial estimate
+                    // Create initial rectangle estimate from object parameters
+                    RotatedRect2d initialRect;
+                    initialRect.center = {rectObj->Column(), rectObj->Row()};
+                    initialRect.width = rectObj->Length1() * 2.0;   // full width
+                    initialRect.height = rectObj->Length2() * 2.0;  // full height
+                    initialRect.angle = rectObj->Phi();
+
+                    // Use iterative robust rectangle fitting
+                    auto fitResult = Internal::FitRectangleIterative(
+                        edgePoints, initialRect, 10, 0.01,
+                        Internal::FitParams().SetComputeResiduals(true)
+                    );
+
+                    if (fitResult.success) {
+                        result.row = fitResult.rect.center.y;
+                        result.column = fitResult.rect.center.x;
+                        result.phi = fitResult.rect.angle;
+                        result.length1 = fitResult.rect.width / 2.0;   // half-length
+                        result.length2 = fitResult.rect.height / 2.0;  // half-length
+                        result.numUsed = static_cast<int32_t>(fitResult.numInliers);
+                        result.rmsError = fitResult.residualRMS;
+                        result.score = result.numUsed > 0 ? 1.0 / (1.0 + result.rmsError) : 0.0;
+                    } else {
+                        // Fallback to original parameters
+                        result.row = rectObj->Row();
+                        result.column = rectObj->Column();
+                        result.phi = rectObj->Phi();
+                        result.length1 = rectObj->Length1();
+                        result.length2 = rectObj->Length2();
+                        result.numUsed = static_cast<int32_t>(edgePoints.size());
+                        result.score = 0.5;  // Lower confidence for fallback
+                    }
+                } else if (edgePoints.size() >= 4) {
+                    // Not enough points for robust fitting, use original
+                    auto* rectObj = static_cast<MetrologyObjectRectangle2*>(&obj);
                     result.row = rectObj->Row();
                     result.column = rectObj->Column();
                     result.phi = rectObj->Phi();
                     result.length1 = rectObj->Length1();
                     result.length2 = rectObj->Length2();
                     result.numUsed = static_cast<int32_t>(edgePoints.size());
-
-                    // Compute RMS error to original rectangle
-                    double sumSqError = 0.0;
-                    for (auto& p : edgePoints) {
-                        // Transform to local coordinates
-                        double dx = p.x - result.column;
-                        double dy = p.y - result.row;
-                        double cosPhi = std::cos(-result.phi);
-                        double sinPhi = std::sin(-result.phi);
-                        double localX = dx * cosPhi - dy * sinPhi;
-                        double localY = dx * sinPhi + dy * cosPhi;
-
-                        // Distance to nearest edge
-                        double distX = std::max(0.0, std::abs(localX) - result.length1);
-                        double distY = std::max(0.0, std::abs(localY) - result.length2);
-                        double dist = std::sqrt(distX * distX + distY * distY);
-                        sumSqError += dist * dist;
-                    }
-                    result.rmsError = std::sqrt(sumSqError / edgePoints.size());
-                    result.score = result.numUsed > 0 ? 1.0 / (1.0 + result.rmsError) : 0.0;
+                    result.score = 0.3;  // Low confidence
                 }
                 impl_->rectangleResults[idx].push_back(result);
                 break;
