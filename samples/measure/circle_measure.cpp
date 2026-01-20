@@ -7,7 +7,7 @@
  * - Creating a MetrologyModel with fixed circle parameters
  * - Configuring measurement parameters (measure_length, num_measures, etc.)
  * - Executing measurement and retrieving results
- * - Visualizing results (overlay on image)
+ * - Visualizing results using Draw module
  *
  * Usage:
  * 1. Run the program: ./measure_circle [image_dir]
@@ -17,6 +17,7 @@
  */
 
 #include <QiVision/Core/QImage.h>
+#include <QiVision/Core/Draw.h>
 #include <QiVision/Measure/Metrology.h>
 #include <QiVision/GUI/Window.h>
 
@@ -33,238 +34,25 @@ using namespace Qi::Vision::GUI;
 
 namespace fs = std::filesystem;
 
-// Draw a line on the image
-void DrawLine(uint8_t* data, int width, int height, size_t stride, int channels,
-              double x1, double y1, double x2, double y2,
-              uint8_t r, uint8_t g, uint8_t b)
-{
-    auto drawPixel = [&](int x, int y) {
-        if (x >= 0 && x < width && y >= 0 && y < height) {
-            uint8_t* pixel = data + y * stride + x * channels;
-            pixel[0] = r;
-            if (channels >= 3) {
-                pixel[1] = g;
-                pixel[2] = b;
-            }
-        }
-    };
-
-    // Bresenham's line algorithm
-    int ix1 = static_cast<int>(x1), iy1 = static_cast<int>(y1);
-    int ix2 = static_cast<int>(x2), iy2 = static_cast<int>(y2);
-    int dx = std::abs(ix2 - ix1), dy = std::abs(iy2 - iy1);
-    int sx = ix1 < ix2 ? 1 : -1, sy = iy1 < iy2 ? 1 : -1;
-    int err = dx - dy;
-
-    while (true) {
-        drawPixel(ix1, iy1);
-        if (ix1 == ix2 && iy1 == iy2) break;
-        int e2 = 2 * err;
-        if (e2 > -dy) { err -= dy; ix1 += sx; }
-        if (e2 < dx) { err += dx; iy1 += sy; }
-    }
-}
-
-// Draw edge points on the image
-void DrawEdgePoints(QImage& image, const std::vector<Point2d>& points,
-                    uint8_t r, uint8_t g, uint8_t b, int radius = 3)
-{
-    uint8_t* data = static_cast<uint8_t*>(image.Data());
-    int width = image.Width();
-    int height = image.Height();
-    size_t stride = image.Stride();
-    int channels = image.Channels();
-
-    for (const auto& pt : points) {
-        int cx = static_cast<int>(pt.x);
-        int cy = static_cast<int>(pt.y);
-
-        // Draw filled circle
-        for (int dy = -radius; dy <= radius; ++dy) {
-            for (int dx = -radius; dx <= radius; ++dx) {
-                if (dx*dx + dy*dy <= radius*radius) {
-                    int x = cx + dx;
-                    int y = cy + dy;
-                    if (x >= 0 && x < width && y >= 0 && y < height) {
-                        uint8_t* pixel = data + y * stride + x * channels;
-                        pixel[0] = r;
-                        if (channels >= 3) {
-                            pixel[1] = g;
-                            pixel[2] = b;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Draw edge points with colors based on weights (green=inlier, red=outlier)
+// Draw edge points with colors based on weights (green=inlier, yellow=moderate, red=outlier)
 void DrawEdgePointsWithWeights(QImage& image, const std::vector<Point2d>& points,
-                                const std::vector<double>& weights, int radius = 4)
+                                const std::vector<double>& weights, int markerSize = 4)
 {
-    uint8_t* data = static_cast<uint8_t*>(image.Data());
-    int width = image.Width();
-    int height = image.Height();
-    size_t stride = image.Stride();
-    int channels = image.Channels();
-
     for (size_t i = 0; i < points.size(); ++i) {
-        const auto& pt = points[i];
-        int cx = static_cast<int>(pt.x);
-        int cy = static_cast<int>(pt.y);
-
-        // Get weight (default to 1.0 if weights not available)
         double w = (i < weights.size()) ? weights[i] : 1.0;
 
-        // Color interpolation: green (inlier) -> yellow -> red (outlier)
-        // weight=1.0 -> green, weight=0.5 -> yellow, weight=0.0 -> red
-        uint8_t r, g, b;
+        // Color based on weight
+        Color color;
         if (w >= 0.8) {
-            // Inlier: green
-            r = 0; g = 255; b = 0;
+            color = Color::Green();   // Inlier
         } else if (w >= 0.5) {
-            // Moderate: yellow
-            r = 255; g = 255; b = 0;
+            color = Color::Yellow();  // Moderate
         } else {
-            // Outlier: red
-            r = 255; g = 0; b = 0;
+            color = Color::Red();     // Outlier
         }
 
-        // Draw filled circle
-        for (int dy = -radius; dy <= radius; ++dy) {
-            for (int dx = -radius; dx <= radius; ++dx) {
-                if (dx*dx + dy*dy <= radius*radius) {
-                    int x = cx + dx;
-                    int y = cy + dy;
-                    if (x >= 0 && x < width && y >= 0 && y < height) {
-                        uint8_t* pixel = data + y * stride + x * channels;
-                        pixel[0] = r;
-                        if (channels >= 3) {
-                            pixel[1] = g;
-                            pixel[2] = b;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Draw a circle overlay on the image (for visualization)
-QImage DrawCircleOverlay(const QImage& src, double centerX, double centerY, double radius,
-                         uint8_t r, uint8_t g, uint8_t b, int thickness = 2)
-{
-    // Convert to RGB for colored overlay
-    QImage result = src;
-    if (result.Channels() == 1) {
-        // Convert grayscale to RGB
-        QImage rgb(result.Width(), result.Height(), PixelType::UInt8, ChannelType::RGB);
-        const uint8_t* srcData = static_cast<const uint8_t*>(result.Data());
-        uint8_t* dstData = static_cast<uint8_t*>(rgb.Data());
-        size_t srcStride = result.Stride();
-        size_t dstStride = rgb.Stride();
-
-        for (int y = 0; y < result.Height(); ++y) {
-            const uint8_t* srcRow = srcData + y * srcStride;
-            uint8_t* dstRow = dstData + y * dstStride;
-            for (int x = 0; x < result.Width(); ++x) {
-                dstRow[x * 3 + 0] = srcRow[x];  // R
-                dstRow[x * 3 + 1] = srcRow[x];  // G
-                dstRow[x * 3 + 2] = srcRow[x];  // B
-            }
-        }
-        result = std::move(rgb);
-    }
-
-    // Draw circle using parametric method
-    int width = result.Width();
-    int height = result.Height();
-    uint8_t* data = static_cast<uint8_t*>(result.Data());
-    size_t stride = result.Stride();
-    int channels = result.Channels();
-
-    auto drawPixel = [&](int x, int y) {
-        if (x >= 0 && x < width && y >= 0 && y < height) {
-            uint8_t* pixel = data + y * stride + x * channels;
-            pixel[0] = r;
-            if (channels >= 3) {
-                pixel[1] = g;
-                pixel[2] = b;
-            }
-        }
-    };
-
-    // Draw with thickness
-    int numPoints = static_cast<int>(2 * M_PI * radius * 2);
-    numPoints = std::max(numPoints, 360);
-
-    for (int i = 0; i < numPoints; ++i) {
-        double angle = 2.0 * M_PI * i / numPoints;
-        double px = centerX + radius * std::cos(angle);
-        double py = centerY + radius * std::sin(angle);
-
-        // Draw thick point
-        for (int dy = -thickness/2; dy <= thickness/2; ++dy) {
-            for (int dx = -thickness/2; dx <= thickness/2; ++dx) {
-                drawPixel(static_cast<int>(px + dx), static_cast<int>(py + dy));
-            }
-        }
-    }
-
-    // Draw center cross
-    int cx = static_cast<int>(centerX);
-    int cy = static_cast<int>(centerY);
-    for (int d = -5; d <= 5; ++d) {
-        drawPixel(cx + d, cy);
-        drawPixel(cx, cy + d);
-    }
-
-    return result;
-}
-
-// Draw calipers (projection rectangles) around the circle
-void DrawCalipers(QImage& image, double centerX, double centerY, double radius,
-                  int numMeasures, double measureLength1, double measureLength2,
-                  uint8_t r, uint8_t g, uint8_t b)
-{
-    uint8_t* data = static_cast<uint8_t*>(image.Data());
-    int width = image.Width();
-    int height = image.Height();
-    size_t stride = image.Stride();
-    int channels = image.Channels();
-
-    for (int i = 0; i < numMeasures; ++i) {
-        double angle = 2.0 * M_PI * i / numMeasures;
-
-        // Position on circle (center of the rectangle)
-        double cx = centerX + radius * std::cos(angle);
-        double cy = centerY + radius * std::sin(angle);
-
-        // Direction vectors
-        // Radial direction (along measureLength1)
-        double radX = std::cos(angle);
-        double radY = std::sin(angle);
-        // Perpendicular direction (along measureLength2)
-        double perpX = -std::sin(angle);
-        double perpY = std::cos(angle);
-
-        // Four corners of the rectangle
-        // Inner-left, inner-right, outer-right, outer-left
-        double x1 = cx - measureLength1 * radX - measureLength2 * perpX;
-        double y1 = cy - measureLength1 * radY - measureLength2 * perpY;
-        double x2 = cx - measureLength1 * radX + measureLength2 * perpX;
-        double y2 = cy - measureLength1 * radY + measureLength2 * perpY;
-        double x3 = cx + measureLength1 * radX + measureLength2 * perpX;
-        double y3 = cy + measureLength1 * radY + measureLength2 * perpY;
-        double x4 = cx + measureLength1 * radX - measureLength2 * perpX;
-        double y4 = cy + measureLength1 * radY - measureLength2 * perpY;
-
-        // Draw rectangle (4 edges)
-        DrawLine(data, width, height, stride, channels, x1, y1, x2, y2, r, g, b);
-        DrawLine(data, width, height, stride, channels, x2, y2, x3, y3, r, g, b);
-        DrawLine(data, width, height, stride, channels, x3, y3, x4, y4, r, g, b);
-        DrawLine(data, width, height, stride, channels, x4, y4, x1, y1, r, g, b);
+        Draw::Cross(image, points[i], markerSize, color, 1);
+        Draw::FilledCircle(image, points[i], 2, color);
     }
 }
 
@@ -423,14 +211,16 @@ int main(int argc, char* argv[]) {
         totalCount++;
 
         // =========================================================================
-        // Perform measurement (uses Strongest mode with low threshold internally)
+        // Perform measurement
         // =========================================================================
 
         MetrologyModel model;
         int circleIdx = model.AddCircleMeasure(centerRow, centerCol, radius, params);
 
-        QImage display = image;
         std::string title;
+
+        // Prepare display image (convert to RGB for colored drawing)
+        QImage display = Draw::PrepareForDrawing(image);
 
         if (model.Apply(image)) {
             auto edgePoints = model.GetMeasuredPoints(circleIdx);
@@ -459,24 +249,33 @@ int main(int argc, char* argv[]) {
                 title = filename + " - FAILED (" + std::to_string(edgePoints.size()) + " pts)";
             }
 
-            // Always visualize: green = initial circle, cyan = calipers, yellow = edge points
-            display = DrawCircleOverlay(image, centerCol, centerRow, radius,
-                                       0, 255, 0, 1);  // Green = initial circle
-            // Draw calipers (cyan)
-            DrawCalipers(display, centerCol, centerRow, radius,
-                        params.numMeasures, params.measureLength1, params.measureLength2,
-                        0, 255, 255);
-            // Draw edge points (yellow)
-            // Get point weights and draw with colors based on weight
+            // =========================================================================
+            // Visualization using Draw module
+            // =========================================================================
+
+            // 1. Draw initial/reference circle (green, thin)
+            Draw::Circle(display, Point2d{centerCol, centerRow}, radius, Color::Green(), 1);
+            Draw::Cross(display, Point2d{centerCol, centerRow}, 8, Color::Green(), 1);
+
+            // 2. Draw calipers (cyan) - using new MeasureRects function
+            const MetrologyObject* obj = model.GetObject(circleIdx);
+            if (obj) {
+                auto calipers = obj->GetCalipers();
+                Draw::MeasureRects(display, calipers, Color::Cyan(), 1);
+            }
+
+            // 3. Draw edge points with weight-based coloring
             auto pointWeights = model.GetPointWeights(circleIdx);
             DrawEdgePointsWithWeights(display, edgePoints, pointWeights, 4);
-            // Draw measured circle (red) - only if valid and within image bounds
+
+            // 4. Draw fitted circle result (red, thick) - only if valid
             if (result.IsValid() &&
                 result.column > -500 && result.column < 2000 &&
                 result.row > -500 && result.row < 2000 &&
                 result.radius < 1000) {
-                display = DrawCircleOverlay(display, result.column, result.row, result.radius,
-                                           255, 0, 0, 2);
+                Draw::Circle(display, Point2d{result.column, result.row}, result.radius,
+                            Color::Red(), 2);
+                Draw::Cross(display, Point2d{result.column, result.row}, 10, Color::Red(), 2);
             }
         } else {
             std::cout << "Apply failed\n";
