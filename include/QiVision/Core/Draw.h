@@ -30,6 +30,11 @@ namespace Measure {
     struct MetrologyRectangle2Result;
 }
 
+// Forward declarations for Matching
+namespace Matching {
+    class ShapeModel;
+}
+
 /**
  * @brief Color for drawing (RGB)
  */
@@ -205,6 +210,64 @@ public:
     /** @brief Draw multiple match results */
     static void MatchResults(QImage& image, const std::vector<Matching::MatchResult>& matches,
                              const Color& color, int32_t markerSize = 20);
+
+    /**
+     * @brief Draw shape matching results with quality coloring (Halcon-style)
+     *
+     * Similar to Halcon's dev_display_shape_matching_results.
+     * Draws model contour at match position with each segment colored by match quality:
+     * - Green: matched points (gradient direction matches expected)
+     * - Red: unmatched points (no gradient or direction mismatch)
+     *
+     * @param image Target image (also used for gradient comparison)
+     * @param model ShapeModel used for matching
+     * @param matches Match results from FindShapeModel
+     * @param matchedColor Color for matched segments (default green)
+     * @param unmatchedColor Color for unmatched segments (default red)
+     * @param thickness Line thickness
+     * @param threshold Quality threshold for "matched" (default 0.5)
+     */
+    static void ShapeMatchingResults(QImage& image,
+                                      const Matching::ShapeModel& model,
+                                      const std::vector<Matching::MatchResult>& matches,
+                                      const Color& matchedColor = Color::Green(),
+                                      const Color& unmatchedColor = Color::Red(),
+                                      int32_t thickness = 1,
+                                      double threshold = 0.5);
+
+    /**
+     * @brief Draw matched contour with quality coloring
+     *
+     * @param image Target image
+     * @param contour MatchedContour from GetShapeModelContoursWithQuality
+     * @param matchedColor Color for matched segments
+     * @param unmatchedColor Color for unmatched segments
+     * @param thickness Line thickness
+     */
+    static void MatchedContour(QImage& image,
+                                const Matching::MatchedContour& contour,
+                                const Color& matchedColor = Color::Green(),
+                                const Color& unmatchedColor = Color::Red(),
+                                int32_t thickness = 1);
+
+    /**
+     * @brief Draw matched contour segment with quality coloring (internal use)
+     *
+     * Unlike MatchedContour, this does not auto-close the contour.
+     *
+     * @param image Target image
+     * @param contour MatchedContour with points
+     * @param matchedColor Color for matched segments
+     * @param unmatchedColor Color for unmatched segments
+     * @param thickness Line thickness
+     * @param autoClose Whether to close the contour
+     */
+    static void MatchedContourSegment(QImage& image,
+                                       const Matching::MatchedContour& contour,
+                                       const Color& matchedColor,
+                                       const Color& unmatchedColor,
+                                       int32_t thickness,
+                                       bool autoClose);
 
     // =========================================================================
     // Metrology Visualization (Halcon-style)

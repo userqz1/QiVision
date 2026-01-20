@@ -4,6 +4,8 @@
  */
 
 #include <QiVision/Core/Draw.h>
+#include <QiVision/Matching/ShapeModel.h>
+#include <QiVision/Matching/MatchTypes.h>
 
 #include <algorithm>
 #include <cmath>
@@ -977,6 +979,102 @@ void Draw::MetrologyModelResult(QImage& image, const Measure::MetrologyModel& mo
                 break;
             }
         }
+    }
+}
+
+// =============================================================================
+// Shape Matching Visualization (Halcon-style dev_display_shape_matching_results)
+// =============================================================================
+
+void Draw::ShapeMatchingResults(QImage& image,
+                                 const Matching::ShapeModel& model,
+                                 const std::vector<Matching::MatchResult>& matches,
+                                 const Color& matchedColor,
+                                 const Color& unmatchedColor,
+                                 int32_t thickness,
+                                 double threshold)
+{
+    (void)unmatchedColor;  // Reserved for quality-based coloring
+    (void)threshold;
+
+    if (!model.IsValid() || matches.empty()) {
+        return;
+    }
+
+    // Get model contours at level 1 (highest resolution)
+    QContourArray contours = Matching::GetShapeModelXLD(model, 1);
+
+    for (const auto& match : matches) {
+        double cosA = std::cos(match.angle);
+        double sinA = std::sin(match.angle);
+
+        // Transform and draw each contour
+        for (size_t c = 0; c < contours.Size(); ++c) {
+            const QContour& contour = contours[c];
+            if (contour.Size() < 2) continue;
+
+            for (size_t i = 1; i < contour.Size(); ++i) {
+                auto p0 = contour.GetPoint(i - 1);
+                auto p1 = contour.GetPoint(i);
+
+                // Rotate and translate to match position
+                double x0 = match.x + cosA * p0.x - sinA * p0.y;
+                double y0 = match.y + sinA * p0.x + cosA * p0.y;
+                double x1 = match.x + cosA * p1.x - sinA * p1.y;
+                double y1 = match.y + sinA * p1.x + cosA * p1.y;
+
+                Line(image,
+                     static_cast<int32_t>(x0), static_cast<int32_t>(y0),
+                     static_cast<int32_t>(x1), static_cast<int32_t>(y1),
+                     matchedColor, thickness);
+            }
+        }
+    }
+}
+
+void Draw::MatchedContour(QImage& image,
+                           const Matching::MatchedContour& contour,
+                           const Color& matchedColor,
+                           const Color& unmatchedColor,
+                           int32_t thickness)
+{
+    MatchedContourSegment(image, contour, matchedColor, unmatchedColor, thickness, true);
+}
+
+void Draw::MatchedContourSegment(QImage& image,
+                                  const Matching::MatchedContour& contour,
+                                  const Color& matchedColor,
+                                  const Color& unmatchedColor,
+                                  int32_t thickness,
+                                  bool autoClose)
+{
+    if (contour.points.size() < 2) return;
+
+    for (size_t i = 1; i < contour.points.size(); ++i) {
+        const auto& p0 = contour.points[i - 1];
+        const auto& p1 = contour.points[i];
+
+        // Determine color based on quality
+        double avgQuality = (p0.quality + p1.quality) * 0.5;
+        const Color& color = (avgQuality >= 0.5) ? matchedColor : unmatchedColor;
+
+        Line(image,
+             static_cast<int32_t>(p0.x), static_cast<int32_t>(p0.y),
+             static_cast<int32_t>(p1.x), static_cast<int32_t>(p1.y),
+             color, thickness);
+    }
+
+    // Close contour if requested
+    if (autoClose && contour.points.size() > 2) {
+        const auto& first = contour.points.front();
+        const auto& last = contour.points.back();
+        double avgQuality = (first.quality + last.quality) * 0.5;
+        const Color& color = (avgQuality >= 0.5) ? matchedColor : unmatchedColor;
+
+        Line(image,
+             static_cast<int32_t>(last.x), static_cast<int32_t>(last.y),
+             static_cast<int32_t>(first.x), static_cast<int32_t>(first.y),
+             color, thickness);
     }
 }
 

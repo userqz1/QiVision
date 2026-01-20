@@ -482,6 +482,69 @@ void GetShapeModelContours(
     }
 }
 
+QContourArray GetShapeModelXLD(const ShapeModel& model, int32_t level)
+{
+    QContourArray result;
+
+    if (!model.IsValid()) {
+        return result;
+    }
+
+    auto* impl = model.Impl();
+    int32_t actualLevel = (level >= 1) ? level - 1 : 0;
+
+    if (actualLevel < 0 || actualLevel >= static_cast<int32_t>(impl->levels_.size())) {
+        return result;
+    }
+
+    const auto& levelModel = impl->levels_[actualLevel];
+    const auto& points = levelModel.points;
+    const auto& contourStarts = levelModel.contourStarts;
+    const auto& contourClosed = levelModel.contourClosed;
+
+    if (points.empty()) {
+        return result;
+    }
+
+    // Use stored contour topology (from XLD tracing during model creation)
+    if (!contourStarts.empty() && contourStarts.size() > 1) {
+        // Proper contour topology available
+        size_t numContours = contourStarts.size() - 1;  // Last value is sentinel
+
+        for (size_t c = 0; c < numContours; ++c) {
+            int32_t startIdx = contourStarts[c];
+            int32_t endIdx = contourStarts[c + 1];
+
+            if (endIdx <= startIdx) continue;
+
+            QContour contour;
+            for (int32_t i = startIdx; i < endIdx; ++i) {
+                contour.AddPoint(points[i].x, points[i].y);
+            }
+
+            // Close contour if marked as closed
+            if (c < contourClosed.size() && contourClosed[c] && contour.Size() > 2) {
+                contour.AddPoint(points[startIdx].x, points[startIdx].y);
+            }
+
+            if (contour.Size() > 0) {
+                result.Add(contour);
+            }
+        }
+    } else {
+        // Fallback: no topology info, return points as single contour
+        QContour contour;
+        for (const auto& pt : points) {
+            contour.AddPoint(pt.x, pt.y);
+        }
+        if (contour.Size() > 0) {
+            result.Add(contour);
+        }
+    }
+
+    return result;
+}
+
 void GetShapeModelParams(
     const ShapeModel& model,
     int32_t& numLevels,

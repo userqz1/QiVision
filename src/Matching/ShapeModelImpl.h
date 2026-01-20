@@ -66,6 +66,14 @@ struct LevelModel {
     // Block 2: Integer grid sample points (regular positions, faster for coarse search)
     std::vector<ModelPoint> gridPoints;
 
+    // Contour topology for XLD visualization
+    // contourStarts[i] is the first point of contour i
+    // contourStarts[i+1] - contourStarts[i] is the number of points in contour i
+    // Last element is sentinel (total point count)
+    std::vector<int32_t> contourStarts;
+    // Whether each contour is closed (forms a loop)
+    std::vector<bool> contourClosed;
+
     int32_t width = 0;
     int32_t height = 0;
     double scale = 1.0;

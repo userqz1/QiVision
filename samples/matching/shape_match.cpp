@@ -1,9 +1,12 @@
 /**
  * @file shape_match.cpp
- * @brief Shape matching test using Halcon-style API with GUI display
+ * @brief Shape matching test - Interactive ROI selection
  *
- * Tests both image1 (small) and image2 (large) directories
- * Displays: template ROI, model edges, match results in GUI window
+ * Usage: ./matching_shape_match [image_folder]
+ *
+ * 1. Load first image as template
+ * 2. User draws ROI with mouse
+ * 3. Test all images in the folder
  */
 
 #include <QiVision/Core/QImage.h>
@@ -19,16 +22,17 @@
 #include <sstream>
 #include <cmath>
 #include <cstring>
-#include <thread>
-#include <chrono>
+#include <algorithm>
+#include <filesystem>
 
 using namespace Qi::Vision;
 using namespace Qi::Vision::Matching;
 using namespace Qi::Vision::Platform;
 using namespace Qi::Vision::GUI;
+namespace fs = std::filesystem;
 
 // Display interval in milliseconds
-constexpr int32_t DISPLAY_INTERVAL_MS = 2000;
+constexpr int32_t DISPLAY_INTERVAL_MS = 1000;
 
 // Convert to grayscale helper
 QImage ToGrayscale(const QImage& img) {
@@ -70,76 +74,37 @@ QImage ToRGB(const QImage& gray) {
     return colorImg;
 }
 
-// Display model visualization (ROI + edges) in GUI window
-void DisplayModelVisualization(Window& win, const QImage& templateGray, const Rect2i& roi,
-                               const ShapeModel& model) {
-    // Display template with ROI
-    QImage roiVis = ToRGB(templateGray);
-    Draw::Rectangle(roiVis, roi.x, roi.y, roi.width, roi.height, Color::Green(), 2);
+// Get all image files in a directory (excluding result_* files)
+std::vector<std::string> GetImageFiles(const std::string& dir) {
+    std::vector<std::string> files;
 
-    win.SetTitle("Template ROI");
-    win.DispImage(roiVis);
-    std::cout << "   Displaying template with ROI..." << std::endl;
-    win.WaitKey(DISPLAY_INTERVAL_MS);
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (!entry.is_regular_file()) continue;
 
-    // Get model contours using Halcon-style API
-    std::vector<double> contourRows, contourCols;
-    GetShapeModelContours(model, 1, contourRows, contourCols);
+        std::string filename = entry.path().filename().string();
 
-    // Display model edges on black background (scaled up for visibility)
-    int32_t scale = 4;  // Scale up small ROIs
-    QImage edgeImg(roi.width * scale, roi.height * scale, PixelType::UInt8, ChannelType::RGB);
-    std::memset(edgeImg.Data(), 0, edgeImg.Height() * edgeImg.Stride());
+        // Skip result files
+        if (filename.rfind("result_", 0) == 0) continue;
 
-    uint8_t* dst = static_cast<uint8_t*>(edgeImg.Data());
-    for (size_t i = 0; i < contourRows.size(); ++i) {
-        int32_t px = static_cast<int32_t>((contourCols[i] + roi.width / 2) * scale);
-        int32_t py = static_cast<int32_t>((contourRows[i] + roi.height / 2) * scale);
-        // Draw 3x3 point for visibility
-        for (int32_t dy = -1; dy <= 1; ++dy) {
-            for (int32_t dx = -1; dx <= 1; ++dx) {
-                int32_t x = px + dx;
-                int32_t y = py + dy;
-                if (x >= 0 && x < edgeImg.Width() && y >= 0 && y < edgeImg.Height()) {
-                    size_t idx = y * edgeImg.Stride() + x * 3;
-                    dst[idx + 0] = 0;
-                    dst[idx + 1] = 255;
-                    dst[idx + 2] = 0;
-                }
-            }
+        std::string ext = entry.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+        if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" ||
+            ext == ".bmp" || ext == ".tif" || ext == ".tiff") {
+            files.push_back(filename);
         }
     }
 
-    win.SetTitle("Model Edges (" + std::to_string(contourRows.size()) + " points)");
-    win.DispImage(edgeImg);
-    std::cout << "   Displaying model edges (" << contourRows.size() << " points)..." << std::endl;
-    win.WaitKey(DISPLAY_INTERVAL_MS);
+    std::sort(files.begin(), files.end());
+    return files;
 }
 
-// Draw match result on image
-void DrawMatchResult(QImage& colorImg, double row, double col, double angle, double score,
-                     const std::vector<double>& contourRows, const std::vector<double>& contourCols,
-                     double modelWidth, double modelHeight) {
+// Draw bounding box for a match result
+void DrawMatchBoundingBox(QImage& colorImg, double row, double col, double angle,
+                          double modelWidth, double modelHeight) {
     double cosA = std::cos(angle);
     double sinA = std::sin(angle);
 
-    // Draw contour (green)
-    for (size_t i = 0; i < contourRows.size(); ++i) {
-        // Transform contour point to image coordinates
-        double px = col + cosA * contourCols[i] - sinA * contourRows[i];
-        double py = row + sinA * contourCols[i] + cosA * contourRows[i];
-        int32_t ix = static_cast<int32_t>(px);
-        int32_t iy = static_cast<int32_t>(py);
-        if (ix >= 0 && ix < colorImg.Width() && iy >= 0 && iy < colorImg.Height()) {
-            uint8_t* dst = static_cast<uint8_t*>(colorImg.Data());
-            size_t idx = iy * colorImg.Stride() + ix * 3;
-            dst[idx + 0] = 0;
-            dst[idx + 1] = 255;
-            dst[idx + 2] = 0;
-        }
-    }
-
-    // Draw bounding box (red)
     double halfW = modelWidth / 2.0;
     double halfH = modelHeight / 2.0;
 
@@ -152,77 +117,109 @@ void DrawMatchResult(QImage& colorImg, double row, double col, double angle, dou
         px[k] = static_cast<int32_t>(col + cosA * corners[k][0] - sinA * corners[k][1]);
         py[k] = static_cast<int32_t>(row + sinA * corners[k][0] + cosA * corners[k][1]);
     }
-    Draw::Line(colorImg, px[0], py[0], px[1], py[1], Color::Red(), 2);
-    Draw::Line(colorImg, px[1], py[1], px[2], py[2], Color::Red(), 2);
-    Draw::Line(colorImg, px[2], py[2], px[3], py[3], Color::Red(), 2);
-    Draw::Line(colorImg, px[3], py[3], px[0], py[0], Color::Red(), 2);
+    Draw::Line(colorImg, px[0], py[0], px[1], py[1], Color::Cyan(), 2);
+    Draw::Line(colorImg, px[1], py[1], px[2], py[2], Color::Cyan(), 2);
+    Draw::Line(colorImg, px[2], py[2], px[3], py[3], Color::Cyan(), 2);
+    Draw::Line(colorImg, px[3], py[3], px[0], py[0], Color::Cyan(), 2);
 
-    // Draw rotated center cross (yellow)
     Draw::Cross(colorImg, Point2d{col, row}, 15, angle, Color::Yellow(), 2);
 }
 
-// Test a set of images using Halcon-style API with GUI display
-void TestImageSet(Window& win, const std::string& name, const std::string& dataDir,
-                  const std::string& outputPrefix,
-                  const std::vector<std::string>& imageFiles,
-                  const Rect2i& roi,
-                  int32_t numLevels,
-                  double angleStart, double angleExtent, double angleStep,
-                  const std::string& optimization, const std::string& metric,
-                  const std::string& contrast, double minContrast,
-                  double searchAngleStart, double searchAngleExtent,
-                  double minScore, int32_t numMatches, double maxOverlap,
-                  const std::string& subPixel, int32_t searchNumLevels, double greediness) {
+int main(int argc, char* argv[]) {
+    // =========================================================================
+    // Configuration - MODIFY THIS PATH TO TEST DIFFERENT FOLDERS
+    // =========================================================================
+    std::string dataDir = "tests/data/matching/image1/";
 
-    std::cout << "\n" << std::string(70, '=') << std::endl;
-    std::cout << "  " << name << std::endl;
-    std::cout << std::string(70, '=') << std::endl;
+    if (argc > 1) {
+        dataDir = argv[1];
+        if (dataDir.back() != '/') dataDir += '/';
+    }
+
+    std::cout << "=== QiVision Shape Matching Test ===" << std::endl;
+    std::cout << "Folder: " << dataDir << std::endl;
+    std::cout << "Controls: Press 'q' or ESC to quit" << std::endl;
+
+    // Get all image files
+    std::vector<std::string> imageFiles = GetImageFiles(dataDir);
+    if (imageFiles.empty()) {
+        std::cerr << "No image files found in: " << dataDir << std::endl;
+        return 1;
+    }
+    std::cout << "Found " << imageFiles.size() << " images" << std::endl;
+
+    // Create window
+    Window win("Shape Match Test");
+    win.SetAutoResize(true);
 
     Timer timer;
 
-    // Create model from first image using Halcon-style API
-    std::cout << "\n1. Creating model from: " << imageFiles[0] << std::endl;
-
+    // Load first image as template
+    std::cout << "\n1. Loading template: " << imageFiles[0] << std::endl;
     QImage templateImg = QImage::FromFile(dataDir + imageFiles[0]);
     if (!templateImg.IsValid()) {
-        std::cerr << "   Failed to load template!" << std::endl;
-        return;
+        std::cerr << "Failed to load template!" << std::endl;
+        return 1;
+    }
+    QImage templateGray = ToGrayscale(templateImg);
+    std::cout << "   Size: " << templateGray.Width() << " x " << templateGray.Height() << std::endl;
+
+    // Interactive ROI selection
+    std::cout << "\n2. Draw ROI on the template (drag mouse, ESC to cancel)..." << std::endl;
+    win.SetTitle("Draw ROI - Drag mouse to select region");
+    win.DispImage(templateGray);
+
+    ROIResult roiResult = win.DrawRectangle();
+    if (!roiResult.valid) {
+        std::cerr << "ROI selection cancelled!" << std::endl;
+        return 1;
     }
 
-    QImage templateGray = ToGrayscale(templateImg);
-    std::cout << "   Image size: " << templateGray.Width() << " x " << templateGray.Height() << std::endl;
-    std::cout << "   ROI: (" << roi.x << ", " << roi.y << ", " << roi.width << ", " << roi.height << ")" << std::endl;
+    Rect2i roi;
+    roi.x = static_cast<int32_t>(std::min(roiResult.col1, roiResult.col2));
+    roi.y = static_cast<int32_t>(std::min(roiResult.row1, roiResult.row2));
+    roi.width = static_cast<int32_t>(std::abs(roiResult.col2 - roiResult.col1));
+    roi.height = static_cast<int32_t>(std::abs(roiResult.row2 - roiResult.row1));
 
+    std::cout << "   Selected ROI: (" << roi.x << ", " << roi.y
+              << ", " << roi.width << ", " << roi.height << ")" << std::endl;
+
+    // Create shape model
+    std::cout << "\n3. Creating shape model..." << std::endl;
     timer.Start();
-    // Halcon-style: CreateShapeModel with ROI
-    ShapeModel model = CreateShapeModel(templateGray, roi, numLevels,
-                                        angleStart, angleExtent, angleStep,
-                                        optimization, metric, contrast, minContrast);
+
+    ShapeModel model = CreateShapeModel(
+        templateGray, roi,
+        4,                      // numLevels
+        0, RAD(360), 0,         // angleStart, angleExtent, angleStep (auto)
+        "auto",                 // optimization
+        "use_polarity",         // metric
+        "auto", 10              // contrast, minContrast
+    );
 
     if (!model.IsValid()) {
-        std::cerr << "   Failed to create model!" << std::endl;
-        return;
+        std::cerr << "Failed to create model!" << std::endl;
+        return 1;
     }
     std::cout << "   Model created in " << timer.ElapsedMs() << " ms" << std::endl;
 
-    // Get model parameters using Halcon-style API
-    int32_t outNumLevels;
-    double outAngleStart, outAngleExtent, outAngleStep;
-    double outScaleMin, outScaleMax, outScaleStep;
-    std::string outMetric;
-    GetShapeModelParams(model, outNumLevels, outAngleStart, outAngleExtent, outAngleStep,
-                        outScaleMin, outScaleMax, outScaleStep, outMetric);
-    std::cout << "   Model levels: " << outNumLevels << std::endl;
+    // Get model info
+    QContourArray contours = GetShapeModelXLD(model, 1);
+    size_t totalPoints = 0;
+    for (size_t c = 0; c < contours.Size(); ++c) {
+        totalPoints += contours[c].Size();
+    }
+    std::cout << "   Model points: " << totalPoints << ", contours: " << contours.Size() << std::endl;
 
-    // Display visualization in GUI window
-    DisplayModelVisualization(win, templateGray, roi, model);
-
-    // Get contours for drawing
-    std::vector<double> contourRows, contourCols;
-    GetShapeModelContours(model, 1, contourRows, contourCols);
+    // Display model
+    QImage roiVis = ToRGB(templateGray);
+    Draw::Rectangle(roiVis, roi.x, roi.y, roi.width, roi.height, Color::Green(), 2);
+    win.SetTitle("Template with ROI");
+    win.DispImage(roiVis);
+    win.WaitKey(1000);
 
     // Search in all images
-    std::cout << "\n2. Searching in " << imageFiles.size() << " images..." << std::endl;
+    std::cout << "\n4. Searching in " << imageFiles.size() << " images..." << std::endl;
 
     int successCount = 0;
     double totalTime = 0;
@@ -235,13 +232,14 @@ void TestImageSet(Window& win, const std::string& name, const std::string& dataD
         }
         QImage searchGray = ToGrayscale(searchImg);
 
-        // Halcon-style: FindShapeModel with output parameters
         std::vector<double> rows, cols, angles, scores;
 
         timer.Reset();
         timer.Start();
-        FindShapeModel(searchGray, model, searchAngleStart, searchAngleExtent,
-                       minScore, numMatches, maxOverlap, subPixel, searchNumLevels, greediness,
+        FindShapeModel(searchGray, model,
+                       0, RAD(360),           // search angle range
+                       0.5, 10, 0.5,          // minScore, numMatches, maxOverlap
+                       "least_squares", 0, 0.9,  // subPixel, numLevels, greediness
                        rows, cols, angles, scores);
         double searchTime = timer.ElapsedMs();
         totalTime += searchTime;
@@ -250,32 +248,45 @@ void TestImageSet(Window& win, const std::string& name, const std::string& dataD
         if (success) successCount++;
 
         std::cout << "   [" << (i+1) << "/" << imageFiles.size() << "] "
-                  << imageFiles[i] << std::endl;
+                  << imageFiles[i];
         if (success) {
-            std::cout << "      Match: (" << std::fixed << std::setprecision(1)
+            std::cout << " - Match: (" << std::fixed << std::setprecision(1)
                       << cols[0] << "," << rows[0] << ") "
                       << "Score=" << std::setprecision(3) << scores[0]
-                      << " Angle=" << std::setprecision(1) << DEG(angles[0]) << "deg" << std::endl;
+                      << " Angle=" << std::setprecision(1) << DEG(angles[0]) << "deg";
         } else {
-            std::cout << "      NO MATCH" << std::endl;
+            std::cout << " - NO MATCH";
         }
-        std::cout << "      Time: " << std::setprecision(1) << searchTime << "ms" << std::endl;
-        std::cout << "      Found: " << rows.size() << " matches" << std::endl;
+        std::cout << " [" << std::setprecision(1) << searchTime << "ms]" << std::endl;
 
-        // Display result image in GUI window
+        // Display result
         QImage colorImg = ToRGB(searchGray);
+
+        std::vector<MatchResult> matches;
         for (size_t j = 0; j < rows.size(); ++j) {
-            DrawMatchResult(colorImg, rows[j], cols[j], angles[j], scores[j],
-                           contourRows, contourCols, roi.width, roi.height);
+            MatchResult m;
+            m.x = cols[j];
+            m.y = rows[j];
+            m.angle = angles[j];
+            m.score = scores[j];
+            matches.push_back(m);
         }
 
-        // Build title with match info
+        // Draw model contours at match positions (Halcon-style)
+        Draw::ShapeMatchingResults(colorImg, model, matches,
+                                    Color::Green(), Color::Red(), 2, 0.5);
+
+        // Draw bounding boxes and center crosses
+        for (size_t j = 0; j < rows.size(); ++j) {
+            DrawMatchBoundingBox(colorImg, rows[j], cols[j], angles[j], roi.width, roi.height);
+        }
+
         std::string title = imageFiles[i];
         if (success) {
             std::ostringstream oss;
-            oss << std::fixed << std::setprecision(1)
+            oss << std::fixed << std::setprecision(2)
                 << " - Score=" << scores[0]
-                << " Angle=" << DEG(angles[0]) << "deg";
+                << " Angle=" << std::setprecision(1) << DEG(angles[0]) << "deg";
             title += oss.str();
         } else {
             title += " - NO MATCH";
@@ -284,242 +295,24 @@ void TestImageSet(Window& win, const std::string& name, const std::string& dataD
         win.SetTitle(title);
         win.DispImage(colorImg);
 
-        // Save result image to file
-        std::string outPath = outputPrefix + "_" + std::to_string(i+1) + ".bmp";
+        // Save result
+        std::string outPath = dataDir + "result_" + std::to_string(i+1) + ".bmp";
         colorImg.SaveToFile(outPath);
 
-        // Wait for key or timeout
         int32_t key = win.WaitKey(DISPLAY_INTERVAL_MS);
-        if (key == 'q' || key == 'Q' || key == 27) {  // q or ESC to quit
+        if (key == 'q' || key == 'Q' || key == 27) {
             std::cout << "\n   User quit." << std::endl;
-            return;
+            break;
         }
     }
 
-    std::cout << "\n   Summary: " << successCount << "/" << imageFiles.size()
-              << " matched, Avg time: " << (totalTime / imageFiles.size()) << " ms" << std::endl;
-}
+    std::cout << "\n=== Summary ===" << std::endl;
+    std::cout << "Matched: " << successCount << "/" << imageFiles.size() << std::endl;
+    std::cout << "Avg time: " << std::fixed << std::setprecision(1)
+              << (totalTime / imageFiles.size()) << " ms" << std::endl;
 
-int main(int argc, char* argv[]) {
-    (void)argc;
-    (void)argv;
-
-    std::cout << "=== QiVision Shape Matching - GUI Display Test ===" << std::endl;
-    std::cout << "Controls: Press 'q' or ESC to quit, any other key to continue" << std::endl;
-    std::cout << "Auto-advance: " << DISPLAY_INTERVAL_MS << "ms per image" << std::endl;
-
-    // Create single window with auto-resize enabled
-    Window win("Shape Match Test");
-    win.SetAutoResize(true);  // Window will auto-adjust to image size
-
-    // =========================================================================
-    // Test 1: Small Images (640x512) - XLDContour mode
-    // =========================================================================
-    {
-        std::vector<std::string> smallImages = {
-            "052640-20210901141310.jpg",
-            "052640-20210901141317.jpg",
-            "052640-20210901141321.jpg",
-            "052640-20210901141324.jpg",
-            "052640-20210901141327.jpg"
-        };
-
-        Rect2i smallROI(180, 100, 210, 70);
-
-        TestImageSet(win, "Small Images (640x512)",
-                     "tests/data/matching/image1/",
-                     "tests/data/matching/image1/result",
-                     smallImages, smallROI,
-                     4,                      // numLevels
-                     0, RAD(360), 0,         // angleStart, angleExtent, angleStep (0=auto)
-                     "auto",                 // optimization (storage optimization level)
-                     "use_polarity",         // metric
-                     "auto", 10,             // contrast (auto), minContrast
-                     0, RAD(360),            // search angleStart, angleExtent
-                     0.9, 5, 0.5,            // minScore, numMatches, maxOverlap
-                     "least_squares", 0, 0.9 // subPixel, numLevels, greediness
-        );
-    }
-
-    // =========================================================================
-    // Test 2: Large Images (2048x4001)
-    // =========================================================================
-    {
-        std::vector<std::string> largeImages = {
-            "2025120119482739.bmp",
-            "20251201194802191.bmp",
-            "20251201194804137.bmp",
-            "20251201194805266.bmp",
-            "20251201194806360.bmp",
-            "2025120119482935.bmp",
-            "20251201194837127.bmp",
-            "20251201194840615.bmp",
-            "20251201194842271.bmp",
-            "20251201194843675.bmp",
-            "20251201194844759.bmp"
-        };
-
-        Rect2i largeROI(1065, 2720, 135, 200);
-
-        TestImageSet(win, "Large Images (2048x4001)",
-                     "tests/data/matching/image2/",
-                     "tests/data/matching/image2/result",
-                     largeImages, largeROI,
-                     5,                             // numLevels
-                     0, RAD(360), 0,                // angleStart, angleExtent, angleStep
-                     "auto",                        // optimization (storage optimization)
-                     "ignore_local_polarity",       // metric
-                     "auto", 5,                     // contrast (auto), minContrast
-                     0, RAD(360),                   // search angleStart, angleExtent
-                     0.9, 10, 0.5,                  // minScore, numMatches, maxOverlap
-                     "least_squares", 0, 0.9        // subPixel, numLevels, greediness
-        );
-    }
-
-    // =========================================================================
-    // Test 3: Image3 (1280x1024) - 66 images
-    // =========================================================================
-    {
-        std::vector<std::string> image3Files = {
-            // Template image first
-            "202412121422747.bmp",
-            // All other images (65 total, excluding 20241021163820218.bmp - wrong format)
-            "20241021163730950.bmp",
-            // "20241021163820218.bmp",  // EXCLUDED: 1024x1280x32 (wrong size and format)
-            "20241021163823205.bmp",
-            "20241021163826212.bmp",
-            "20241021163829214.bmp",
-            "20241021163832216.bmp",
-            "20241021163835217.bmp",
-            "20241021163838214.bmp",
-            "20241021163841216.bmp",
-            "20241021163844224.bmp",
-            "20241021163847216.bmp",
-            "20241021163850215.bmp",
-            "20241021163853214.bmp",
-            "20241021163856217.bmp",
-            "20241212141622357.bmp",
-            "20241212141622370.bmp",
-            "20241212141718906.bmp",
-            "20241212141718921.bmp",
-            "20241212141815739.bmp",
-            "20241212141828746.bmp",
-            "20241212142048783.bmp",
-            "20241212142048797.bmp",
-            "20241212142157595.bmp",
-            "20241212142157608.bmp",
-            "20241212142223555.bmp",
-            "20241212142235286.bmp",
-            "20241212195933476.bmp",
-            "2024121220320483.bmp",
-            "20241212212921224.bmp",
-            "20241212212923225.bmp",
-            "20241212213145414.bmp",
-            "20241212213147407.bmp",
-            "20241212213149405.bmp",
-            "20241212213331374.bmp",
-            "20241212213333350.bmp",
-            "20241212213335372.bmp",
-            "20241212213616738.bmp",
-            "20241212213829107.bmp",
-            "20241212213845786.bmp",
-            "20241212214038339.bmp",
-            "20241212214256310.bmp",
-            "20241212214332142.bmp",
-            "20241212214334144.bmp",
-            "20241212214336140.bmp",
-            "2024121221829183.bmp",
-            "2024121221951633.bmp",
-            "20241216174441447.bmp",
-            "20241216174444376.bmp",
-            "20241216174447349.bmp",
-            "20241216174611370.bmp",
-            "2024121617465344.bmp",
-            "20241216174659345.bmp",
-            "2024121617468370.bmp",
-            "2024121617472365.bmp",
-            "2024121617475358.bmp",
-            "20241216174814380.bmp",
-            "20241216174817366.bmp",
-            "20241216174820367.bmp",
-            "20241216174911370.bmp",
-            "20241216174914373.bmp",
-            "20241216174959372.bmp",
-            "2024121617498368.bmp",
-            "2024121617502355.bmp",
-            "2024121617505369.bmp",
-            "20241217133454888.bmp",
-            "20241217134935725.bmp"
-        };
-
-        // ROI: (580, 340) to (650, 400) -> x=580, y=340, width=70, height=60
-        Rect2i image3ROI(580, 340, 70, 60);
-
-        TestImageSet(win, "Image3 (1280x1024) - 66 images",
-                     "tests/data/matching/image3/",
-                     "tests/data/matching/image3/result",
-                     image3Files, image3ROI,
-                     4,                             // numLevels
-                     0, RAD(360), 0,                // angleStart, angleExtent, angleStep
-                     "auto",                        // optimization
-                     "ignore_local_polarity",       // metric
-                     "auto", 10,                    // contrast (auto), minContrast
-                     0, RAD(360),                   // search angleStart, angleExtent
-                     0.9, 10, 0.5,                  // minScore, numMatches, maxOverlap
-                     "least_squares", 0, 0.9        // subPixel, numLevels, greediness
-        );
-    }
-
-    // =========================================================================
-    // Test 4: Image4 - Rotated images (10° to 200°, step 10°)
-    // =========================================================================
-    {
-        std::vector<std::string> image4Files = {
-            // Template image first
-            "rotated_10.png",
-            // All rotated images (20 total)
-            "rotated_20.png",
-            "rotated_30.png",
-            "rotated_40.png",
-            "rotated_50.png",
-            "rotated_60.png",
-            "rotated_70.png",
-            "rotated_80.png",
-            "rotated_90.png",
-            "rotated_100.png",
-            "rotated_110.png",
-            "rotated_120.png",
-            "rotated_130.png",
-            "rotated_140.png",
-            "rotated_150.png",
-            "rotated_160.png",
-            "rotated_170.png",
-            "rotated_180.png",
-            "rotated_190.png",
-            "rotated_200.png"
-        };
-
-        // ROI: (266, 467) to (300, 496) -> x=266, y=467, width=34, height=29
-        Rect2i image4ROI(266, 467, 34, 29);
-
-        TestImageSet(win, "Image4 (Rotated) - 20 images",
-                     "tests/data/matching/image4/",
-                     "tests/data/matching/image4/result",
-                     image4Files, image4ROI,
-                     4,                             // numLevels
-                     0, RAD(360), 0,                // angleStart, angleExtent, angleStep
-                     "auto",                        // optimization
-                     "use_polarity",                // metric - stricter matching
-                     "auto", 10,                    // contrast (auto), minContrast
-                     0, RAD(360),                   // search angleStart, angleExtent
-                     0.9, 10, 0.5,                  // minScore, numMatches, maxOverlap
-                     "least_squares", 0, 0.9        // subPixel, numLevels, greediness
-        );
-    }
-
-    std::cout << "\n=== All Tests Complete ===" << std::endl;
-    std::cout << "Press any key to close..." << std::endl;
-    win.WaitKey(0);  // Wait indefinitely for final key press
+    std::cout << "\nPress any key to close..." << std::endl;
+    win.WaitKey(0);
 
     return 0;
 }
