@@ -60,6 +60,17 @@ enum class ThresholdMode {
 };
 
 /**
+ * @brief Fitting method for geometric primitives
+ *
+ * Halcon uses RANSAC by default with distance_threshold=3.5
+ */
+enum class MetrologyFitMethod {
+    RANSAC,         ///< RANSAC (Halcon compatible) - outliers completely excluded
+    Huber,          ///< Huber M-estimator (IRLS) - outliers soft-weighted
+    Tukey           ///< Tukey biweight (IRLS) - outliers strongly suppressed
+};
+
+/**
  * @brief Parameters for metrology measurement
  */
 struct MetrologyMeasureParams {
@@ -72,7 +83,13 @@ struct MetrologyMeasureParams {
     EdgeTransition measureTransition = EdgeTransition::All;  ///< Edge polarity
     EdgeSelectMode measureSelect = EdgeSelectMode::All;      ///< Edge selection
     int32_t numMeasures = 10;           ///< Number of calipers per object
-    double minScore = 0.5;              ///< Minimum score threshold
+    double minScore = 0.7;              ///< Minimum score threshold (Halcon default: 0.7)
+
+    // Fitting parameters (Halcon compatible)
+    MetrologyFitMethod fitMethod = MetrologyFitMethod::RANSAC;  ///< Fitting method (default: RANSAC for Halcon compatibility)
+    double distanceThreshold = 3.5;     ///< Outlier distance threshold in pixels (Halcon default: 3.5)
+    int32_t maxIterations = -1;         ///< Max RANSAC iterations (-1 = unlimited, Halcon default)
+    int32_t randSeed = 42;              ///< Random seed for RANSAC (Halcon default: 42)
 
     // Builder pattern
     MetrologyMeasureParams& SetNumInstances(int32_t n) { numInstances = n; return *this; }
@@ -103,6 +120,30 @@ struct MetrologyMeasureParams {
     MetrologyMeasureParams& SetMeasureSelect(EdgeSelectMode m) { measureSelect = m; return *this; }
     MetrologyMeasureParams& SetNumMeasures(int32_t n) { numMeasures = n; return *this; }
     MetrologyMeasureParams& SetMinScore(double s) { minScore = s; return *this; }
+
+    /// Set fitting method
+    MetrologyMeasureParams& SetFitMethod(MetrologyFitMethod m) { fitMethod = m; return *this; }
+
+    /// Set fitting method with string ("ransac", "huber", "tukey")
+    MetrologyMeasureParams& SetFitMethod(const std::string& method) {
+        if (method == "ransac" || method == "RANSAC") {
+            fitMethod = MetrologyFitMethod::RANSAC;
+        } else if (method == "huber" || method == "Huber") {
+            fitMethod = MetrologyFitMethod::Huber;
+        } else if (method == "tukey" || method == "Tukey") {
+            fitMethod = MetrologyFitMethod::Tukey;
+        }
+        return *this;
+    }
+
+    /// Set outlier distance threshold (pixels)
+    MetrologyMeasureParams& SetDistanceThreshold(double t) { distanceThreshold = t; return *this; }
+
+    /// Set max RANSAC iterations (-1 for unlimited)
+    MetrologyMeasureParams& SetMaxIterations(int32_t n) { maxIterations = n; return *this; }
+
+    /// Set random seed for RANSAC
+    MetrologyMeasureParams& SetRandSeed(int32_t s) { randSeed = s; return *this; }
 };
 
 /**

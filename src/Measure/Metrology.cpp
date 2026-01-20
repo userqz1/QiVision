@@ -622,12 +622,41 @@ bool MetrologyModel::Apply(const QImage& image) {
 
         impl_->measuredPoints[idx] = edgePoints;
 
+        // Get fitting parameters
+        auto fitMethod = obj.Params().fitMethod;
+        double distThreshold = obj.Params().distanceThreshold;
+        int32_t maxIter = obj.Params().maxIterations;
+
+        // Setup RANSAC parameters
+        Internal::RansacParams ransacParams;
+        ransacParams.threshold = distThreshold;
+        ransacParams.maxIterations = (maxIter < 0) ? 10000 : maxIter;  // -1 means high limit
+        ransacParams.confidence = 0.99;
+
+        // Setup fit params
+        Internal::FitParams fitParams;
+        fitParams.computeResiduals = true;
+
         // Fit geometric primitive based on object type
         switch (obj.Type()) {
             case MetrologyObjectType::Line: {
                 MetrologyLineResult result;
                 if (edgePoints.size() >= 2) {
-                    auto fitResult = Internal::FitLine(edgePoints);
+                    Internal::LineFitResult fitResult;
+
+                    // Select fitting method based on params
+                    switch (fitMethod) {
+                        case MetrologyFitMethod::RANSAC:
+                            fitResult = Internal::FitLineRANSAC(edgePoints, ransacParams, fitParams);
+                            break;
+                        case MetrologyFitMethod::Huber:
+                            fitResult = Internal::FitLineHuber(edgePoints, 0.0, fitParams);
+                            break;
+                        case MetrologyFitMethod::Tukey:
+                            fitResult = Internal::FitLineTukey(edgePoints, 0.0, fitParams);
+                            break;
+                    }
+
                     if (fitResult.success) {
                         // Get line endpoints from fitted line
                         auto& line = fitResult.line;
@@ -638,8 +667,6 @@ bool MetrologyModel::Apply(const QImage& image) {
                         Point2d p2 = {lineObj->Col2(), lineObj->Row2()};
 
                         // Project points onto line
-                        // Line: a*x + b*y + c = 0, normal = (a, b), point on line = (-a*c, -b*c)
-                        // Projection: p' = p - ((a*px + b*py + c) / (a^2 + b^2)) * (a, b)
                         auto project = [&line](const Point2d& p) -> Point2d {
                             double d = line.a * p.x + line.b * p.y + line.c;
                             return {p.x - d * line.a, p.y - d * line.b};
@@ -655,9 +682,14 @@ bool MetrologyModel::Apply(const QImage& image) {
                         result.nr = line.b;  // Normal row component
                         result.nc = line.a;  // Normal column component
                         result.dist = -line.c;  // Distance from origin
-                        result.numUsed = static_cast<int32_t>(edgePoints.size());
+                        result.numUsed = fitResult.numInliers > 0 ? fitResult.numInliers : static_cast<int>(edgePoints.size());
                         result.rmsError = fitResult.residualRMS;
                         result.score = result.numUsed > 0 ? 1.0 / (1.0 + result.rmsError) : 0.0;
+
+                        // Store weights for visualization
+                        if (!fitResult.weights.empty()) {
+                            impl_->pointWeights[idx] = fitResult.weights;
+                        }
                     }
                 }
                 impl_->lineResults[idx].push_back(result);
@@ -667,9 +699,21 @@ bool MetrologyModel::Apply(const QImage& image) {
             case MetrologyObjectType::Circle: {
                 MetrologyCircleResult result;
                 if (edgePoints.size() >= 3) {
-                    // Use Huber M-estimator for robust fitting with soft outlier weighting
-                    // Huber is more stable than RANSAC for continuous weight distribution
-                    auto fitResult = Internal::FitCircleHuber(edgePoints, true, 0.0);
+                    Internal::CircleFitResult fitResult;
+
+                    // Select fitting method based on params
+                    switch (fitMethod) {
+                        case MetrologyFitMethod::RANSAC:
+                            fitResult = Internal::FitCircleRANSAC(edgePoints, ransacParams, fitParams);
+                            break;
+                        case MetrologyFitMethod::Huber:
+                            fitResult = Internal::FitCircleHuber(edgePoints, true, 0.0, fitParams);
+                            break;
+                        case MetrologyFitMethod::Tukey:
+                            fitResult = Internal::FitCircleTukey(edgePoints, true, 0.0, fitParams);
+                            break;
+                    }
+
                     if (fitResult.success) {
                         result.row = fitResult.circle.center.y;
                         result.column = fitResult.circle.center.x;
@@ -684,7 +728,16 @@ bool MetrologyModel::Apply(const QImage& image) {
                         result.endAngle = circleObj->AngleEnd();
 
                         // Save weights for outlier visualization
-                        impl_->pointWeights[idx] = fitResult.weights;
+                        if (!fitResult.weights.empty()) {
+                            impl_->pointWeights[idx] = fitResult.weights;
+                        } else if (!fitResult.inlierMask.empty()) {
+                            // Convert inlier mask to weights for RANSAC
+                            std::vector<double> weights(fitResult.inlierMask.size());
+                            for (size_t i = 0; i < fitResult.inlierMask.size(); ++i) {
+                                weights[i] = fitResult.inlierMask[i] ? 1.0 : 0.0;
+                            }
+                            impl_->pointWeights[idx] = weights;
+                        }
                     }
                 }
                 impl_->circleResults[idx].push_back(result);
@@ -694,20 +747,41 @@ bool MetrologyModel::Apply(const QImage& image) {
             case MetrologyObjectType::Ellipse: {
                 MetrologyEllipseResult result;
                 if (edgePoints.size() >= 5) {
-                    // Use robust Huber fitting for outlier handling
-                    auto fitResult = Internal::FitEllipseHuber(edgePoints);
+                    Internal::EllipseFitResult fitResult;
+
+                    // Select fitting method based on params
+                    switch (fitMethod) {
+                        case MetrologyFitMethod::RANSAC:
+                            fitResult = Internal::FitEllipseRANSAC(edgePoints, ransacParams, fitParams);
+                            break;
+                        case MetrologyFitMethod::Huber:
+                            fitResult = Internal::FitEllipseHuber(edgePoints, 0.0, fitParams);
+                            break;
+                        case MetrologyFitMethod::Tukey:
+                            fitResult = Internal::FitEllipseTukey(edgePoints, 0.0, fitParams);
+                            break;
+                    }
+
                     if (fitResult.success) {
                         result.row = fitResult.ellipse.center.y;
                         result.column = fitResult.ellipse.center.x;
                         result.phi = fitResult.ellipse.angle;
                         result.ra = fitResult.ellipse.a;
                         result.rb = fitResult.ellipse.b;
-                        result.numUsed = static_cast<int32_t>(fitResult.numInliers);
+                        result.numUsed = fitResult.numInliers > 0 ? fitResult.numInliers : static_cast<int>(edgePoints.size());
                         result.rmsError = fitResult.residualRMS;
                         result.score = result.numUsed > 0 ? 1.0 / (1.0 + result.rmsError) : 0.0;
 
                         // Store weights for GetPointWeights
-                        impl_->pointWeights[idx] = fitResult.weights;
+                        if (!fitResult.weights.empty()) {
+                            impl_->pointWeights[idx] = fitResult.weights;
+                        } else if (!fitResult.inlierMask.empty()) {
+                            std::vector<double> weights(fitResult.inlierMask.size());
+                            for (size_t i = 0; i < fitResult.inlierMask.size(); ++i) {
+                                weights[i] = fitResult.inlierMask[i] ? 1.0 : 0.0;
+                            }
+                            impl_->pointWeights[idx] = weights;
+                        }
                     }
                 }
                 impl_->ellipseResults[idx].push_back(result);
@@ -726,11 +800,85 @@ bool MetrologyModel::Apply(const QImage& image) {
                     initialRect.height = rectObj->Length2() * 2.0;  // full height
                     initialRect.angle = rectObj->Phi();
 
-                    // Use iterative robust rectangle fitting
-                    auto fitResult = Internal::FitRectangleIterative(
-                        edgePoints, initialRect, 10, 0.01,
-                        Internal::FitParams().SetComputeResiduals(true)
-                    );
+                    // Get fitting parameters
+                    auto fitMethod = obj.Params().fitMethod;
+                    double distThreshold = obj.Params().distanceThreshold;
+                    int32_t maxIter = obj.Params().maxIterations;
+
+                    Internal::RectangleFitResult fitResult;
+                    Internal::FitParams fitParams;
+                    fitParams.SetComputeResiduals(true);
+
+                    if (fitMethod == MetrologyFitMethod::RANSAC) {
+                        // For RANSAC: segment points by side, fit each with RANSAC, compute rectangle
+                        auto sidedPoints = Internal::SegmentPointsByRectangleSide(edgePoints, initialRect);
+
+                        std::array<Internal::LineFitResult, 4> sideResults;
+                        std::array<Line2d, 4> fittedLines;
+                        bool allSidesOK = true;
+                        size_t totalInliers = 0;
+                        double totalResidual = 0.0;
+                        int validSides = 0;
+
+                        // Setup RANSAC parameters
+                        Internal::RansacParams ransacParams;
+                        ransacParams.threshold = distThreshold;
+                        ransacParams.maxIterations = (maxIter < 0) ? 1000 : maxIter;
+
+                        for (int side = 0; side < 4; ++side) {
+                            if (sidedPoints[side].size() >= 2) {
+                                sideResults[side] = Internal::FitLineRANSAC(
+                                    sidedPoints[side], ransacParams, fitParams);
+
+                                if (sideResults[side].success) {
+                                    fittedLines[side] = sideResults[side].line;
+                                    totalInliers += sideResults[side].numInliers;
+                                    totalResidual += sideResults[side].residualRMS * sideResults[side].numInliers;
+                                    validSides++;
+                                } else {
+                                    allSidesOK = false;
+                                }
+                            } else {
+                                allSidesOK = false;
+                            }
+                        }
+
+                        if (allSidesOK && validSides == 4) {
+                            auto rectOpt = Internal::RectangleFromLines(fittedLines);
+                            if (rectOpt.has_value()) {
+                                fitResult.success = true;
+                                fitResult.rect = rectOpt.value();
+                                fitResult.numInliers = totalInliers;
+                                fitResult.residualRMS = totalInliers > 0 ? totalResidual / totalInliers : 0.0;
+                                fitResult.sideResults = sideResults;
+                            }
+                        }
+                    } else {
+                        // Use Huber or Tukey with iterative rectangle fitting
+                        fitResult = Internal::FitRectangleIterative(
+                            edgePoints, initialRect, 10, 0.01, fitParams
+                        );
+
+                        // Apply distance threshold as post-filter for consistency
+                        if (fitResult.success && distThreshold > 0) {
+                            // Count inliers based on distance threshold
+                            size_t inlierCount = 0;
+                            for (const auto& pt : edgePoints) {
+                                double dist = std::numeric_limits<double>::max();
+                                // Compute distance to nearest rectangle edge
+                                for (int side = 0; side < 4; ++side) {
+                                    if (fitResult.sideResults[side].success) {
+                                        double d = fitResult.sideResults[side].line.Distance(pt);
+                                        dist = std::min(dist, d);
+                                    }
+                                }
+                                if (dist <= distThreshold) {
+                                    inlierCount++;
+                                }
+                            }
+                            fitResult.numInliers = inlierCount;
+                        }
+                    }
 
                     if (fitResult.success) {
                         result.row = fitResult.rect.center.y;
