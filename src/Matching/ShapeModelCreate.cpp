@@ -1004,15 +1004,24 @@ void ShapeModelImpl::ExtractModelPointsXLD(const QImage& templateImg, const Angl
         // Step 2: Trace into ordered contours
         auto contours = TraceContoursXLD(filteredPoints, levelData.width, levelData.height, MIN_CONTOUR_POINTS);
 
-        // Step 3: Resample and collect points
+        // Step 3: Resample and collect points WITH contour topology
         std::vector<ModelPoint> allPoints;
         allPoints.reserve(filteredPoints.size());
+
+        std::vector<int32_t> contourStarts;
+        std::vector<bool> contourClosed;
+        contourStarts.reserve(contours.size() + 1);
+        contourClosed.reserve(contours.size());
 
         for (const auto& contour : contours) {
             auto resampled = ResampleContourXLD(contour, RESAMPLE_SPACING);
 
             // Skip short contours after resampling
             if (static_cast<int32_t>(resampled.Size()) < MIN_CONTOUR_POINTS) continue;
+
+            // Record contour start index
+            contourStarts.push_back(static_cast<int32_t>(allPoints.size()));
+            contourClosed.push_back(resampled.isClosed);
 
             // Convert to ModelPoints (relative to origin)
             for (size_t i = 0; i < resampled.Size(); ++i) {
@@ -1023,10 +1032,15 @@ void ShapeModelImpl::ExtractModelPointsXLD(const QImage& templateImg, const Angl
             }
         }
 
+        // Add sentinel value for easy iteration
+        contourStarts.push_back(static_cast<int32_t>(allPoints.size()));
+
         // NO maxPoints limit - let natural contour structure determine count
         // This matches Halcon behavior where point counts naturally reduce with pyramid
 
         levelModel.points = std::move(allPoints);
+        levelModel.contourStarts = std::move(contourStarts);
+        levelModel.contourClosed = std::move(contourClosed);
 
         // Generate grid points (unique integer coordinates)
         std::set<std::pair<int32_t, int32_t>> uniqueGridCoords;
@@ -1186,14 +1200,23 @@ void ShapeModelImpl::ExtractModelPointsXLDWithRegion(const QImage& templateImg, 
         // Step 2: Trace into ordered contours
         auto contours = TraceContoursXLD(filteredPoints, levelData.width, levelData.height, MIN_CONTOUR_POINTS);
 
-        // Step 3: Resample and collect points
+        // Step 3: Resample and collect points WITH contour topology
         std::vector<ModelPoint> allPoints;
         allPoints.reserve(filteredPoints.size());
+
+        std::vector<int32_t> contourStarts;
+        std::vector<bool> contourClosed;
+        contourStarts.reserve(contours.size() + 1);
+        contourClosed.reserve(contours.size());
 
         for (const auto& contour : contours) {
             auto resampled = ResampleContourXLD(contour, RESAMPLE_SPACING);
 
             if (static_cast<int32_t>(resampled.Size()) < MIN_CONTOUR_POINTS) continue;
+
+            // Record contour start index
+            contourStarts.push_back(static_cast<int32_t>(allPoints.size()));
+            contourClosed.push_back(resampled.isClosed);
 
             for (size_t i = 0; i < resampled.Size(); ++i) {
                 double relX = resampled.x[i] - levelOriginX;
@@ -1203,7 +1226,12 @@ void ShapeModelImpl::ExtractModelPointsXLDWithRegion(const QImage& templateImg, 
             }
         }
 
+        // Add sentinel value for easy iteration
+        contourStarts.push_back(static_cast<int32_t>(allPoints.size()));
+
         levelModel.points = std::move(allPoints);
+        levelModel.contourStarts = std::move(contourStarts);
+        levelModel.contourClosed = std::move(contourClosed);
 
         // Generate grid points
         std::set<std::pair<int32_t, int32_t>> uniqueGridCoords;
@@ -1269,35 +1297,106 @@ void ShapeModelImpl::OptimizeModel() {
     }
 
     if (minSpacing > 0.5) {
-        double minDistSq = minSpacing * minSpacing;
-
         for (auto& level : levels_) {
             if (level.points.empty()) continue;
 
-            std::vector<ModelPoint> filtered;
-            filtered.reserve(level.points.size());
+            // Check if we have valid contour topology
+            bool hasValidTopology = !level.contourStarts.empty() &&
+                                    level.contourStarts.size() > 1;
 
-            std::sort(level.points.begin(), level.points.end(),
-                [](const ModelPoint& a, const ModelPoint& b) {
-                    return a.magnitude > b.magnitude;
-                });
+            if (hasValidTopology) {
+                // Process each contour separately to preserve topology
+                std::vector<ModelPoint> filteredAll;
+                std::vector<int32_t> newContourStarts;
+                std::vector<bool> newContourClosed;
 
-            for (const auto& pt : level.points) {
-                bool tooClose = false;
-                for (const auto& kept : filtered) {
-                    double dx = pt.x - kept.x;
-                    double dy = pt.y - kept.y;
-                    if (dx * dx + dy * dy < minDistSq) {
-                        tooClose = true;
-                        break;
+                filteredAll.reserve(level.points.size());
+                newContourStarts.reserve(level.contourStarts.size());
+                newContourClosed.reserve(level.contourClosed.size());
+
+                size_t numContours = level.contourStarts.size() - 1;
+                for (size_t c = 0; c < numContours; ++c) {
+                    int32_t startIdx = level.contourStarts[c];
+                    int32_t endIdx = level.contourStarts[c + 1];
+
+                    if (endIdx <= startIdx) continue;
+
+                    // Filter within this contour, preserving order
+                    // Use distance-based filtering along the contour path
+                    std::vector<ModelPoint> filtered;
+                    filtered.reserve(endIdx - startIdx);
+
+                    double accumulatedDist = 0.0;
+                    filtered.push_back(level.points[startIdx]);  // Always keep first point
+
+                    for (int32_t i = startIdx + 1; i < endIdx; ++i) {
+                        double dx = level.points[i].x - level.points[i-1].x;
+                        double dy = level.points[i].y - level.points[i-1].y;
+                        accumulatedDist += std::sqrt(dx*dx + dy*dy);
+
+                        if (accumulatedDist >= minSpacing) {
+                            filtered.push_back(level.points[i]);
+                            accumulatedDist = 0.0;
+                        }
+                    }
+
+                    // Always keep last point if contour is open
+                    bool isClosed = (c < level.contourClosed.size()) ? level.contourClosed[c] : false;
+                    if (filtered.size() >= 2 && !isClosed) {
+                        const auto& lastPt = level.points[endIdx - 1];
+                        if (filtered.back().x != lastPt.x || filtered.back().y != lastPt.y) {
+                            filtered.push_back(lastPt);
+                        }
+                    }
+
+                    // Only keep contour if it has enough points
+                    if (filtered.size() >= 2) {
+                        newContourStarts.push_back(static_cast<int32_t>(filteredAll.size()));
+                        newContourClosed.push_back(isClosed);
+
+                        for (auto& pt : filtered) {
+                            filteredAll.push_back(std::move(pt));
+                        }
                     }
                 }
-                if (!tooClose) {
-                    filtered.push_back(pt);
-                }
-            }
 
-            level.points = std::move(filtered);
+                // Add sentinel
+                newContourStarts.push_back(static_cast<int32_t>(filteredAll.size()));
+
+                level.points = std::move(filteredAll);
+                level.contourStarts = std::move(newContourStarts);
+                level.contourClosed = std::move(newContourClosed);
+            } else {
+                // No topology info - use original global filtering (for legacy models)
+                double minDistSq = minSpacing * minSpacing;
+                std::vector<ModelPoint> filtered;
+                filtered.reserve(level.points.size());
+
+                std::sort(level.points.begin(), level.points.end(),
+                    [](const ModelPoint& a, const ModelPoint& b) {
+                        return a.magnitude > b.magnitude;
+                    });
+
+                for (const auto& pt : level.points) {
+                    bool tooClose = false;
+                    for (const auto& kept : filtered) {
+                        double dx = pt.x - kept.x;
+                        double dy = pt.y - kept.y;
+                        if (dx * dx + dy * dy < minDistSq) {
+                            tooClose = true;
+                            break;
+                        }
+                    }
+                    if (!tooClose) {
+                        filtered.push_back(pt);
+                    }
+                }
+
+                level.points = std::move(filtered);
+                // Clear invalid topology
+                level.contourStarts.clear();
+                level.contourClosed.clear();
+            }
         }
     }
 
