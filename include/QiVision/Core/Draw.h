@@ -10,6 +10,7 @@
 
 #include <QiVision/Core/QImage.h>
 #include <QiVision/Core/Types.h>
+#include <QiVision/Core/QContour.h>
 #include <QiVision/Matching/MatchTypes.h>
 
 #include <cmath>
@@ -17,6 +18,17 @@
 #include <string>
 
 namespace Qi::Vision {
+
+// Forward declarations for Metrology
+namespace Measure {
+    class MeasureRectangle2;
+    class MetrologyModel;
+    class MetrologyObject;
+    struct MetrologyLineResult;
+    struct MetrologyCircleResult;
+    struct MetrologyEllipseResult;
+    struct MetrologyRectangle2Result;
+}
 
 /**
  * @brief Color for drawing (RGB)
@@ -193,6 +205,111 @@ public:
     /** @brief Draw multiple match results */
     static void MatchResults(QImage& image, const std::vector<Matching::MatchResult>& matches,
                              const Color& color, int32_t markerSize = 20);
+
+    // =========================================================================
+    // Metrology Visualization (Halcon-style)
+    // =========================================================================
+
+    /**
+     * @brief Draw a MeasureRectangle2 (caliper handle)
+     * @param image Target image
+     * @param handle MeasureRectangle2 to draw
+     * @param color Drawing color
+     * @param thickness Line thickness
+     */
+    static void MeasureRect(QImage& image, const Measure::MeasureRectangle2& handle,
+                            const Color& color, int32_t thickness = 1);
+
+    /**
+     * @brief Draw multiple MeasureRectangle2 handles
+     */
+    static void MeasureRects(QImage& image,
+                             const std::vector<Measure::MeasureRectangle2>& handles,
+                             const Color& color, int32_t thickness = 1);
+
+    /**
+     * @brief Draw a QContour
+     * @param image Target image
+     * @param contour Contour to draw
+     * @param color Drawing color
+     * @param thickness Line thickness
+     */
+    static void Contour(QImage& image, const QContour& contour,
+                        const Color& color, int32_t thickness = 1);
+
+    /**
+     * @brief Draw edge points with cross markers
+     * @param image Target image
+     * @param points Edge points to draw
+     * @param color Drawing color
+     * @param markerSize Cross marker size
+     */
+    static void EdgePoints(QImage& image, const std::vector<Point2d>& points,
+                           const Color& color, int32_t markerSize = 5);
+
+    /**
+     * @brief Draw Metrology line result
+     * @param image Target image
+     * @param result Line measurement result
+     * @param color Drawing color
+     * @param thickness Line thickness
+     */
+    static void MetrologyLine(QImage& image, const Measure::MetrologyLineResult& result,
+                              const Color& color, int32_t thickness = 2);
+
+    /**
+     * @brief Draw Metrology circle result
+     * @param image Target image
+     * @param result Circle measurement result
+     * @param color Drawing color
+     * @param thickness Line thickness
+     */
+    static void MetrologyCircle(QImage& image, const Measure::MetrologyCircleResult& result,
+                                const Color& color, int32_t thickness = 2);
+
+    /**
+     * @brief Draw Metrology ellipse result
+     * @param image Target image
+     * @param result Ellipse measurement result
+     * @param color Drawing color
+     * @param thickness Line thickness
+     */
+    static void MetrologyEllipse(QImage& image, const Measure::MetrologyEllipseResult& result,
+                                 const Color& color, int32_t thickness = 2);
+
+    /**
+     * @brief Draw Metrology rectangle result
+     * @param image Target image
+     * @param result Rectangle measurement result
+     * @param color Drawing color
+     * @param thickness Line thickness
+     */
+    static void MetrologyRectangle(QImage& image, const Measure::MetrologyRectangle2Result& result,
+                                   const Color& color, int32_t thickness = 2);
+
+    /**
+     * @brief Draw complete Metrology model visualization
+     *
+     * Draws:
+     * - Object contours (measurement regions)
+     * - Caliper handles
+     * - Detected edge points
+     * - Fitted results
+     *
+     * @param image Target image
+     * @param model MetrologyModel after Apply()
+     * @param objectColor Color for object outlines and calipers
+     * @param resultColor Color for fitted results
+     * @param pointColor Color for edge points
+     * @param drawCalipers Whether to draw caliper handles
+     * @param drawPoints Whether to draw edge points
+     */
+    static void MetrologyModelResult(QImage& image, const Measure::MetrologyModel& model,
+                                     const Color& objectColor = Color::Yellow(),
+                                     const Color& resultColor = Color::Green(),
+                                     const Color& pointColor = Color::Red(),
+                                     bool drawCalipers = true,
+                                     bool drawPoints = true);
 
     // =========================================================================
     // Text Drawing

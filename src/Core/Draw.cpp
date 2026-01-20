@@ -784,4 +784,148 @@ QImage Draw::PrepareForDrawing(const QImage& image) {
     return ToRGB(image);
 }
 
+// =============================================================================
+// Metrology Visualization
+// =============================================================================
+
+} // namespace Qi::Vision
+
+// Include Metrology headers here (after namespace close) to avoid circular deps
+#include <QiVision/Measure/MeasureHandle.h>
+#include <QiVision/Measure/Metrology.h>
+
+namespace Qi::Vision {
+
+void Draw::MeasureRect(QImage& image, const Measure::MeasureRectangle2& handle,
+                       const Color& color, int32_t thickness) {
+    // MeasureRectangle2 uses (row, column) = (y, x) convention
+    Point2d center{handle.Column(), handle.Row()};
+    // Length1 is along profile direction (phi), Length2 is perpendicular
+    double width = 2.0 * handle.Length1();   // Along phi direction
+    double height = 2.0 * handle.Length2();  // Perpendicular to phi
+
+    RotatedRectangle(image, center, width, height, handle.Phi(), color, thickness);
+}
+
+void Draw::MeasureRects(QImage& image,
+                        const std::vector<Measure::MeasureRectangle2>& handles,
+                        const Color& color, int32_t thickness) {
+    for (const auto& handle : handles) {
+        MeasureRect(image, handle, color, thickness);
+    }
+}
+
+void Draw::Contour(QImage& image, const QContour& contour,
+                   const Color& color, int32_t thickness) {
+    auto points = contour.GetPoints();
+    if (points.size() < 2) return;
+
+    for (size_t i = 0; i < points.size() - 1; ++i) {
+        Line(image, points[i], points[i + 1], color, thickness);
+    }
+
+    // Close contour if it's closed
+    if (contour.IsClosed() && points.size() >= 3) {
+        Line(image, points.back(), points.front(), color, thickness);
+    }
+}
+
+void Draw::EdgePoints(QImage& image, const std::vector<Point2d>& points,
+                      const Color& color, int32_t markerSize) {
+    for (const auto& pt : points) {
+        Cross(image, pt, markerSize, color, 1);
+    }
+}
+
+void Draw::MetrologyLine(QImage& image, const Measure::MetrologyLineResult& result,
+                         const Color& color, int32_t thickness) {
+    if (!result.IsValid()) return;
+
+    // Draw the fitted line segment
+    Point2d p1{result.col1, result.row1};
+    Point2d p2{result.col2, result.row2};
+    Line(image, p1, p2, color, thickness);
+}
+
+void Draw::MetrologyCircle(QImage& image, const Measure::MetrologyCircleResult& result,
+                           const Color& color, int32_t thickness) {
+    if (!result.IsValid()) return;
+
+    // Draw the fitted circle
+    Point2d center{result.column, result.row};
+    Circle(image, center, result.radius, color, thickness);
+}
+
+void Draw::MetrologyEllipse(QImage& image, const Measure::MetrologyEllipseResult& result,
+                            const Color& color, int32_t thickness) {
+    if (!result.IsValid()) return;
+
+    // Draw the fitted ellipse (ra = semi-major, rb = semi-minor)
+    Point2d center{result.column, result.row};
+    Ellipse(image, center, result.ra, result.rb, result.phi, color, thickness);
+}
+
+void Draw::MetrologyRectangle(QImage& image, const Measure::MetrologyRectangle2Result& result,
+                              const Color& color, int32_t thickness) {
+    if (!result.IsValid()) return;
+
+    // Draw the fitted rectangle
+    Point2d center{result.column, result.row};
+    double width = 2.0 * result.length1;
+    double height = 2.0 * result.length2;
+    RotatedRectangle(image, center, width, height, result.phi, color, thickness);
+}
+
+void Draw::MetrologyModelResult(QImage& image, const Measure::MetrologyModel& model,
+                                const Color& objectColor,
+                                const Color& resultColor,
+                                const Color& pointColor,
+                                bool drawCalipers,
+                                bool drawPoints) {
+    using namespace Measure;
+
+    int32_t numObjects = model.NumObjects();
+
+    for (int32_t idx = 0; idx < numObjects; ++idx) {
+        const MetrologyObject* obj = model.GetObject(idx);
+        if (!obj) continue;
+
+        // Draw calipers
+        if (drawCalipers) {
+            auto calipers = obj->GetCalipers();
+            MeasureRects(image, calipers, objectColor, 1);
+        }
+
+        // Draw edge points
+        if (drawPoints) {
+            auto points = model.GetMeasuredPoints(idx);
+            EdgePoints(image, points, pointColor, 3);
+        }
+
+        // Draw result based on object type
+        switch (obj->Type()) {
+            case MetrologyObjectType::Line: {
+                auto result = model.GetLineResult(idx);
+                MetrologyLine(image, result, resultColor, 2);
+                break;
+            }
+            case MetrologyObjectType::Circle: {
+                auto result = model.GetCircleResult(idx);
+                MetrologyCircle(image, result, resultColor, 2);
+                break;
+            }
+            case MetrologyObjectType::Ellipse: {
+                auto result = model.GetEllipseResult(idx);
+                MetrologyEllipse(image, result, resultColor, 2);
+                break;
+            }
+            case MetrologyObjectType::Rectangle2: {
+                auto result = model.GetRectangle2Result(idx);
+                MetrologyRectangle(image, result, resultColor, 2);
+                break;
+            }
+        }
+    }
+}
+
 } // namespace Qi::Vision
