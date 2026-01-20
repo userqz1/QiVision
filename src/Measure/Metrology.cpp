@@ -6,6 +6,8 @@
 #include <QiVision/Measure/Metrology.h>
 #include <QiVision/Measure/Caliper.h>
 #include <QiVision/Internal/Fitting.h>
+#include <QiVision/Internal/Profiler.h>
+#include <QiVision/Internal/Edge1D.h>
 
 #include <algorithm>
 #include <cmath>
@@ -159,8 +161,9 @@ std::vector<MeasureRectangle2> MetrologyObjectCircle::GetCalipers() const {
         double row = row_ + radius_ * std::sin(angle);
         double col = column_ + radius_ * std::cos(angle);
 
-        // Profile direction is radial (phi points tangent, profile perpendicular = radial)
-        double profilePhi = angle;  // Radial direction
+        // MeasureRectangle2::ProfileAngle() returns phi + PI/2
+        // To get radial search direction, we need phi = angle - PI/2
+        double profilePhi = angle - PI / 2.0;  // Radial direction after ProfileAngle transform
 
         MeasureRectangle2 caliper(row, col, profilePhi,
                                    params_.measureLength1, params_.measureLength2);
@@ -393,6 +396,9 @@ struct MetrologyModel::Impl {
     // Per-object measured points
     std::unordered_map<int32_t, std::vector<Point2d>> measuredPoints;
 
+    // Per-object point weights (from robust fitting, e.g., Huber/Tukey)
+    std::unordered_map<int32_t, std::vector<double>> pointWeights;
+
     // Alignment state
     double alignRow = 0.0;
     double alignCol = 0.0;
@@ -404,6 +410,7 @@ struct MetrologyModel::Impl {
         ellipseResults.clear();
         rectangleResults.clear();
         measuredPoints.clear();
+        pointWeights.clear();
     }
 };
 
@@ -491,6 +498,12 @@ bool MetrologyModel::Apply(const QImage& image) {
 
     impl_->ClearResults();
 
+    // Convert to grayscale if needed (for Hough detection)
+    QImage grayImage = image;
+    if (image.Channels() > 1) {
+        grayImage = image.ToGray();
+    }
+
     MeasureParams measureParams;
 
     for (auto& objPtr : impl_->objects) {
@@ -504,20 +517,107 @@ bool MetrologyModel::Apply(const QImage& image) {
 
         // Measure edge positions
         std::vector<Point2d> edgePoints;
+        double sigma = obj.Params().measureSigma;
+        double userThreshold = obj.Params().measureThreshold;
+        ThresholdMode thresholdMode = obj.Params().thresholdMode;
 
+        int caliperIdx = 0;
         for (auto& caliper : calipers) {
-            measureParams.sigma = obj.Params().measureSigma;
-            measureParams.minAmplitude = obj.Params().measureThreshold;
-            measureParams.transition = obj.Params().measureTransition;
-            measureParams.selectMode = obj.Params().measureSelect;
+            // Extract profile directly for adaptive threshold calculation
+            Internal::RectProfileParams profParams;
+            profParams.centerX = caliper.Column();
+            profParams.centerY = caliper.Row();
+            profParams.length = caliper.ProfileLength();
+            profParams.width = 2.0 * caliper.Length2();
+            profParams.angle = caliper.ProfileAngle();
+            profParams.numLines = caliper.NumLines();
+            profParams.samplesPerPixel = caliper.SamplesPerPixel();
+            profParams.interp = Internal::InterpolationMethod::Bilinear;
+            profParams.method = Internal::ProfileMethod::Average;
 
-            auto edges = MeasurePos(image, caliper, measureParams);
+            auto profile = Internal::ExtractRectProfile(image, profParams);
+            if (profile.data.size() < 3) continue;
 
-            if (!edges.empty()) {
-                // Use first edge by default
-                auto& e = edges[0];
-                edgePoints.push_back({e.column, e.row});
+            // Determine threshold for edge detection
+            // Each profile region computes its own threshold independently
+            double threshold;
+            if (thresholdMode == ThresholdMode::Manual) {
+                // User specified threshold - use directly
+                threshold = userThreshold;
+            } else {
+                // Auto threshold mode: compute based on this profile's statistics
+                const auto& data = profile.data;
+                size_t n = data.size();
+
+                // 1. Compute contrast (max - min)
+                double minVal = *std::min_element(data.begin(), data.end());
+                double maxVal = *std::max_element(data.begin(), data.end());
+                double contrast = maxVal - minVal;
+
+                // 2. Compute gradient (central difference)
+                std::vector<double> gradient(n);
+                gradient[0] = data[1] - data[0];
+                for (size_t i = 1; i < n - 1; ++i) {
+                    gradient[i] = (data[i + 1] - data[i - 1]) * 0.5;
+                }
+                gradient[n - 1] = data[n - 1] - data[n - 2];
+
+                // 3. Estimate noise using MAD (Median Absolute Deviation)
+                //    More robust than standard deviation
+                std::vector<double> absGrad(n);
+                for (size_t i = 0; i < n; ++i) {
+                    absGrad[i] = std::abs(gradient[i]);
+                }
+                std::nth_element(absGrad.begin(), absGrad.begin() + n / 2, absGrad.end());
+                double medianAbsGrad = absGrad[n / 2];
+                double noiseSigma = medianAbsGrad / 0.6745;  // MAD to sigma conversion
+
+                // 4. Compute threshold = max(base, contrast*ratio, k*noise)
+                constexpr double BASE_THRESHOLD = 5.0;      // Absolute minimum
+                constexpr double CONTRAST_RATIO = 0.2;      // 20% of contrast
+                constexpr double NOISE_MULTIPLIER = 4.0;    // 4 sigma confidence
+
+                double contrastThreshold = contrast * CONTRAST_RATIO;
+                double noiseThreshold = noiseSigma * NOISE_MULTIPLIER;
+                threshold = std::max({BASE_THRESHOLD, contrastThreshold, noiseThreshold});
             }
+
+            // Detect edges with threshold
+            auto edges1D = Internal::DetectEdges1D(
+                profile.data.data(),
+                profile.data.size(),
+                threshold,
+                Internal::EdgePolarity::Both,
+                sigma
+            );
+
+            if (edges1D.empty()) {
+                caliperIdx++;
+                continue;
+            }
+
+            // Find the strongest edge
+            auto strongest = std::max_element(edges1D.begin(), edges1D.end(),
+                [](const auto& a, const auto& b) {
+                    return std::abs(a.amplitude) < std::abs(b.amplitude);
+                });
+
+            // Convert profile position to image coordinates
+            double profileLength = caliper.ProfileLength();
+            double stepSize = profileLength / (profile.data.size() - 1);
+            double profilePos = strongest->position * stepSize;
+
+            // ProfileToImage calculation
+            double profileAngle = caliper.ProfileAngle();
+            double halfLen = caliper.Length1();
+            double startX = caliper.Column() - halfLen * std::cos(profileAngle);
+            double startY = caliper.Row() - halfLen * std::sin(profileAngle);
+
+            double edgeX = startX + profilePos * std::cos(profileAngle);
+            double edgeY = startY + profilePos * std::sin(profileAngle);
+
+            edgePoints.push_back({edgeX, edgeY});
+            caliperIdx++;
         }
 
         impl_->measuredPoints[idx] = edgePoints;
@@ -567,12 +667,14 @@ bool MetrologyModel::Apply(const QImage& image) {
             case MetrologyObjectType::Circle: {
                 MetrologyCircleResult result;
                 if (edgePoints.size() >= 3) {
-                    auto fitResult = Internal::FitCircleGeometric(edgePoints);
+                    // Use Huber M-estimator for robust fitting with soft outlier weighting
+                    // Huber is more stable than RANSAC for continuous weight distribution
+                    auto fitResult = Internal::FitCircleHuber(edgePoints, true, 0.0);
                     if (fitResult.success) {
                         result.row = fitResult.circle.center.y;
                         result.column = fitResult.circle.center.x;
                         result.radius = fitResult.circle.radius;
-                        result.numUsed = static_cast<int32_t>(edgePoints.size());
+                        result.numUsed = fitResult.numInliers;
                         result.rmsError = fitResult.residualRMS;
                         result.score = result.numUsed > 0 ? 1.0 / (1.0 + result.rmsError) : 0.0;
 
@@ -580,6 +682,9 @@ bool MetrologyModel::Apply(const QImage& image) {
                         auto* circleObj = static_cast<MetrologyObjectCircle*>(&obj);
                         result.startAngle = circleObj->AngleStart();
                         result.endAngle = circleObj->AngleEnd();
+
+                        // Save weights for outlier visualization
+                        impl_->pointWeights[idx] = fitResult.weights;
                     }
                 }
                 impl_->circleResults[idx].push_back(result);
@@ -767,6 +872,14 @@ QContour MetrologyModel::GetResultContour(int32_t index, int32_t instanceIndex) 
 std::vector<Point2d> MetrologyModel::GetMeasuredPoints(int32_t index) const {
     auto it = impl_->measuredPoints.find(index);
     if (it != impl_->measuredPoints.end()) {
+        return it->second;
+    }
+    return {};
+}
+
+std::vector<double> MetrologyModel::GetPointWeights(int32_t index) const {
+    auto it = impl_->pointWeights.find(index);
+    if (it != impl_->pointWeights.end()) {
         return it->second;
     }
     return {};

@@ -1,7 +1,7 @@
 # QiVision 公开 API 参考手册
 
-> 版本: 0.2.0
-> 最后更新: 2026-01-17
+> 版本: 0.3.0
+> 最后更新: 2026-01-20
 > 命名空间: `Qi::Vision`
 
 ---
@@ -496,6 +496,104 @@ void SortPairs(
     PairSortBy criterion,           // ByWidth, ByPosition
     bool ascending = true
 );
+```
+
+---
+
+### 2.7 Metrology 模块
+
+**头文件**: `<QiVision/Measure/Metrology.h>`
+
+计量模型框架，用于组合测量多个几何对象。
+
+#### 2.7.1 ThresholdMode
+
+```cpp
+enum class ThresholdMode {
+    Manual,    // 使用用户指定的阈值
+    Auto       // 每个投影区域独立计算自动阈值
+};
+```
+
+#### 2.7.2 MetrologyMeasureParams
+
+```cpp
+struct MetrologyMeasureParams {
+    int32_t numInstances = 1;           // 实例数量
+    double measureLength1 = 20.0;       // 卡尺半长（沿投影方向）
+    double measureLength2 = 5.0;        // 卡尺半宽（垂直方向）
+    double measureSigma = 1.0;          // 高斯平滑 sigma
+    double measureThreshold = 30.0;     // 边缘阈值（Manual 模式）
+    ThresholdMode thresholdMode = ThresholdMode::Manual;
+    EdgeTransition measureTransition = EdgeTransition::All;
+    int32_t numMeasures = 10;           // 卡尺数量
+    double minScore = 0.5;              // 最小分数
+
+    // 设置阈值（数值 = Manual 模式）
+    MetrologyMeasureParams& SetThreshold(double t);
+
+    // 设置阈值（"auto" = Auto 模式）
+    MetrologyMeasureParams& SetThreshold(const std::string& mode);
+};
+```
+
+#### 2.7.3 MetrologyModel
+
+```cpp
+class MetrologyModel {
+public:
+    // 添加测量对象
+    int32_t AddLineMeasure(double row1, double col1, double row2, double col2,
+                           const MetrologyMeasureParams& params = {});
+    int32_t AddCircleMeasure(double row, double col, double radius,
+                             const MetrologyMeasureParams& params = {});
+    int32_t AddArcMeasure(double row, double col, double radius,
+                          double angleStart, double angleEnd,
+                          const MetrologyMeasureParams& params = {});
+    int32_t AddEllipseMeasure(double row, double col, double phi,
+                              double ra, double rb,
+                              const MetrologyMeasureParams& params = {});
+
+    // 执行测量
+    bool Apply(const QImage& image);
+
+    // 获取结果
+    MetrologyLineResult GetLineResult(int32_t index) const;
+    MetrologyCircleResult GetCircleResult(int32_t index) const;
+    MetrologyEllipseResult GetEllipseResult(int32_t index) const;
+
+    // 获取测量点
+    std::vector<Point2d> GetMeasuredPoints(int32_t index) const;
+    std::vector<double> GetPointWeights(int32_t index) const;
+
+    // 对齐
+    void Align(double rowOffset, double colOffset, double phi);
+    void ResetAlignment();
+};
+```
+
+**示例**:
+```cpp
+#include <QiVision/Measure/Metrology.h>
+using namespace Qi::Vision::Measure;
+
+MetrologyMeasureParams params;
+params.SetMeasureLength(30.0, 10.0)
+      .SetNumMeasures(36)
+      .SetMeasureSigma(1.5)
+      .SetThreshold("auto");  // 自动阈值模式
+
+MetrologyModel model;
+int idx = model.AddCircleMeasure(500.0, 650.0, 220.0, params);
+
+if (model.Apply(image)) {
+    auto result = model.GetCircleResult(idx);
+    if (result.IsValid()) {
+        std::cout << "Center: (" << result.column << ", " << result.row << ")\n";
+        std::cout << "Radius: " << result.radius << "\n";
+        std::cout << "RMS Error: " << result.rmsError << "\n";
+    }
+}
 ```
 
 ---
@@ -1948,6 +2046,143 @@ std::string GetShapeFeatureName(ShapeFeature feature);
 
 ---
 
+### 6.11 InnerCircle
+
+获取最大内接圆（使用距离变换）。
+
+```cpp
+void InnerCircle(
+    const QRegion& region,
+    double& row, double& column,        // [out] 圆心
+    double& radius                      // [out] 半径
+);
+```
+
+**示例**:
+```cpp
+double row, col, radius;
+InnerCircle(blob, row, col, radius);
+printf("Largest inscribed circle: center=(%.2f, %.2f), radius=%.2f\n", col, row, radius);
+```
+
+---
+
+### 6.12 ContourLength
+
+计算区域轮廓长度（周长）。
+
+```cpp
+double ContourLength(const QRegion& region);
+```
+
+**示例**:
+```cpp
+double perimeter = ContourLength(blob);
+double circularity = 4 * M_PI * area / (perimeter * perimeter);
+```
+
+---
+
+### 6.13 孔洞分析
+
+```cpp
+// 计算孔洞数量
+int32_t CountHoles(const QRegion& region);
+
+// 计算欧拉数 (连通域数量 - 孔洞数量)
+int32_t EulerNumber(const QRegion& region);
+
+// 填充所有孔洞
+QRegion FillUp(const QRegion& region);
+
+// 获取所有孔洞区域
+std::vector<QRegion> GetHoles(const QRegion& region);
+```
+
+**示例**:
+```cpp
+// 检测有孔洞的对象
+int32_t holes = CountHoles(blob);
+if (holes > 0) {
+    printf("Blob has %d holes\n", holes);
+
+    // 获取孔洞区域
+    auto holeRegions = GetHoles(blob);
+    for (const auto& hole : holeRegions) {
+        int64_t holeArea;
+        double r, c;
+        AreaCenter(hole, holeArea, r, c);
+        printf("  Hole at (%.2f, %.2f), area=%lld\n", c, r, holeArea);
+    }
+
+    // 填充孔洞
+    QRegion filled = FillUp(blob);
+}
+```
+
+---
+
+### 6.14 高级选择函数
+
+```cpp
+// 按标准差选择（选择特征值在均值±N个标准差范围内的区域）
+std::vector<QRegion> SelectShapeStd(
+    const std::vector<QRegion>& regions,
+    ShapeFeature feature,
+    double deviationFactor          // 标准差倍数，如 1.0, 2.0
+);
+
+// 多特征选择
+std::vector<QRegion> SelectShapeMulti(
+    const std::vector<QRegion>& regions,
+    const std::vector<ShapeFeature>& features,
+    SelectOperation operation,      // And: 全部满足, Or: 任一满足
+    const std::vector<double>& minValues,
+    const std::vector<double>& maxValues
+);
+
+// 按凸度选择
+std::vector<QRegion> SelectShapeConvexity(
+    const std::vector<QRegion>& regions,
+    double minConvex, double maxConvex
+);
+
+// 按延伸度选择
+std::vector<QRegion> SelectShapeElongation(
+    const std::vector<QRegion>& regions,
+    double minElong, double maxElong
+);
+
+// 选择 N 个最大/最小区域
+std::vector<QRegion> SelectShapeProto(
+    const std::vector<QRegion>& regions,
+    int32_t n,                      // 选择数量
+    bool largest = true             // true=最大, false=最小
+);
+```
+
+**示例**:
+```cpp
+// 剔除异常大小的区域（面积在均值±2个标准差内）
+auto normal = SelectShapeStd(blobs, ShapeFeature::Area, 2.0);
+
+// 选择同时满足多个条件的区域
+auto selected = SelectShapeMulti(blobs,
+    {ShapeFeature::Area, ShapeFeature::Circularity},
+    SelectOperation::And,
+    {100, 0.7},     // 最小值
+    {10000, 1.0}    // 最大值
+);
+
+// 选择 5 个最大的区域
+auto top5 = SelectShapeProto(blobs, 5, true);
+
+// 选择凸度高的区域（接近凸形状）
+auto convex = SelectShapeConvexity(blobs, 0.9, 1.0);
+```
+
+---
+
 ## 7. Display 模块
 
 **命名空间**: `Qi::Vision`
@@ -2451,6 +2686,7 @@ enum class ChannelType {
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 0.3.0 | 2026-01-20 | 添加 Metrology 模块文档，新增自动阈值 API |
 | 0.2.0 | 2026-01-17 | 添加 Blob, Display, GUI 模块文档 |
 | 0.1.0 | 2026-01-15 | 初始版本：Matching, Measure, IO, Color, Filter |
 

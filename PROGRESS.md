@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-19 (ToFloat+Copy 融合优化)
+> 最后更新: 2026-01-20 (Metrology 自动阈值增强)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -245,6 +245,30 @@ Tests    █████████████████░░░ 87%
 ---
 
 ## 变更日志
+
+### 2026-01-20 (Metrology 自动阈值增强)
+
+- **Measure/Metrology 模块增强**
+  - **新增自动阈值功能**:
+    - 新增 `ThresholdMode` 枚举 (`Manual`, `Auto`)
+    - 新增 `SetThreshold("auto")` API 支持 Halcon 风格字符串参数
+    - 自动阈值算法：`threshold = max(5.0, contrast×0.2, noise×4.0)`
+    - 使用 MAD (Median Absolute Deviation) 估计噪声，比标准差更鲁棒
+    - 每个投影区域（profile）独立计算阈值
+  - **API 变更**:
+    - `MetrologyMeasureParams::SetThreshold(double)` - 手动模式
+    - `MetrologyMeasureParams::SetThreshold(const std::string&)` - 支持 "auto"
+    - `SetMeasureThreshold()` 标记为 deprecated
+  - **移除不合适的功能**:
+    - 移除 `autoDetect` 参数（Metrology 是精确测量工具，不适合做自动检测）
+    - 自动检测圆应使用专门的 `HoughCircles` 等工具
+  - **亚像素支持确认**:
+    - `RefineEdgeSubpixel`: 三点抛物线拟合，精度 < 0.02 px
+    - `RefineEdgeZeroCrossing`: 二阶导数过零点
+
+- **示例更新**
+  - `samples/measure/circle_measure.cpp`: 演示自动阈值模式
+  - 新增权重可视化（绿色=内点，黄色=中等，红色=离群点）
 
 ### 2026-01-19 (ToFloat+Copy 融合优化)
 - **Internal/AnglePyramid.cpp 性能优化**:

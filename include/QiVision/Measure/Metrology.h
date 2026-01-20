@@ -52,6 +52,14 @@ enum class MetrologyObjectType {
 };
 
 /**
+ * @brief Threshold mode for edge detection
+ */
+enum class ThresholdMode {
+    Manual,         ///< Use user-specified threshold value
+    Auto            ///< Automatically compute threshold per profile region
+};
+
+/**
  * @brief Parameters for metrology measurement
  */
 struct MetrologyMeasureParams {
@@ -59,7 +67,8 @@ struct MetrologyMeasureParams {
     double measureLength1 = 20.0;       ///< Half-length of caliper along profile
     double measureLength2 = 5.0;        ///< Half-width of caliper perpendicular
     double measureSigma = 1.0;          ///< Gaussian smoothing sigma
-    double measureThreshold = 30.0;     ///< Edge amplitude threshold
+    double measureThreshold = 30.0;     ///< Edge amplitude threshold (used when thresholdMode is Manual)
+    ThresholdMode thresholdMode = ThresholdMode::Manual;  ///< Threshold mode
     EdgeTransition measureTransition = EdgeTransition::All;  ///< Edge polarity
     EdgeSelectMode measureSelect = EdgeSelectMode::All;      ///< Edge selection
     int32_t numMeasures = 10;           ///< Number of calipers per object
@@ -71,7 +80,25 @@ struct MetrologyMeasureParams {
         measureLength1 = l1; measureLength2 = l2; return *this;
     }
     MetrologyMeasureParams& SetMeasureSigma(double s) { measureSigma = s; return *this; }
-    MetrologyMeasureParams& SetMeasureThreshold(double t) { measureThreshold = t; return *this; }
+
+    /// Set threshold with numeric value (Manual mode)
+    MetrologyMeasureParams& SetThreshold(double t) {
+        measureThreshold = t;
+        thresholdMode = ThresholdMode::Manual;
+        return *this;
+    }
+
+    /// Set threshold with string ("auto" for automatic mode)
+    MetrologyMeasureParams& SetThreshold(const std::string& mode) {
+        if (mode == "auto" || mode == "Auto" || mode == "AUTO") {
+            thresholdMode = ThresholdMode::Auto;
+        }
+        return *this;
+    }
+
+    /// @deprecated Use SetThreshold instead
+    MetrologyMeasureParams& SetMeasureThreshold(double t) { return SetThreshold(t); }
+
     MetrologyMeasureParams& SetMeasureTransition(EdgeTransition t) { measureTransition = t; return *this; }
     MetrologyMeasureParams& SetMeasureSelect(EdgeSelectMode m) { measureSelect = m; return *this; }
     MetrologyMeasureParams& SetNumMeasures(int32_t n) { numMeasures = n; return *this; }
@@ -530,6 +557,14 @@ public:
      * @return Vector of measured edge positions
      */
     std::vector<Point2d> GetMeasuredPoints(int32_t index) const;
+
+    /**
+     * @brief Get point weights from robust fitting (Huber/Tukey)
+     * @param index Object index
+     * @return Vector of weights [0, 1] for each measured point
+     *         Weight < 1 indicates potential outlier (lower weight = more outlier-like)
+     */
+    std::vector<double> GetPointWeights(int32_t index) const;
 
     // =========================================================================
     // Alignment
