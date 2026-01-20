@@ -459,10 +459,9 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const Rect2i& roi, const P
     }
     pyramidParams.smoothSigma = 0.5;
 
-    // Disable NMS for shape-based matching (Halcon-style)
-    // Shape matching uses gradient direction similarity, not edge detection
-    // All pixels above contrast threshold participate in matching
-    pyramidParams.useNMS = false;
+    // Enable NMS for single-pixel edge extraction (Halcon-style)
+    // Template edges should be single-pixel wide for accurate contour tracing
+    pyramidParams.useNMS = true;
 
     // For contrast auto-detection, use a very low initial threshold to get all gradients
     bool needAutoContrast = (params_.contrastMode == ContrastMode::Auto ||
@@ -747,7 +746,7 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const QRegion& region, con
         pyramidParams.numLevels = std::min(params_.numLevels, maxValidLevels);
     }
     pyramidParams.smoothSigma = 0.5;
-    pyramidParams.useNMS = false;  // Shape matching uses all edge points
+    pyramidParams.useNMS = true;  // Single-pixel edges for accurate contour tracing
 
     // Contrast handling
     bool needAutoContrast = (params_.contrastMode == ContrastMode::Auto ||
