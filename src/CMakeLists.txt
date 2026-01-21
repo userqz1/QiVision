@@ -10,7 +10,6 @@ set(QIVISION_SOURCES
     Core/QMatrix.cpp
     Core/QContour.cpp
     Core/QContourArray.cpp
-    Core/Draw.cpp
     # Platform
     Platform/Memory.cpp
     Platform/SIMD.cpp
@@ -82,6 +81,7 @@ set(QIVISION_SOURCES
     Blob/Blob.cpp
     # Display (Feature Layer)
     Display/Display.cpp
+    Display/Draw.cpp
     # GUI (Feature Layer)
     GUI/Window.cpp
 )
@@ -171,6 +171,7 @@ set(QIVISION_HEADERS
     ${CMAKE_SOURCE_DIR}/include/QiVision/Blob/Blob.h
     # Display (Feature Layer)
     ${CMAKE_SOURCE_DIR}/include/QiVision/Display/Display.h
+    ${CMAKE_SOURCE_DIR}/include/QiVision/Display/Draw.h
     # GUI (Feature Layer)
     ${CMAKE_SOURCE_DIR}/include/QiVision/GUI/Window.h
 )

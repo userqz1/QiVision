@@ -253,11 +253,11 @@ void CleanDispImages() {
 // Drawing Primitives - Lines
 // =============================================================================
 
-void DispLine(QImage& image, double row1, double col1, double row2, double col2,
+void DispLine(QImage& image, double x1, double y1, double x2, double y2,
               const Scalar& color, int32_t thickness) {
     DrawLineBresenham(image,
-                      static_cast<int32_t>(col1 + 0.5), static_cast<int32_t>(row1 + 0.5),
-                      static_cast<int32_t>(col2 + 0.5), static_cast<int32_t>(row2 + 0.5),
+                      static_cast<int32_t>(x1 + 0.5), static_cast<int32_t>(y1 + 0.5),
+                      static_cast<int32_t>(x2 + 0.5), static_cast<int32_t>(y2 + 0.5),
                       color, thickness);
 }
 
@@ -271,57 +271,57 @@ void DispLine(QImage& image, const Line2d& line, double length,
     double dx = -line.b * halfLen;
     double dy = line.a * halfLen;
 
-    DispLine(image, cy - dy, cx - dx, cy + dy, cx + dx, color, thickness);
+    DispLine(image, cx - dx, cy - dy, cx + dx, cy + dy, color, thickness);
 }
 
 // =============================================================================
 // Drawing Primitives - Circles
 // =============================================================================
 
-void DispCircle(QImage& image, double row, double column, double radius,
+void DispCircle(QImage& image, double cx, double cy, double radius,
                 const Scalar& color, int32_t thickness) {
     DrawCircleBresenham(image,
-                        static_cast<int32_t>(column + 0.5),
-                        static_cast<int32_t>(row + 0.5),
+                        static_cast<int32_t>(cx + 0.5),
+                        static_cast<int32_t>(cy + 0.5),
                         static_cast<int32_t>(radius + 0.5),
                         color, thickness);
 }
 
 void DispCircle(QImage& image, const Circle2d& circle,
                 const Scalar& color, int32_t thickness) {
-    DispCircle(image, circle.center.y, circle.center.x, circle.radius, color, thickness);
+    DispCircle(image, circle.center.x, circle.center.y, circle.radius, color, thickness);
 }
 
-void DispEllipse(QImage& image, double row, double column, double phi,
-                 double ra, double rb,
+void DispEllipse(QImage& image, double cx, double cy, double angle,
+                 double radiusX, double radiusY,
                  const Scalar& color, int32_t thickness) {
     // Draw ellipse using parametric form
-    int numPoints = std::max(64, static_cast<int>((ra + rb) * PI / 5.0));
+    int numPoints = std::max(64, static_cast<int>((radiusX + radiusY) * PI / 5.0));
     double step = 2.0 * PI / numPoints;
-    double cosPhi = std::cos(phi);
-    double sinPhi = std::sin(phi);
+    double cosAngle = std::cos(angle);
+    double sinAngle = std::sin(angle);
 
     for (int i = 0; i < numPoints; ++i) {
         double t1 = i * step;
         double t2 = (i + 1) * step;
 
-        double x1 = ra * std::cos(t1);
-        double y1 = rb * std::sin(t1);
-        double x2 = ra * std::cos(t2);
-        double y2 = rb * std::sin(t2);
+        double lx1 = radiusX * std::cos(t1);
+        double ly1 = radiusY * std::sin(t1);
+        double lx2 = radiusX * std::cos(t2);
+        double ly2 = radiusY * std::sin(t2);
 
-        double col1 = column + x1 * cosPhi - y1 * sinPhi;
-        double row1_pt = row + x1 * sinPhi + y1 * cosPhi;
-        double col2 = column + x2 * cosPhi - y2 * sinPhi;
-        double row2_pt = row + x2 * sinPhi + y2 * cosPhi;
+        double x1 = cx + lx1 * cosAngle - ly1 * sinAngle;
+        double y1 = cy + lx1 * sinAngle + ly1 * cosAngle;
+        double x2 = cx + lx2 * cosAngle - ly2 * sinAngle;
+        double y2 = cy + lx2 * sinAngle + ly2 * cosAngle;
 
-        DispLine(image, row1_pt, col1, row2_pt, col2, color, thickness);
+        DispLine(image, x1, y1, x2, y2, color, thickness);
     }
 }
 
 void DispEllipse(QImage& image, const Ellipse2d& ellipse,
                  const Scalar& color, int32_t thickness) {
-    DispEllipse(image, ellipse.center.y, ellipse.center.x, ellipse.angle,
+    DispEllipse(image, ellipse.center.x, ellipse.center.y, ellipse.angle,
                 ellipse.a, ellipse.b, color, thickness);
 }
 
@@ -329,40 +329,40 @@ void DispEllipse(QImage& image, const Ellipse2d& ellipse,
 // Drawing Primitives - Rectangles
 // =============================================================================
 
-void DispRectangle1(QImage& image, double row1, double col1, double row2, double col2,
+void DispRectangle1(QImage& image, double x1, double y1, double x2, double y2,
                     const Scalar& color, int32_t thickness) {
-    DispLine(image, row1, col1, row1, col2, color, thickness);  // Top
-    DispLine(image, row2, col1, row2, col2, color, thickness);  // Bottom
-    DispLine(image, row1, col1, row2, col1, color, thickness);  // Left
-    DispLine(image, row1, col2, row2, col2, color, thickness);  // Right
+    DispLine(image, x1, y1, x2, y1, color, thickness);  // Top
+    DispLine(image, x1, y2, x2, y2, color, thickness);  // Bottom
+    DispLine(image, x1, y1, x1, y2, color, thickness);  // Left
+    DispLine(image, x2, y1, x2, y2, color, thickness);  // Right
 }
 
 void DispRectangle1(QImage& image, const Rect2i& rect,
                     const Scalar& color, int32_t thickness) {
-    DispRectangle1(image, rect.y, rect.x,
-                   rect.y + rect.height - 1, rect.x + rect.width - 1,
+    DispRectangle1(image, rect.x, rect.y,
+                   rect.x + rect.width - 1, rect.y + rect.height - 1,
                    color, thickness);
 }
 
-void DispRectangle2(QImage& image, double row, double column, double phi,
-                    double length1, double length2,
+void DispRectangle2(QImage& image, double cx, double cy, double angle,
+                    double halfWidth, double halfHeight,
                     const Scalar& color, int32_t thickness) {
-    double cosPhi = std::cos(phi);
-    double sinPhi = std::sin(phi);
+    double cosAngle = std::cos(angle);
+    double sinAngle = std::sin(angle);
 
-    // 4 corners in local coordinates
+    // 4 corners in local coordinates (x, y)
     double corners[4][2] = {
-        {-length1, -length2},
-        { length1, -length2},
-        { length1,  length2},
-        {-length1,  length2}
+        {-halfWidth, -halfHeight},
+        { halfWidth, -halfHeight},
+        { halfWidth,  halfHeight},
+        {-halfWidth,  halfHeight}
     };
 
     // Transform corners to image coordinates
     double imgCorners[4][2];
     for (int i = 0; i < 4; ++i) {
-        imgCorners[i][0] = row + corners[i][0] * sinPhi + corners[i][1] * cosPhi;    // row
-        imgCorners[i][1] = column + corners[i][0] * cosPhi - corners[i][1] * sinPhi; // col
+        imgCorners[i][0] = cx + corners[i][0] * cosAngle - corners[i][1] * sinAngle;  // x
+        imgCorners[i][1] = cy + corners[i][0] * sinAngle + corners[i][1] * cosAngle;  // y
     }
 
     // Draw 4 edges
@@ -377,52 +377,52 @@ void DispRectangle2(QImage& image, double row, double column, double phi,
 // Drawing Primitives - Markers
 // =============================================================================
 
-void DispCross(QImage& image, double row, double column, int32_t size,
+void DispCross(QImage& image, double cx, double cy, int32_t size,
                double angle, const Scalar& color, int32_t thickness) {
     double s = static_cast<double>(size);
     double cosA = std::cos(angle);
     double sinA = std::sin(angle);
 
-    // Horizontal arm
-    DispLine(image, row - s * sinA, column - s * cosA,
-             row + s * sinA, column + s * cosA, color, thickness);
-    // Vertical arm
-    DispLine(image, row - s * cosA, column + s * sinA,
-             row + s * cosA, column - s * sinA, color, thickness);
+    // Horizontal arm (along angle direction)
+    DispLine(image, cx - s * cosA, cy - s * sinA,
+             cx + s * cosA, cy + s * sinA, color, thickness);
+    // Vertical arm (perpendicular to angle)
+    DispLine(image, cx + s * sinA, cy - s * cosA,
+             cx - s * sinA, cy + s * cosA, color, thickness);
 }
 
-void DispArrow(QImage& image, double row1, double col1, double row2, double col2,
+void DispArrow(QImage& image, double x1, double y1, double x2, double y2,
                double headSize, const Scalar& color, int32_t thickness) {
     // Main line
-    DispLine(image, row1, col1, row2, col2, color, thickness);
+    DispLine(image, x1, y1, x2, y2, color, thickness);
 
     // Arrow head
-    double angle = std::atan2(row2 - row1, col2 - col1);
+    double angle = std::atan2(y2 - y1, x2 - x1);
     double headAngle = PI / 6.0;  // 30 degrees
 
-    double r1 = row2 - headSize * std::sin(angle + headAngle);
-    double c1 = col2 - headSize * std::cos(angle + headAngle);
-    double r2 = row2 - headSize * std::sin(angle - headAngle);
-    double c2 = col2 - headSize * std::cos(angle - headAngle);
+    double hx1 = x2 - headSize * std::cos(angle + headAngle);
+    double hy1 = y2 - headSize * std::sin(angle + headAngle);
+    double hx2 = x2 - headSize * std::cos(angle - headAngle);
+    double hy2 = y2 - headSize * std::sin(angle - headAngle);
 
-    DispLine(image, row2, col2, r1, c1, color, thickness);
-    DispLine(image, row2, col2, r2, c2, color, thickness);
+    DispLine(image, x2, y2, hx1, hy1, color, thickness);
+    DispLine(image, x2, y2, hx2, hy2, color, thickness);
 }
 
 // =============================================================================
 // Drawing Primitives - Polygons and Contours
 // =============================================================================
 
-void DispPolygon(QImage& image, const std::vector<double>& rows,
-                 const std::vector<double>& cols,
+void DispPolygon(QImage& image, const std::vector<double>& xs,
+                 const std::vector<double>& ys,
                  const Scalar& color, int32_t thickness) {
-    if (rows.size() != cols.size() || rows.size() < 2) {
+    if (xs.size() != ys.size() || xs.size() < 2) {
         return;
     }
 
-    for (size_t i = 0; i < rows.size(); ++i) {
-        size_t j = (i + 1) % rows.size();
-        DispLine(image, rows[i], cols[i], rows[j], cols[j], color, thickness);
+    for (size_t i = 0; i < xs.size(); ++i) {
+        size_t j = (i + 1) % xs.size();
+        DispLine(image, xs[i], ys[i], xs[j], ys[j], color, thickness);
     }
 }
 
@@ -435,14 +435,14 @@ void DispContour(QImage& image, const QContour& contour,
     for (size_t i = 0; i < contour.Size() - 1; ++i) {
         const auto& p1 = contour.PointAt(i);
         const auto& p2 = contour.PointAt(i + 1);
-        DispLine(image, p1.y, p1.x, p2.y, p2.x, color, thickness);
+        DispLine(image, p1.x, p1.y, p2.x, p2.y, color, thickness);
     }
 
     // Close if contour is closed
     if (contour.IsClosed() && contour.Size() >= 3) {
         const auto& p1 = contour.PointAt(contour.Size() - 1);
         const auto& p2 = contour.PointAt(0);
-        DispLine(image, p1.y, p1.x, p2.y, p2.x, color, thickness);
+        DispLine(image, p1.x, p1.y, p2.x, p2.y, color, thickness);
     }
 }
 
@@ -457,16 +457,16 @@ void DispContours(QImage& image, const QContourArray& contours,
 // Drawing Primitives - Points
 // =============================================================================
 
-void DispPoint(QImage& image, double row, double column, const Scalar& color) {
-    DrawPixel(image, static_cast<int32_t>(column + 0.5),
-              static_cast<int32_t>(row + 0.5), color);
+void DispPoint(QImage& image, double x, double y, const Scalar& color) {
+    DrawPixel(image, static_cast<int32_t>(x + 0.5),
+              static_cast<int32_t>(y + 0.5), color);
 }
 
-void DispPoints(QImage& image, const std::vector<double>& rows,
-                const std::vector<double>& cols, const Scalar& color) {
-    size_t n = std::min(rows.size(), cols.size());
+void DispPoints(QImage& image, const std::vector<double>& xs,
+                const std::vector<double>& ys, const Scalar& color) {
+    size_t n = std::min(xs.size(), ys.size());
     for (size_t i = 0; i < n; ++i) {
-        DispPoint(image, rows[i], cols[i], color);
+        DispPoint(image, xs[i], ys[i], color);
     }
 }
 
@@ -514,15 +514,15 @@ void DrawChar(QImage& image, int32_t col, int32_t row, char c,
 }
 }
 
-void DispText(QImage& image, double row, double column, const std::string& text,
+void DispText(QImage& image, double x, double y, const std::string& text,
               const Scalar& color, int32_t scale) {
-    int32_t col = static_cast<int32_t>(column + 0.5);
-    int32_t r = static_cast<int32_t>(row + 0.5);
+    int32_t px = static_cast<int32_t>(x + 0.5);
+    int32_t py = static_cast<int32_t>(y + 0.5);
     int32_t charWidth = 6 * scale;
 
     for (char c : text) {
-        DrawChar(image, col, r, c, color, scale);
-        col += charWidth;
+        DrawChar(image, px, py, c, color, scale);
+        px += charWidth;
     }
 }
 
@@ -530,29 +530,29 @@ void DispText(QImage& image, double row, double column, const std::string& text,
 // High-Level Drawing Functions
 // =============================================================================
 
-void DispMatchResult(QImage& image, double row, double column, double angle,
+void DispMatchResult(QImage& image, double x, double y, double angle,
                      double score, const Scalar& color, int32_t markerSize) {
     // Draw cross at match position
-    DispCross(image, row, column, markerSize, angle, color, 2);
+    DispCross(image, x, y, markerSize, angle, color, 2);
 
     // Draw angle indicator line
     double indicatorLen = markerSize * 1.5;
-    DispLine(image, row, column,
-             row + indicatorLen * std::sin(angle),
-             column + indicatorLen * std::cos(angle),
+    DispLine(image, x, y,
+             x + indicatorLen * std::cos(angle),
+             y + indicatorLen * std::sin(angle),
              color, 2);
 
     // Display score text if valid
     if (score > 0.0 && score <= 1.0) {
         char scoreText[16];
         std::snprintf(scoreText, sizeof(scoreText), "%.2f", score);
-        DispText(image, row + markerSize + 5, column - 10, scoreText, color, 1);
+        DispText(image, x - 10, y + markerSize + 5, scoreText, color, 1);
     }
 }
 
-void DispEdgeResult(QImage& image, double row, double column,
+void DispEdgeResult(QImage& image, double x, double y,
                     const Scalar& color, int32_t markerSize) {
-    DispCross(image, row, column, markerSize, 0.0, color, 1);
+    DispCross(image, x, y, markerSize, 0.0, color, 1);
 }
 
 } // namespace Qi::Vision

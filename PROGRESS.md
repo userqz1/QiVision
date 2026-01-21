@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-20 (Draw 模块 Metrology 可视化)
+> 最后更新: 2026-01-21 (架构审查与修复)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -245,6 +245,27 @@ Tests    █████████████████░░░ 87%
 ---
 
 ## 变更日志
+
+### 2026-01-21 (架构审查与修复)
+
+- **架构问题修复**
+  - **Draw 模块迁移**: Core/Draw.h → Display/Draw.h
+    - Core/Draw.h 改为兼容性头文件，自动重定向到 Display/Draw.h
+    - 修复层级依赖违规 (Display 现在可以依赖 Matching)
+    - Color 结构体已重命名为 Scalar (避免与 Color namespace 冲突)
+  - **坐标顺序统一**: 全部使用 (x, y) OpenCV 风格
+    - Display.h/cpp 所有函数参数从 (row, col) 改为 (x, y)
+    - Draw.h 已经是 (x, y) 风格，无需修改
+  - **Agent 规则重构**: 精简为 4 个 Agent
+    - algorithm-expert: 策略分析、架构设计、复杂算法、精度诊断
+    - dev: 编码实现（Core, Internal, Feature, Platform）
+    - code-reviewer: 代码审查、精度验证
+    - git-sync: Git 同步
+
+- **待处理架构问题** (记录备查)
+  - Internal/Histogram.h: 直方图增强功能应提升到 Filter 模块
+  - Internal/Threshold.h: 阈值功能应创建 Segment 模块或扩展 Blob 模块
+  - 原因: 根据架构规则 Internal 层不应导出给用户直接使用
 
 ### 2026-01-20 (Draw 模块 Metrology 可视化)
 

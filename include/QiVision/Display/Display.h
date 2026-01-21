@@ -2,28 +2,17 @@
 
 /**
  * @file Display.h
- * @brief Image display and drawing functions (Halcon-style API)
+ * @brief Image display and drawing functions
  *
  * Provides image display and drawing primitives for debugging and visualization.
- * All functions follow Halcon naming conventions and coordinate order (row, col).
- *
- * Halcon API mapping:
- * - disp_image       -> DispImage (Show)
- * - disp_line        -> DispLine
- * - disp_circle      -> DispCircle
- * - disp_cross       -> DispCross
- * - disp_rectangle1  -> DispRectangle1
- * - disp_rectangle2  -> DispRectangle2
- * - disp_arrow       -> DispArrow
- * - disp_polygon     -> DispPolygon
- * - set_color        -> SetColor
+ * All functions use (x, y) coordinate order (OpenCV style).
  */
 
 #include <QiVision/Core/QImage.h>
 #include <QiVision/Core/QContour.h>
 #include <QiVision/Core/QContourArray.h>
 #include <QiVision/Core/Types.h>
-#include <QiVision/Core/Draw.h>  // For Color struct
+#include <QiVision/Display/Draw.h>  // For Scalar struct
 
 #include <string>
 #include <vector>
@@ -45,9 +34,6 @@ namespace Measure {
 
 /**
  * @brief Display an image (save and open with system viewer)
- *
- * Halcon equivalent: disp_image
- *
  * @param image Image to display
  * @param title Window title (used as filename)
  * @return true if successful
@@ -71,18 +57,15 @@ void CleanDispImages();
 
 /**
  * @brief Draw a line segment
- *
- * Halcon equivalent: disp_line
- *
  * @param image Image to draw on (modified in place)
- * @param row1 Start row
- * @param col1 Start column
- * @param row2 End row
- * @param col2 End column
+ * @param x1 Start x coordinate
+ * @param y1 Start y coordinate
+ * @param x2 End x coordinate
+ * @param y2 End y coordinate
  * @param color Drawing color
  * @param thickness Line thickness (default: 1)
  */
-void DispLine(QImage& image, double row1, double col1, double row2, double col2,
+void DispLine(QImage& image, double x1, double y1, double x2, double y2,
               const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
@@ -97,17 +80,14 @@ void DispLine(QImage& image, const Line2d& line, double length,
 
 /**
  * @brief Draw a circle
- *
- * Halcon equivalent: disp_circle
- *
  * @param image Image to draw on
- * @param row Center row
- * @param column Center column
+ * @param cx Center x coordinate
+ * @param cy Center y coordinate
  * @param radius Circle radius
  * @param color Drawing color
  * @param thickness Line thickness (default: 1)
  */
-void DispCircle(QImage& image, double row, double column, double radius,
+void DispCircle(QImage& image, double cx, double cy, double radius,
                 const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
@@ -118,20 +98,17 @@ void DispCircle(QImage& image, const Circle2d& circle,
 
 /**
  * @brief Draw an ellipse
- *
- * Halcon equivalent: disp_ellipse
- *
  * @param image Image to draw on
- * @param row Center row
- * @param column Center column
- * @param phi Orientation angle (radians)
- * @param ra Semi-axis along phi
- * @param rb Semi-axis perpendicular to phi
+ * @param cx Center x coordinate
+ * @param cy Center y coordinate
+ * @param angle Orientation angle (radians)
+ * @param radiusX Semi-axis along angle
+ * @param radiusY Semi-axis perpendicular to angle
  * @param color Drawing color
  * @param thickness Line thickness
  */
-void DispEllipse(QImage& image, double row, double column, double phi,
-                 double ra, double rb,
+void DispEllipse(QImage& image, double cx, double cy, double angle,
+                 double radiusX, double radiusY,
                  const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
@@ -146,18 +123,15 @@ void DispEllipse(QImage& image, const Ellipse2d& ellipse,
 
 /**
  * @brief Draw an axis-aligned rectangle
- *
- * Halcon equivalent: disp_rectangle1
- *
  * @param image Image to draw on
- * @param row1 Top-left row
- * @param col1 Top-left column
- * @param row2 Bottom-right row
- * @param col2 Bottom-right column
+ * @param x1 Top-left x coordinate
+ * @param y1 Top-left y coordinate
+ * @param x2 Bottom-right x coordinate
+ * @param y2 Bottom-right y coordinate
  * @param color Drawing color
  * @param thickness Line thickness
  */
-void DispRectangle1(QImage& image, double row1, double col1, double row2, double col2,
+void DispRectangle1(QImage& image, double x1, double y1, double x2, double y2,
                     const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
@@ -168,20 +142,17 @@ void DispRectangle1(QImage& image, const Rect2i& rect,
 
 /**
  * @brief Draw a rotated rectangle
- *
- * Halcon equivalent: disp_rectangle2
- *
  * @param image Image to draw on
- * @param row Center row
- * @param column Center column
- * @param phi Orientation angle (radians)
- * @param length1 Half-length along phi
- * @param length2 Half-length perpendicular to phi
+ * @param cx Center x coordinate
+ * @param cy Center y coordinate
+ * @param angle Orientation angle (radians)
+ * @param halfWidth Half-width along angle
+ * @param halfHeight Half-height perpendicular to angle
  * @param color Drawing color
  * @param thickness Line thickness
  */
-void DispRectangle2(QImage& image, double row, double column, double phi,
-                    double length1, double length2,
+void DispRectangle2(QImage& image, double cx, double cy, double angle,
+                    double halfWidth, double halfHeight,
                     const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 // =============================================================================
@@ -190,36 +161,30 @@ void DispRectangle2(QImage& image, double row, double column, double phi,
 
 /**
  * @brief Draw a cross marker
- *
- * Halcon equivalent: disp_cross
- *
  * @param image Image to draw on
- * @param row Center row
- * @param column Center column
+ * @param cx Center x coordinate
+ * @param cy Center y coordinate
  * @param size Cross arm length
  * @param angle Rotation angle (radians, default: 0)
  * @param color Drawing color
  * @param thickness Line thickness
  */
-void DispCross(QImage& image, double row, double column, int32_t size,
+void DispCross(QImage& image, double cx, double cy, int32_t size,
                double angle = 0.0,
                const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
  * @brief Draw an arrow
- *
- * Halcon equivalent: disp_arrow
- *
  * @param image Image to draw on
- * @param row1 Start row
- * @param col1 Start column
- * @param row2 End row (arrow head)
- * @param col2 End column (arrow head)
+ * @param x1 Start x coordinate
+ * @param y1 Start y coordinate
+ * @param x2 End x coordinate (arrow head)
+ * @param y2 End y coordinate (arrow head)
  * @param headSize Arrow head size
  * @param color Drawing color
  * @param thickness Line thickness
  */
-void DispArrow(QImage& image, double row1, double col1, double row2, double col2,
+void DispArrow(QImage& image, double x1, double y1, double x2, double y2,
                double headSize = 10.0,
                const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
@@ -229,24 +194,18 @@ void DispArrow(QImage& image, double row1, double col1, double row2, double col2
 
 /**
  * @brief Draw a polygon
- *
- * Halcon equivalent: disp_polygon
- *
  * @param image Image to draw on
- * @param rows Row coordinates
- * @param cols Column coordinates
+ * @param xs X coordinates
+ * @param ys Y coordinates
  * @param color Drawing color
  * @param thickness Line thickness
  */
-void DispPolygon(QImage& image, const std::vector<double>& rows,
-                 const std::vector<double>& cols,
+void DispPolygon(QImage& image, const std::vector<double>& xs,
+                 const std::vector<double>& ys,
                  const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
  * @brief Draw a contour (XLD)
- *
- * Halcon equivalent: disp_xld
- *
  * @param image Image to draw on
  * @param contour Contour to draw
  * @param color Drawing color
@@ -267,25 +226,23 @@ void DispContours(QImage& image, const QContourArray& contours,
 
 /**
  * @brief Draw a single point
- *
  * @param image Image to draw on
- * @param row Point row
- * @param column Point column
+ * @param x Point x coordinate
+ * @param y Point y coordinate
  * @param color Drawing color
  */
-void DispPoint(QImage& image, double row, double column,
+void DispPoint(QImage& image, double x, double y,
                const Scalar& color = Scalar::Green());
 
 /**
  * @brief Draw multiple points
- *
  * @param image Image to draw on
- * @param rows Row coordinates
- * @param cols Column coordinates
+ * @param xs X coordinates
+ * @param ys Y coordinates
  * @param color Drawing color
  */
-void DispPoints(QImage& image, const std::vector<double>& rows,
-                const std::vector<double>& cols,
+void DispPoints(QImage& image, const std::vector<double>& xs,
+                const std::vector<double>& ys,
                 const Scalar& color = Scalar::Green());
 
 // =============================================================================
@@ -294,17 +251,14 @@ void DispPoints(QImage& image, const std::vector<double>& rows,
 
 /**
  * @brief Draw text
- *
- * Halcon equivalent: disp_message / write_string
- *
  * @param image Image to draw on
- * @param row Text position row
- * @param column Text position column
+ * @param x Text position x coordinate
+ * @param y Text position y coordinate
  * @param text Text string
  * @param color Text color
  * @param scale Font scale (default: 1)
  */
-void DispText(QImage& image, double row, double column, const std::string& text,
+void DispText(QImage& image, double x, double y, const std::string& text,
               const Scalar& color = Scalar::Green(), int32_t scale = 1);
 
 // =============================================================================
@@ -313,30 +267,28 @@ void DispText(QImage& image, double row, double column, const std::string& text,
 
 /**
  * @brief Draw match result with cross and angle indicator
- *
  * @param image Image to draw on
- * @param row Match row
- * @param column Match column
+ * @param x Match x coordinate
+ * @param y Match y coordinate
  * @param angle Match angle (radians)
  * @param score Match score
  * @param color Drawing color
  * @param markerSize Cross marker size
  */
-void DispMatchResult(QImage& image, double row, double column, double angle,
+void DispMatchResult(QImage& image, double x, double y, double angle,
                      double score = 1.0,
                      const Scalar& color = Scalar::Green(),
                      int32_t markerSize = 20);
 
 /**
  * @brief Draw edge measurement result
- *
  * @param image Image to draw on
- * @param row Edge row
- * @param column Edge column
+ * @param x Edge x coordinate
+ * @param y Edge y coordinate
  * @param color Drawing color
  * @param markerSize Cross marker size
  */
-void DispEdgeResult(QImage& image, double row, double column,
+void DispEdgeResult(QImage& image, double x, double y,
                     const Scalar& color = Scalar::Green(),
                     int32_t markerSize = 5);
 
