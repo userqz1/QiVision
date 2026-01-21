@@ -47,3 +47,6 @@ Thumbs.db
 # Large test data (download separately)
 tests/data/halcon_images/
 tests/data/matching/image2_result/
+
+# Test result images
+tests/data/matching/*/result_*.bmp

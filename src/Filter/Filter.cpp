@@ -134,13 +134,16 @@ std::vector<double> GenGaussDerivKernel(double sigma, int32_t order, int32_t siz
 // Smoothing Filters
 // =============================================================================
 
-QImage GaussFilter(const QImage& image, double sigma) {
-    return GaussFilter(image, sigma, sigma, "reflect");
+void GaussFilter(const QImage& image, QImage& output, double sigma) {
+    GaussFilter(image, output, sigma, sigma, "reflect");
 }
 
-QImage GaussFilter(const QImage& image, double sigmaX, double sigmaY,
-                    const std::string& borderMode) {
-    if (image.Empty()) return QImage();
+void GaussFilter(const QImage& image, QImage& output, double sigmaX, double sigmaY,
+                  const std::string& borderMode) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8) {
         throw UnsupportedException("GaussFilter only supports UInt8 images");
@@ -156,7 +159,7 @@ QImage GaussFilter(const QImage& image, double sigmaX, double sigmaY,
     int32_t h = image.Height();
     int channels = image.Channels();
 
-    QImage result(w, h, image.Type(), image.GetChannelType());
+    output = QImage(w, h, image.Type(), image.GetChannelType());
 
     // Process each channel
     std::vector<float> temp(w * h);
@@ -180,25 +183,26 @@ QImage GaussFilter(const QImage& image, double sigmaX, double sigmaY,
 
         // Write back to result
         for (int32_t y = 0; y < h; ++y) {
-            uint8_t* row = static_cast<uint8_t*>(result.RowPtr(y));
+            uint8_t* row = static_cast<uint8_t*>(output.RowPtr(y));
             for (int32_t x = 0; x < w; ++x) {
                 row[x * channels + c] = ClampU8(temp[y * w + x]);
             }
         }
     }
-
-    return result;
 }
 
-QImage GaussImage(const QImage& image, const std::string& size) {
+void GaussImage(const QImage& image, QImage& output, const std::string& size) {
     int32_t kernelSize = ParseKernelSize(size);
     double sigma = kernelSize / 6.0;  // Approximate sigma from size
-    return GaussFilter(image, sigma);
+    GaussFilter(image, output, sigma);
 }
 
-QImage MeanImage(const QImage& image, int32_t width, int32_t height,
-                  const std::string& borderMode) {
-    if (image.Empty()) return QImage();
+void MeanImage(const QImage& image, QImage& output, int32_t width, int32_t height,
+                const std::string& borderMode) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8) {
         throw UnsupportedException("MeanImage only supports UInt8 images");
@@ -214,7 +218,7 @@ QImage MeanImage(const QImage& image, int32_t width, int32_t height,
     int32_t h = image.Height();
     int channels = image.Channels();
 
-    QImage result(w, h, image.Type(), image.GetChannelType());
+    output = QImage(w, h, image.Type(), image.GetChannelType());
 
     std::vector<float> temp(w * h);
     std::vector<float> src(w * h);
@@ -234,34 +238,39 @@ QImage MeanImage(const QImage& image, int32_t width, int32_t height,
             border);
 
         for (int32_t y = 0; y < h; ++y) {
-            uint8_t* row = static_cast<uint8_t*>(result.RowPtr(y));
+            uint8_t* row = static_cast<uint8_t*>(output.RowPtr(y));
             for (int32_t x = 0; x < w; ++x) {
                 row[x * channels + c] = ClampU8(temp[y * w + x]);
             }
         }
     }
-
-    return result;
 }
 
-QImage MeanImage(const QImage& image, int32_t size, const std::string& borderMode) {
-    return MeanImage(image, size, size, borderMode);
+void MeanImage(const QImage& image, QImage& output, int32_t size,
+                const std::string& borderMode) {
+    MeanImage(image, output, size, size, borderMode);
 }
 
-QImage MedianImage(const QImage& image, const std::string& maskType,
-                    int32_t radius, const std::string& marginMode) {
-    if (image.Empty()) return QImage();
+void MedianImage(const QImage& image, QImage& output, const std::string& maskType,
+                  int32_t radius, const std::string& marginMode) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8) {
         throw UnsupportedException("MedianImage only supports UInt8 images");
     }
 
     int32_t size = 2 * radius + 1;
-    return MedianRect(image, size, size);
+    MedianRect(image, output, size, size);
 }
 
-QImage MedianRect(const QImage& image, int32_t width, int32_t height) {
-    if (image.Empty()) return QImage();
+void MedianRect(const QImage& image, QImage& output, int32_t width, int32_t height) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8) {
         throw UnsupportedException("MedianRect only supports UInt8 images");
@@ -273,12 +282,12 @@ QImage MedianRect(const QImage& image, int32_t width, int32_t height) {
     int32_t halfW = width / 2;
     int32_t halfH = height / 2;
 
-    QImage result(w, h, image.Type(), image.GetChannelType());
+    output = QImage(w, h, image.Type(), image.GetChannelType());
     std::vector<uint8_t> neighborhood(width * height);
 
     for (int c = 0; c < channels; ++c) {
         for (int32_t y = 0; y < h; ++y) {
-            uint8_t* dstRow = static_cast<uint8_t*>(result.RowPtr(y));
+            uint8_t* dstRow = static_cast<uint8_t*>(output.RowPtr(y));
 
             for (int32_t x = 0; x < w; ++x) {
                 // Collect neighborhood
@@ -300,18 +309,20 @@ QImage MedianRect(const QImage& image, int32_t width, int32_t height) {
             }
         }
     }
-
-    return result;
 }
 
-QImage BilateralFilter(const QImage& image, double sigmaSpatial, double sigmaIntensity) {
+void BilateralFilter(const QImage& image, QImage& output,
+                      double sigmaSpatial, double sigmaIntensity) {
     int32_t size = OptimalKernelSize(sigmaSpatial);
-    return BilateralFilter(image, size, sigmaSpatial, sigmaIntensity);
+    BilateralFilter(image, output, size, sigmaSpatial, sigmaIntensity);
 }
 
-QImage BilateralFilter(const QImage& image, int32_t size,
-                        double sigmaSpatial, double sigmaIntensity) {
-    if (image.Empty()) return QImage();
+void BilateralFilter(const QImage& image, QImage& output, int32_t size,
+                      double sigmaSpatial, double sigmaIntensity) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8) {
         throw UnsupportedException("BilateralFilter only supports UInt8 images");
@@ -325,7 +336,7 @@ QImage BilateralFilter(const QImage& image, int32_t size,
     double spatialCoeff = -0.5 / (sigmaSpatial * sigmaSpatial);
     double intensityCoeff = -0.5 / (sigmaIntensity * sigmaIntensity);
 
-    QImage result(w, h, image.Type(), image.GetChannelType());
+    output = QImage(w, h, image.Type(), image.GetChannelType());
 
     // Precompute spatial weights
     std::vector<double> spatialWeight(size * size);
@@ -338,7 +349,7 @@ QImage BilateralFilter(const QImage& image, int32_t size,
     }
 
     for (int32_t y = 0; y < h; ++y) {
-        uint8_t* dstRow = static_cast<uint8_t*>(result.RowPtr(y));
+        uint8_t* dstRow = static_cast<uint8_t*>(output.RowPtr(y));
 
         for (int32_t x = 0; x < w; ++x) {
             for (int c = 0; c < channels; ++c) {
@@ -371,12 +382,10 @@ QImage BilateralFilter(const QImage& image, int32_t size,
             }
         }
     }
-
-    return result;
 }
 
-QImage BinomialFilter(const QImage& image, int32_t width, int32_t height,
-                       const std::string& borderMode) {
+void BinomialFilter(const QImage& image, QImage& output, int32_t width, int32_t height,
+                     const std::string& borderMode) {
     // Binomial coefficients for different sizes
     auto getBinomial = [](int32_t n) -> std::vector<double> {
         std::vector<double> coeffs(n);
@@ -398,7 +407,7 @@ QImage BinomialFilter(const QImage& image, int32_t width, int32_t height,
     int32_t h = image.Height();
     int channels = image.Channels();
 
-    QImage result(w, h, image.Type(), image.GetChannelType());
+    output = QImage(w, h, image.Type(), image.GetChannelType());
 
     std::vector<float> temp(w * h);
     std::vector<float> src(w * h);
@@ -418,22 +427,24 @@ QImage BinomialFilter(const QImage& image, int32_t width, int32_t height,
             border);
 
         for (int32_t y = 0; y < h; ++y) {
-            uint8_t* row = static_cast<uint8_t*>(result.RowPtr(y));
+            uint8_t* row = static_cast<uint8_t*>(output.RowPtr(y));
             for (int32_t x = 0; x < w; ++x) {
                 row[x * channels + c] = ClampU8(temp[y * w + x]);
             }
         }
     }
-
-    return result;
 }
 
 // =============================================================================
 // Derivative Filters
 // =============================================================================
 
-QImage SobelAmp(const QImage& image, const std::string& filterType, int32_t size) {
-    if (image.Empty()) return QImage();
+void SobelAmp(const QImage& image, QImage& output,
+               const std::string& filterType, int32_t size) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8 || image.Channels() != 1) {
         throw UnsupportedException("SobelAmp requires single-channel UInt8 image");
@@ -472,7 +483,7 @@ QImage SobelAmp(const QImage& image, const std::string& filterType, int32_t size
         BorderMode::Reflect101);
 
     // Create result
-    QImage result(w, h, PixelType::UInt8, ChannelType::Gray);
+    output = QImage(w, h, PixelType::UInt8, ChannelType::Gray);
 
     std::string lowerType = filterType;
     std::transform(lowerType.begin(), lowerType.end(), lowerType.begin(), ::tolower);
@@ -480,7 +491,7 @@ QImage SobelAmp(const QImage& image, const std::string& filterType, int32_t size
     bool useSqrt = (lowerType == "sum_sqrt" || lowerType == "sqrt");
 
     for (int32_t y = 0; y < h; ++y) {
-        uint8_t* row = static_cast<uint8_t*>(result.RowPtr(y));
+        uint8_t* row = static_cast<uint8_t*>(output.RowPtr(y));
         for (int32_t x = 0; x < w; ++x) {
             float gxVal = gx[y * w + x];
             float gyVal = gy[y * w + x];
@@ -495,12 +506,14 @@ QImage SobelAmp(const QImage& image, const std::string& filterType, int32_t size
             row[x] = ClampU8(mag);
         }
     }
-
-    return result;
 }
 
-QImage SobelDir(const QImage& image, const std::string& dirType, int32_t size) {
-    if (image.Empty()) return QImage();
+void SobelDir(const QImage& image, QImage& output,
+               const std::string& dirType, int32_t size) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8 || image.Channels() != 1) {
         throw UnsupportedException("SobelDir requires single-channel UInt8 image");
@@ -536,20 +549,21 @@ QImage SobelDir(const QImage& image, const std::string& dirType, int32_t size) {
         BorderMode::Reflect101);
 
     // Return as float image with direction in radians
-    QImage result(w, h, PixelType::Float32, ChannelType::Gray);
+    output = QImage(w, h, PixelType::Float32, ChannelType::Gray);
 
     for (int32_t y = 0; y < h; ++y) {
-        float* row = static_cast<float*>(result.RowPtr(y));
+        float* row = static_cast<float*>(output.RowPtr(y));
         for (int32_t x = 0; x < w; ++x) {
             row[x] = static_cast<float>(std::atan2(gy[y * w + x], gx[y * w + x]));
         }
     }
-
-    return result;
 }
 
-QImage PrewittAmp(const QImage& image, const std::string& filterType) {
-    if (image.Empty()) return QImage();
+void PrewittAmp(const QImage& image, QImage& output, const std::string& filterType) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8 || image.Channels() != 1) {
         throw UnsupportedException("PrewittAmp requires single-channel UInt8 image");
@@ -587,14 +601,14 @@ QImage PrewittAmp(const QImage& image, const std::string& filterType) {
         deriv.data(), static_cast<int32_t>(deriv.size()),
         BorderMode::Reflect101);
 
-    QImage result(w, h, PixelType::UInt8, ChannelType::Gray);
+    output = QImage(w, h, PixelType::UInt8, ChannelType::Gray);
 
     std::string lowerType = filterType;
     std::transform(lowerType.begin(), lowerType.end(), lowerType.begin(), ::tolower);
     bool useSqrt = (lowerType == "sum_sqrt" || lowerType == "sqrt");
 
     for (int32_t y = 0; y < h; ++y) {
-        uint8_t* row = static_cast<uint8_t*>(result.RowPtr(y));
+        uint8_t* row = static_cast<uint8_t*>(output.RowPtr(y));
         for (int32_t x = 0; x < w; ++x) {
             float gxVal = gx[y * w + x];
             float gyVal = gy[y * w + x];
@@ -603,12 +617,13 @@ QImage PrewittAmp(const QImage& image, const std::string& filterType) {
             row[x] = ClampU8(mag);
         }
     }
-
-    return result;
 }
 
-QImage RobertsAmp(const QImage& image, const std::string& filterType) {
-    if (image.Empty()) return QImage();
+void RobertsAmp(const QImage& image, QImage& output, const std::string& filterType) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8 || image.Channels() != 1) {
         throw UnsupportedException("RobertsAmp requires single-channel UInt8 image");
@@ -617,7 +632,7 @@ QImage RobertsAmp(const QImage& image, const std::string& filterType) {
     int32_t w = image.Width();
     int32_t h = image.Height();
 
-    QImage result(w, h, PixelType::UInt8, ChannelType::Gray);
+    output = QImage(w, h, PixelType::UInt8, ChannelType::Gray);
 
     std::string lowerType = filterType;
     std::transform(lowerType.begin(), lowerType.end(), lowerType.begin(), ::tolower);
@@ -630,7 +645,7 @@ QImage RobertsAmp(const QImage& image, const std::string& filterType) {
     for (int32_t y = 0; y < h - 1; ++y) {
         const uint8_t* row0 = static_cast<const uint8_t*>(image.RowPtr(y));
         const uint8_t* row1 = static_cast<const uint8_t*>(image.RowPtr(y + 1));
-        uint8_t* dstRow = static_cast<uint8_t*>(result.RowPtr(y));
+        uint8_t* dstRow = static_cast<uint8_t*>(output.RowPtr(y));
 
         for (int32_t x = 0; x < w - 1; ++x) {
             // Gx = I(x,y) - I(x+1,y+1)
@@ -646,14 +661,16 @@ QImage RobertsAmp(const QImage& image, const std::string& filterType) {
         dstRow[w - 1] = 0;
     }
     // Last row
-    uint8_t* lastRow = static_cast<uint8_t*>(result.RowPtr(h - 1));
+    uint8_t* lastRow = static_cast<uint8_t*>(output.RowPtr(h - 1));
     std::memset(lastRow, 0, w);
-
-    return result;
 }
 
-QImage DerivateGauss(const QImage& image, double sigma, const std::string& component) {
-    if (image.Empty()) return QImage();
+void DerivateGauss(const QImage& image, QImage& output,
+                    double sigma, const std::string& component) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8 || image.Channels() != 1) {
         throw UnsupportedException("DerivateGauss requires single-channel UInt8 image");
@@ -711,65 +728,71 @@ QImage DerivateGauss(const QImage& image, double sigma, const std::string& compo
             BorderMode::Reflect101);
     } else {
         // Default: gradient magnitude
-        return GradientMagnitude(image, sigma);
+        GradientMagnitude(image, output, sigma);
+        return;
     }
 
-    QImage result(w, h, PixelType::Float32, ChannelType::Gray);
-    std::memcpy(result.Data(), dst.data(), w * h * sizeof(float));
-
-    return result;
+    output = QImage(w, h, PixelType::Float32, ChannelType::Gray);
+    std::memcpy(output.Data(), dst.data(), w * h * sizeof(float));
 }
 
-QImage GradientMagnitude(const QImage& image, double sigma) {
-    if (image.Empty()) return QImage();
+void GradientMagnitude(const QImage& image, QImage& output, double sigma) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
-    QImage gx = DerivateGauss(image, sigma, "x");
-    QImage gy = DerivateGauss(image, sigma, "y");
+    QImage gx, gy;
+    DerivateGauss(image, gx, sigma, "x");
+    DerivateGauss(image, gy, sigma, "y");
 
     int32_t w = image.Width();
     int32_t h = image.Height();
 
-    QImage result(w, h, PixelType::Float32, ChannelType::Gray);
+    output = QImage(w, h, PixelType::Float32, ChannelType::Gray);
 
     for (int32_t y = 0; y < h; ++y) {
         const float* gxRow = static_cast<const float*>(gx.RowPtr(y));
         const float* gyRow = static_cast<const float*>(gy.RowPtr(y));
-        float* dstRow = static_cast<float*>(result.RowPtr(y));
+        float* dstRow = static_cast<float*>(output.RowPtr(y));
 
         for (int32_t x = 0; x < w; ++x) {
             dstRow[x] = std::sqrt(gxRow[x] * gxRow[x] + gyRow[x] * gyRow[x]);
         }
     }
-
-    return result;
 }
 
-QImage GradientDirection(const QImage& image, double sigma) {
-    if (image.Empty()) return QImage();
+void GradientDirection(const QImage& image, QImage& output, double sigma) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
-    QImage gx = DerivateGauss(image, sigma, "x");
-    QImage gy = DerivateGauss(image, sigma, "y");
+    QImage gx, gy;
+    DerivateGauss(image, gx, sigma, "x");
+    DerivateGauss(image, gy, sigma, "y");
 
     int32_t w = image.Width();
     int32_t h = image.Height();
 
-    QImage result(w, h, PixelType::Float32, ChannelType::Gray);
+    output = QImage(w, h, PixelType::Float32, ChannelType::Gray);
 
     for (int32_t y = 0; y < h; ++y) {
         const float* gxRow = static_cast<const float*>(gx.RowPtr(y));
         const float* gyRow = static_cast<const float*>(gy.RowPtr(y));
-        float* dstRow = static_cast<float*>(result.RowPtr(y));
+        float* dstRow = static_cast<float*>(output.RowPtr(y));
 
         for (int32_t x = 0; x < w; ++x) {
             dstRow[x] = std::atan2(gyRow[x], gxRow[x]);
         }
     }
-
-    return result;
 }
 
-QImage Laplace(const QImage& image, const std::string& filterType) {
-    if (image.Empty()) return QImage();
+void Laplace(const QImage& image, QImage& output, const std::string& filterType) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8 || image.Channels() != 1) {
         throw UnsupportedException("Laplace requires single-channel UInt8 image");
@@ -790,87 +813,96 @@ QImage Laplace(const QImage& image, const std::string& filterType) {
         kernel = {0, 1, 0, 1, -4, 1, 0, 1, 0};
     }
 
-    return ConvolImage(image, kernel, 3, 3, false, "reflect");
+    ConvolImage(image, output, kernel, 3, 3, false, "reflect");
 }
 
-QImage LaplacianOfGaussian(const QImage& image, double sigma) {
-    if (image.Empty()) return QImage();
+void LaplacianOfGaussian(const QImage& image, QImage& output, double sigma) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     // LoG = Gxx + Gyy
-    QImage gxx = DerivateGauss(image, sigma, "xx");
-    QImage gyy = DerivateGauss(image, sigma, "yy");
+    QImage gxx, gyy;
+    DerivateGauss(image, gxx, sigma, "xx");
+    DerivateGauss(image, gyy, sigma, "yy");
 
     int32_t w = image.Width();
     int32_t h = image.Height();
 
-    QImage result(w, h, PixelType::Float32, ChannelType::Gray);
+    output = QImage(w, h, PixelType::Float32, ChannelType::Gray);
 
     for (int32_t y = 0; y < h; ++y) {
         const float* gxxRow = static_cast<const float*>(gxx.RowPtr(y));
         const float* gyyRow = static_cast<const float*>(gyy.RowPtr(y));
-        float* dstRow = static_cast<float*>(result.RowPtr(y));
+        float* dstRow = static_cast<float*>(output.RowPtr(y));
 
         for (int32_t x = 0; x < w; ++x) {
             dstRow[x] = gxxRow[x] + gyyRow[x];
         }
     }
-
-    return result;
 }
 
 // =============================================================================
 // Frequency Domain Filters
 // =============================================================================
 
-QImage HighpassImage(const QImage& image, int32_t width, int32_t height) {
-    if (image.Empty()) return QImage();
+void HighpassImage(const QImage& image, QImage& output, int32_t width, int32_t height) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     // Highpass = Original - Lowpass
-    QImage lowpass = MeanImage(image, width, height);
+    QImage lowpass;
+    MeanImage(image, lowpass, width, height);
 
     int32_t w = image.Width();
     int32_t h = image.Height();
     int channels = image.Channels();
 
-    QImage result(w, h, image.Type(), image.GetChannelType());
+    output = QImage(w, h, image.Type(), image.GetChannelType());
 
     for (int32_t y = 0; y < h; ++y) {
         const uint8_t* srcRow = static_cast<const uint8_t*>(image.RowPtr(y));
         const uint8_t* lpRow = static_cast<const uint8_t*>(lowpass.RowPtr(y));
-        uint8_t* dstRow = static_cast<uint8_t*>(result.RowPtr(y));
+        uint8_t* dstRow = static_cast<uint8_t*>(output.RowPtr(y));
 
         for (int32_t x = 0; x < w * channels; ++x) {
             int diff = srcRow[x] - lpRow[x] + 128;  // Add offset to keep in range
             dstRow[x] = ClampU8(diff);
         }
     }
-
-    return result;
 }
 
-QImage LowpassImage(const QImage& image, int32_t width, int32_t height) {
-    return MeanImage(image, width, height);
+void LowpassImage(const QImage& image, QImage& output, int32_t width, int32_t height) {
+    MeanImage(image, output, width, height);
 }
 
 // =============================================================================
 // Enhancement Filters
 // =============================================================================
 
-QImage EmphasizeImage(const QImage& image, int32_t width, int32_t height, double factor) {
-    if (image.Empty()) return QImage();
+void EmphasizeImage(const QImage& image, QImage& output,
+                     int32_t width, int32_t height, double factor) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
-    QImage lowpass = MeanImage(image, width, height);
+    QImage lowpass;
+    MeanImage(image, lowpass, width, height);
 
     int32_t w = image.Width();
     int32_t h = image.Height();
     int channels = image.Channels();
 
-    QImage result(w, h, image.Type(), image.GetChannelType());
+    output = QImage(w, h, image.Type(), image.GetChannelType());
 
     for (int32_t y = 0; y < h; ++y) {
         const uint8_t* srcRow = static_cast<const uint8_t*>(image.RowPtr(y));
         const uint8_t* lpRow = static_cast<const uint8_t*>(lowpass.RowPtr(y));
-        uint8_t* dstRow = static_cast<uint8_t*>(result.RowPtr(y));
+        uint8_t* dstRow = static_cast<uint8_t*>(output.RowPtr(y));
 
         for (int32_t x = 0; x < w * channels; ++x) {
             double detail = srcRow[x] - lpRow[x];
@@ -878,25 +910,28 @@ QImage EmphasizeImage(const QImage& image, int32_t width, int32_t height, double
             dstRow[x] = ClampU8(enhanced);
         }
     }
-
-    return result;
 }
 
-QImage UnsharpMask(const QImage& image, double sigma, double amount, double threshold) {
-    if (image.Empty()) return QImage();
+void UnsharpMask(const QImage& image, QImage& output,
+                  double sigma, double amount, double threshold) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
-    QImage blurred = GaussFilter(image, sigma);
+    QImage blurred;
+    GaussFilter(image, blurred, sigma);
 
     int32_t w = image.Width();
     int32_t h = image.Height();
     int channels = image.Channels();
 
-    QImage result(w, h, image.Type(), image.GetChannelType());
+    output = QImage(w, h, image.Type(), image.GetChannelType());
 
     for (int32_t y = 0; y < h; ++y) {
         const uint8_t* srcRow = static_cast<const uint8_t*>(image.RowPtr(y));
         const uint8_t* blurRow = static_cast<const uint8_t*>(blurred.RowPtr(y));
-        uint8_t* dstRow = static_cast<uint8_t*>(result.RowPtr(y));
+        uint8_t* dstRow = static_cast<uint8_t*>(output.RowPtr(y));
 
         for (int32_t x = 0; x < w * channels; ++x) {
             double diff = srcRow[x] - blurRow[x];
@@ -909,17 +944,19 @@ QImage UnsharpMask(const QImage& image, double sigma, double amount, double thre
             }
         }
     }
-
-    return result;
 }
 
-QImage ShockFilter(const QImage& image, int32_t iterations, double dt) {
-    if (image.Empty()) return QImage();
+void ShockFilter(const QImage& image, QImage& output, int32_t iterations, double dt) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     QImage current = image.Clone();
 
     for (int32_t iter = 0; iter < iterations; ++iter) {
-        QImage lap = Laplace(current, "n4");
+        QImage lap;
+        Laplace(current, lap, "n4");
 
         int32_t w = current.Width();
         int32_t h = current.Height();
@@ -936,16 +973,19 @@ QImage ShockFilter(const QImage& image, int32_t iterations, double dt) {
         }
     }
 
-    return current;
+    output = std::move(current);
 }
 
 // =============================================================================
 // Anisotropic Diffusion
 // =============================================================================
 
-QImage AnisoDiff(const QImage& image, const std::string& mode,
-                  double contrast, double theta, int32_t iterations) {
-    if (image.Empty()) return QImage();
+void AnisoDiff(const QImage& image, QImage& output, const std::string& mode,
+                double contrast, double theta, int32_t iterations) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8 || image.Channels() != 1) {
         throw UnsupportedException("AnisoDiff requires single-channel UInt8 image");
@@ -1009,28 +1049,29 @@ QImage AnisoDiff(const QImage& image, const std::string& mode,
     }
 
     // Convert back to image
-    QImage result(w, h, PixelType::UInt8, ChannelType::Gray);
+    output = QImage(w, h, PixelType::UInt8, ChannelType::Gray);
 
     for (int32_t y = 0; y < h; ++y) {
-        uint8_t* row = static_cast<uint8_t*>(result.RowPtr(y));
+        uint8_t* row = static_cast<uint8_t*>(output.RowPtr(y));
         for (int32_t x = 0; x < w; ++x) {
             row[x] = ClampU8(current[y * w + x]);
         }
     }
-
-    return result;
 }
 
 // =============================================================================
 // Custom Convolution
 // =============================================================================
 
-QImage ConvolImage(const QImage& image,
-                    const std::vector<double>& kernel,
-                    int32_t kernelWidth, int32_t kernelHeight,
-                    bool normalize,
-                    const std::string& borderMode) {
-    if (image.Empty()) return QImage();
+void ConvolImage(const QImage& image, QImage& output,
+                  const std::vector<double>& kernel,
+                  int32_t kernelWidth, int32_t kernelHeight,
+                  bool normalize,
+                  const std::string& borderMode) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8) {
         throw UnsupportedException("ConvolImage only supports UInt8 images");
@@ -1050,7 +1091,7 @@ QImage ConvolImage(const QImage& image,
         }
     }
 
-    QImage result(w, h, image.Type(), image.GetChannelType());
+    output = QImage(w, h, image.Type(), image.GetChannelType());
 
     std::vector<float> src(w * h);
     std::vector<float> dst(w * h);
@@ -1069,21 +1110,22 @@ QImage ConvolImage(const QImage& image,
             border);
 
         for (int32_t y = 0; y < h; ++y) {
-            uint8_t* row = static_cast<uint8_t*>(result.RowPtr(y));
+            uint8_t* row = static_cast<uint8_t*>(output.RowPtr(y));
             for (int32_t x = 0; x < w; ++x) {
                 row[x * channels + c] = ClampU8(dst[y * w + x]);
             }
         }
     }
-
-    return result;
 }
 
-QImage ConvolSeparable(const QImage& image,
-                        const std::vector<double>& kernelX,
-                        const std::vector<double>& kernelY,
-                        const std::string& borderMode) {
-    if (image.Empty()) return QImage();
+void ConvolSeparable(const QImage& image, QImage& output,
+                      const std::vector<double>& kernelX,
+                      const std::vector<double>& kernelY,
+                      const std::string& borderMode) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8) {
         throw UnsupportedException("ConvolSeparable only supports UInt8 images");
@@ -1095,7 +1137,7 @@ QImage ConvolSeparable(const QImage& image,
 
     BorderMode border = ParseBorderMode(borderMode);
 
-    QImage result(w, h, image.Type(), image.GetChannelType());
+    output = QImage(w, h, image.Type(), image.GetChannelType());
 
     std::vector<float> src(w * h);
     std::vector<float> dst(w * h);
@@ -1115,22 +1157,24 @@ QImage ConvolSeparable(const QImage& image,
             border);
 
         for (int32_t y = 0; y < h; ++y) {
-            uint8_t* row = static_cast<uint8_t*>(result.RowPtr(y));
+            uint8_t* row = static_cast<uint8_t*>(output.RowPtr(y));
             for (int32_t x = 0; x < w; ++x) {
                 row[x * channels + c] = ClampU8(dst[y * w + x]);
             }
         }
     }
-
-    return result;
 }
 
 // =============================================================================
 // Rank Filters
 // =============================================================================
 
-QImage RankImage(const QImage& image, int32_t width, int32_t height, int32_t rank) {
-    if (image.Empty()) return QImage();
+void RankImage(const QImage& image, QImage& output,
+                int32_t width, int32_t height, int32_t rank) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8 || image.Channels() != 1) {
         throw UnsupportedException("RankImage requires single-channel UInt8 image");
@@ -1141,11 +1185,11 @@ QImage RankImage(const QImage& image, int32_t width, int32_t height, int32_t ran
     int32_t halfW = width / 2;
     int32_t halfH = height / 2;
 
-    QImage result(w, h, PixelType::UInt8, ChannelType::Gray);
+    output = QImage(w, h, PixelType::UInt8, ChannelType::Gray);
     std::vector<uint8_t> neighborhood(width * height);
 
     for (int32_t y = 0; y < h; ++y) {
-        uint8_t* dstRow = static_cast<uint8_t*>(result.RowPtr(y));
+        uint8_t* dstRow = static_cast<uint8_t*>(output.RowPtr(y));
 
         for (int32_t x = 0; x < w; ++x) {
             int count = 0;
@@ -1165,46 +1209,49 @@ QImage RankImage(const QImage& image, int32_t width, int32_t height, int32_t ran
             dstRow[x] = neighborhood[actualRank];
         }
     }
-
-    return result;
 }
 
-QImage MinImage(const QImage& image, int32_t width, int32_t height) {
-    return RankImage(image, width, height, 0);
+void MinImage(const QImage& image, QImage& output, int32_t width, int32_t height) {
+    RankImage(image, output, width, height, 0);
 }
 
-QImage MaxImage(const QImage& image, int32_t width, int32_t height) {
-    return RankImage(image, width, height, width * height - 1);
+void MaxImage(const QImage& image, QImage& output, int32_t width, int32_t height) {
+    RankImage(image, output, width, height, width * height - 1);
 }
 
 // =============================================================================
 // Texture Filters
 // =============================================================================
 
-QImage StdDevImage(const QImage& image, int32_t width, int32_t height) {
-    if (image.Empty()) return QImage();
+void StdDevImage(const QImage& image, QImage& output, int32_t width, int32_t height) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
-    QImage variance = VarianceImage(image, width, height);
+    QImage variance;
+    VarianceImage(image, variance, width, height);
 
     int32_t w = variance.Width();
     int32_t h = variance.Height();
 
-    QImage result(w, h, PixelType::Float32, ChannelType::Gray);
+    output = QImage(w, h, PixelType::Float32, ChannelType::Gray);
 
     for (int32_t y = 0; y < h; ++y) {
         const float* varRow = static_cast<const float*>(variance.RowPtr(y));
-        float* dstRow = static_cast<float*>(result.RowPtr(y));
+        float* dstRow = static_cast<float*>(output.RowPtr(y));
 
         for (int32_t x = 0; x < w; ++x) {
             dstRow[x] = std::sqrt(varRow[x]);
         }
     }
-
-    return result;
 }
 
-QImage VarianceImage(const QImage& image, int32_t width, int32_t height) {
-    if (image.Empty()) return QImage();
+void VarianceImage(const QImage& image, QImage& output, int32_t width, int32_t height) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8 || image.Channels() != 1) {
         throw UnsupportedException("VarianceImage requires single-channel UInt8 image");
@@ -1215,10 +1262,10 @@ QImage VarianceImage(const QImage& image, int32_t width, int32_t height) {
     int32_t halfW = width / 2;
     int32_t halfH = height / 2;
 
-    QImage result(w, h, PixelType::Float32, ChannelType::Gray);
+    output = QImage(w, h, PixelType::Float32, ChannelType::Gray);
 
     for (int32_t y = 0; y < h; ++y) {
-        float* dstRow = static_cast<float*>(result.RowPtr(y));
+        float* dstRow = static_cast<float*>(output.RowPtr(y));
 
         for (int32_t x = 0; x < w; ++x) {
             double sum = 0;
@@ -1243,12 +1290,14 @@ QImage VarianceImage(const QImage& image, int32_t width, int32_t height) {
             dstRow[x] = static_cast<float>(std::max(0.0, variance));
         }
     }
-
-    return result;
 }
 
-QImage EntropyImage(const QImage& image, int32_t width, int32_t height, int32_t numBins) {
-    if (image.Empty()) return QImage();
+void EntropyImage(const QImage& image, QImage& output,
+                   int32_t width, int32_t height, int32_t numBins) {
+    if (image.Empty()) {
+        output = QImage();
+        return;
+    }
 
     if (image.Type() != PixelType::UInt8 || image.Channels() != 1) {
         throw UnsupportedException("EntropyImage requires single-channel UInt8 image");
@@ -1259,11 +1308,11 @@ QImage EntropyImage(const QImage& image, int32_t width, int32_t height, int32_t 
     int32_t halfW = width / 2;
     int32_t halfH = height / 2;
 
-    QImage result(w, h, PixelType::Float32, ChannelType::Gray);
+    output = QImage(w, h, PixelType::Float32, ChannelType::Gray);
     std::vector<int> histogram(numBins);
 
     for (int32_t y = 0; y < h; ++y) {
-        float* dstRow = static_cast<float*>(result.RowPtr(y));
+        float* dstRow = static_cast<float*>(output.RowPtr(y));
 
         for (int32_t x = 0; x < w; ++x) {
             std::fill(histogram.begin(), histogram.end(), 0);
@@ -1292,8 +1341,6 @@ QImage EntropyImage(const QImage& image, int32_t width, int32_t height, int32_t 
             dstRow[x] = static_cast<float>(entropy);
         }
     }
-
-    return result;
 }
 
 } // namespace Qi::Vision::Filter

@@ -83,25 +83,27 @@ enum class SortMode {
  * Equivalent to Halcon's connection operator.
  *
  * @param region Input region
- * @return Vector of connected regions
+ * @param[out] regions Output connected regions
  *
  * @code
  * QRegion binaryRegion = ThresholdToRegion(image, 128, 255);
- * auto blobs = Connection(binaryRegion);
+ * std::vector<QRegion> blobs;
+ * Connection(binaryRegion, blobs);
  * std::cout << "Found " << blobs.size() << " blobs\n";
  * @endcode
  */
-std::vector<QRegion> Connection(const QRegion& region);
+void Connection(const QRegion& region, std::vector<QRegion>& regions);
 
 /**
  * @brief Extract connected components from binary image
  *
  * @param binaryImage Binary image (non-zero = foreground)
+ * @param[out] regions Output connected regions
  * @param connectivity 4 or 8 connectivity (default: 8)
- * @return Vector of connected regions
  */
-std::vector<QRegion> Connection(const QImage& binaryImage,
-                                 Connectivity connectivity = Connectivity::Eight);
+void Connection(const QImage& binaryImage,
+                std::vector<QRegion>& regions,
+                Connectivity connectivity = Connectivity::Eight);
 
 /**
  * @brief Count number of objects
@@ -242,17 +244,17 @@ int32_t EulerNumber(const QRegion& region);
  * Equivalent to Halcon's fill_up operator.
  *
  * @param region Input region
- * @return Region with holes filled
+ * @param[out] filled Region with holes filled
  */
-QRegion FillUp(const QRegion& region);
+void FillUp(const QRegion& region, QRegion& filled);
 
 /**
  * @brief Get the holes of a region
  *
  * @param region Input region
- * @return Vector of hole regions
+ * @param[out] holes Vector of hole regions
  */
-std::vector<QRegion> GetHoles(const QRegion& region);
+void GetHoles(const QRegion& region, std::vector<QRegion>& holes);
 
 /**
  * @brief Compute region circularity
@@ -355,67 +357,73 @@ void Eccentricity(const QRegion& region,
  * Equivalent to Halcon's select_shape operator.
  *
  * @param regions Input regions
+ * @param[out] selected Output selected regions
  * @param feature Feature to select by
  * @param operation Selection operation (And/Or)
  * @param minValue Minimum feature value
  * @param maxValue Maximum feature value
- * @return Selected regions
  *
  * @code
  * // Select circular blobs with area > 100
- * auto selected = SelectShape(blobs, ShapeFeature::Area,
- *                             SelectOperation::And, 100, 999999);
- * selected = SelectShape(selected, ShapeFeature::Circularity,
- *                        SelectOperation::And, 0.8, 1.0);
+ * std::vector<QRegion> selected;
+ * SelectShape(blobs, selected, ShapeFeature::Area,
+ *             SelectOperation::And, 100, 999999);
+ * SelectShape(selected, selected, ShapeFeature::Circularity,
+ *             SelectOperation::And, 0.8, 1.0);
  * @endcode
  */
-std::vector<QRegion> SelectShape(const std::vector<QRegion>& regions,
-                                  ShapeFeature feature,
-                                  SelectOperation operation,
-                                  double minValue,
-                                  double maxValue);
+void SelectShape(const std::vector<QRegion>& regions,
+                 std::vector<QRegion>& selected,
+                 ShapeFeature feature,
+                 SelectOperation operation,
+                 double minValue,
+                 double maxValue);
 
 /**
  * @brief Select regions by string feature name (Halcon compatible)
  *
  * @param regions Input regions
+ * @param[out] selected Output selected regions
  * @param features Feature name: "area", "circularity", "compactness", etc.
  * @param operation "and" or "or"
  * @param minValue Minimum value
  * @param maxValue Maximum value
- * @return Selected regions
  */
-std::vector<QRegion> SelectShape(const std::vector<QRegion>& regions,
-                                  const std::string& features,
-                                  const std::string& operation,
-                                  double minValue,
-                                  double maxValue);
+void SelectShape(const std::vector<QRegion>& regions,
+                 std::vector<QRegion>& selected,
+                 const std::string& features,
+                 const std::string& operation,
+                 double minValue,
+                 double maxValue);
 
 /**
  * @brief Select regions by area
  *
  * @param regions Input regions
+ * @param[out] selected Output selected regions
  * @param minArea Minimum area
  * @param maxArea Maximum area
- * @return Selected regions
  */
-std::vector<QRegion> SelectShapeArea(const std::vector<QRegion>& regions,
-                                      int64_t minArea,
-                                      int64_t maxArea);
+void SelectShapeArea(const std::vector<QRegion>& regions,
+                     std::vector<QRegion>& selected,
+                     int64_t minArea,
+                     int64_t maxArea);
 
 /**
  * @brief Select regions by circularity
  */
-std::vector<QRegion> SelectShapeCircularity(const std::vector<QRegion>& regions,
-                                             double minCirc,
-                                             double maxCirc);
+void SelectShapeCircularity(const std::vector<QRegion>& regions,
+                            std::vector<QRegion>& selected,
+                            double minCirc,
+                            double maxCirc);
 
 /**
  * @brief Select regions by rectangularity
  */
-std::vector<QRegion> SelectShapeRectangularity(const std::vector<QRegion>& regions,
-                                                double minRect,
-                                                double maxRect);
+void SelectShapeRectangularity(const std::vector<QRegion>& regions,
+                               std::vector<QRegion>& selected,
+                               double minRect,
+                               double maxRect);
 
 /**
  * @brief Select regions by standard deviation of shape features
@@ -424,55 +432,60 @@ std::vector<QRegion> SelectShapeRectangularity(const std::vector<QRegion>& regio
  * Selects regions whose feature value is within N standard deviations of the mean.
  *
  * @param regions Input regions
+ * @param[out] selected Output selected regions
  * @param feature Feature to analyze
  * @param deviationFactor Number of standard deviations (e.g., 1.0, 2.0)
- * @return Selected regions
  */
-std::vector<QRegion> SelectShapeStd(const std::vector<QRegion>& regions,
-                                     ShapeFeature feature,
-                                     double deviationFactor);
+void SelectShapeStd(const std::vector<QRegion>& regions,
+                    std::vector<QRegion>& selected,
+                    ShapeFeature feature,
+                    double deviationFactor);
 
 /**
  * @brief Select regions by multiple features
  *
  * @param regions Input regions
+ * @param[out] selected Output selected regions
  * @param features Vector of features
  * @param operation "and" = all must match, "or" = any must match
  * @param minValues Minimum values for each feature
  * @param maxValues Maximum values for each feature
- * @return Selected regions
  */
-std::vector<QRegion> SelectShapeMulti(const std::vector<QRegion>& regions,
-                                       const std::vector<ShapeFeature>& features,
-                                       SelectOperation operation,
-                                       const std::vector<double>& minValues,
-                                       const std::vector<double>& maxValues);
+void SelectShapeMulti(const std::vector<QRegion>& regions,
+                      std::vector<QRegion>& selected,
+                      const std::vector<ShapeFeature>& features,
+                      SelectOperation operation,
+                      const std::vector<double>& minValues,
+                      const std::vector<double>& maxValues);
 
 /**
  * @brief Select regions by convexity
  */
-std::vector<QRegion> SelectShapeConvexity(const std::vector<QRegion>& regions,
-                                           double minConvex,
-                                           double maxConvex);
+void SelectShapeConvexity(const std::vector<QRegion>& regions,
+                          std::vector<QRegion>& selected,
+                          double minConvex,
+                          double maxConvex);
 
 /**
  * @brief Select regions by elongation
  */
-std::vector<QRegion> SelectShapeElongation(const std::vector<QRegion>& regions,
-                                            double minElong,
-                                            double maxElong);
+void SelectShapeElongation(const std::vector<QRegion>& regions,
+                           std::vector<QRegion>& selected,
+                           double minElong,
+                           double maxElong);
 
 /**
  * @brief Select the N largest/smallest regions by area
  *
  * @param regions Input regions
+ * @param[out] selected Output selected regions
  * @param n Number of regions to select
  * @param largest If true, select largest; if false, select smallest
- * @return Selected regions
  */
-std::vector<QRegion> SelectShapeProto(const std::vector<QRegion>& regions,
-                                       int32_t n,
-                                       bool largest = true);
+void SelectShapeProto(const std::vector<QRegion>& regions,
+                      std::vector<QRegion>& selected,
+                      int32_t n,
+                      bool largest = true);
 
 // =============================================================================
 // Region Sorting
@@ -484,21 +497,23 @@ std::vector<QRegion> SelectShapeProto(const std::vector<QRegion>& regions,
  * Equivalent to Halcon's sort_region operator.
  *
  * @param regions Input regions
+ * @param[out] sorted Output sorted regions
  * @param mode Sort mode
- * @param order "true" = ascending, "false" = descending
- * @return Sorted regions
+ * @param ascending true = ascending, false = descending
  */
-std::vector<QRegion> SortRegion(const std::vector<QRegion>& regions,
-                                 SortMode mode,
-                                 bool ascending = true);
+void SortRegion(const std::vector<QRegion>& regions,
+                std::vector<QRegion>& sorted,
+                SortMode mode,
+                bool ascending = true);
 
 /**
  * @brief Sort regions by string mode (Halcon compatible)
  */
-std::vector<QRegion> SortRegion(const std::vector<QRegion>& regions,
-                                 const std::string& sortMode,
-                                 const std::string& order,
-                                 const std::string& rowOrCol);
+void SortRegion(const std::vector<QRegion>& regions,
+                std::vector<QRegion>& sorted,
+                const std::string& sortMode,
+                const std::string& order,
+                const std::string& rowOrCol);
 
 // =============================================================================
 // Utility Functions

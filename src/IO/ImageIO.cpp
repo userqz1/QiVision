@@ -179,21 +179,21 @@ bool IsSupportedImageFile(const std::string& filename) {
 // Image Read Functions
 // =============================================================================
 
-QImage ReadImage(const std::string& filename) {
-    return ReadImage(filename, ImageFormat::Auto);
+void ReadImage(const std::string& filename, QImage& image) {
+    ReadImage(filename, image, ImageFormat::Auto);
 }
 
-QImage ReadImage(const std::string& filename, ImageFormat format) {
+void ReadImage(const std::string& filename, QImage& image, ImageFormat /*format*/) {
     // Use QImage::FromFile which already handles stb_image
     // This wraps it with Halcon-style naming
     try {
-        return QImage::FromFile(filename);
+        image = QImage::FromFile(filename);
     } catch (const std::exception& e) {
         throw IOException("Failed to read image: " + filename + " - " + e.what());
     }
 }
 
-QImage ReadImageRaw(const std::string& filename, const RawReadParams& params) {
+void ReadImageRaw(const std::string& filename, QImage& image, const RawReadParams& params) {
     if (params.width <= 0 || params.height <= 0) {
         throw InvalidArgumentException("RAW read requires width and height");
     }
@@ -232,8 +232,8 @@ QImage ReadImageRaw(const std::string& filename, const RawReadParams& params) {
     }
 
     // Create image from data
-    return QImage::FromData(buffer.data(), params.width, params.height,
-                            params.pixelType, params.channelType);
+    image = QImage::FromData(buffer.data(), params.width, params.height,
+                             params.pixelType, params.channelType);
 }
 
 bool ReadImageMetadata(const std::string& filename, ImageMetadata& metadata) {
@@ -265,33 +265,29 @@ bool ReadImageMetadata(const std::string& filename, ImageMetadata& metadata) {
     return true;
 }
 
-QImage ReadImageAs(const std::string& filename, PixelType targetType) {
-    QImage img = ReadImage(filename);
+void ReadImageAs(const std::string& filename, QImage& image, PixelType targetType) {
+    ReadImage(filename, image);
 
-    if (img.Empty()) {
-        return img;
+    if (image.Empty()) {
+        return;
     }
 
     // Convert to target type if needed
-    if (img.Type() != targetType) {
-        return img.ConvertTo(targetType);
+    if (image.Type() != targetType) {
+        image = image.ConvertTo(targetType);
     }
-
-    return img;
 }
 
-QImage ReadImageGray(const std::string& filename) {
-    QImage img = ReadImage(filename);
+void ReadImageGray(const std::string& filename, QImage& image) {
+    ReadImage(filename, image);
 
-    if (img.Empty()) {
-        return img;
+    if (image.Empty()) {
+        return;
     }
 
-    if (img.GetChannelType() == ChannelType::Gray) {
-        return img;
+    if (image.GetChannelType() != ChannelType::Gray) {
+        image = image.ToGray();
     }
-
-    return img.ToGray();
 }
 
 // =============================================================================
@@ -398,18 +394,20 @@ bool WriteImageRaw(const QImage& image, const std::string& filename, bool bigEnd
 // Image Sequence Functions
 // =============================================================================
 
-std::vector<QImage> ReadSequence(const std::string& pattern,
-                                  int32_t startIndex,
-                                  int32_t endIndex,
-                                  int32_t step) {
-    std::vector<QImage> images;
+void ReadSequence(const std::string& pattern,
+                  std::vector<QImage>& images,
+                  int32_t startIndex,
+                  int32_t endIndex,
+                  int32_t step) {
+    images.clear();
 
     if (step <= 0) step = 1;
 
     for (int32_t i = startIndex; i <= endIndex; i += step) {
         std::string filename = FormatFilename(pattern, i);
         try {
-            QImage img = ReadImage(filename);
+            QImage img;
+            ReadImage(filename, img);
             if (!img.Empty()) {
                 images.push_back(std::move(img));
             }
@@ -418,13 +416,12 @@ std::vector<QImage> ReadSequence(const std::string& pattern,
             continue;
         }
     }
-
-    return images;
 }
 
-std::vector<QImage> ReadDirectory(const std::string& directory,
-                                   const std::vector<std::string>& extensions) {
-    std::vector<QImage> images;
+void ReadDirectory(const std::string& directory,
+                   std::vector<QImage>& images,
+                   const std::vector<std::string>& extensions) {
+    images.clear();
 
     // Get list of files in directory
     auto files = ListDirectoryFiles(directory);
@@ -446,7 +443,8 @@ std::vector<QImage> ReadDirectory(const std::string& directory,
         if (match) {
             std::string fullPath = directory + "/" + file;
             try {
-                QImage img = ReadImage(fullPath);
+                QImage img;
+                ReadImage(fullPath, img);
                 if (!img.Empty()) {
                     images.push_back(std::move(img));
                 }
@@ -455,8 +453,6 @@ std::vector<QImage> ReadDirectory(const std::string& directory,
             }
         }
     }
-
-    return images;
 }
 
 int32_t WriteSequence(const std::vector<QImage>& images,

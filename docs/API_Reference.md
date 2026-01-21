@@ -1,8 +1,23 @@
 # QiVision 公开 API 参考手册
 
-> 版本: 0.3.0
-> 最后更新: 2026-01-20
+> 版本: 0.4.0
+> 最后更新: 2026-01-21
 > 命名空间: `Qi::Vision`
+
+## API 规范
+
+所有公开 API 遵循 **Halcon 风格**：
+
+```cpp
+void Func(const T& input..., T& output..., params...)
+```
+
+**参数顺序**：输入参数 → 输出参数 → 配置参数
+
+**例外情况**（允许使用返回值）：
+- 查询函数：`double Circularity(const QRegion&)`
+- 类成员方法：`img.ToGray()`, `img.Clone()`
+- 静态构造函数：`QImage::FromFile(filename)`
 
 ---
 
@@ -45,8 +60,9 @@ public:
 创建形状模型（仅旋转）。
 
 ```cpp
-ShapeModel CreateShapeModel(
+void CreateShapeModel(
     const QImage& templateImage,    // 模板图像（灰度）
+    ShapeModel& model,              // [out] 输出模型
     int32_t numLevels,              // 金字塔层数（0=自动）
     double angleStart,              // 起始角度 [rad]
     double angleExtent,             // 角度范围 [rad]（0=全方向）
@@ -61,9 +77,10 @@ ShapeModel CreateShapeModel(
 **重载版本**:
 ```cpp
 // 使用矩形 ROI
-ShapeModel CreateShapeModel(
+void CreateShapeModel(
     const QImage& templateImage,
     const Rect2i& roi,              // 矩形区域
+    ShapeModel& model,              // [out] 输出模型
     int32_t numLevels,
     double angleStart,
     double angleExtent,
@@ -75,9 +92,10 @@ ShapeModel CreateShapeModel(
 );
 
 // 使用任意形状 QRegion
-ShapeModel CreateShapeModel(
+void CreateShapeModel(
     const QImage& templateImage,
     const QRegion& region,          // 任意形状区域
+    ShapeModel& model,              // [out] 输出模型
     int32_t numLevels,
     double angleStart,
     double angleExtent,
@@ -94,11 +112,14 @@ ShapeModel CreateShapeModel(
 #include <QiVision/Matching/ShapeModel.h>
 using namespace Qi::Vision::Matching;
 
-QImage templ = IO::ReadImage("template.png");
+QImage templ;
+IO::ReadImage("template.png", templ);
 
 // 创建模型：4层金字塔，0-360度旋转
-ShapeModel model = CreateShapeModel(
+ShapeModel model;
+CreateShapeModel(
     templ,
+    model,                  // 输出参数
     4,                      // numLevels
     0.0,                    // angleStart
     RAD(360),               // angleExtent (使用 RAD 宏转换角度)
@@ -117,8 +138,9 @@ ShapeModel model = CreateShapeModel(
 创建带缩放的形状模型。
 
 ```cpp
-ShapeModel CreateScaledShapeModel(
+void CreateScaledShapeModel(
     const QImage& templateImage,
+    ShapeModel& model,              // [out] 输出模型
     int32_t numLevels,
     double angleStart,
     double angleExtent,
@@ -136,8 +158,10 @@ ShapeModel CreateScaledShapeModel(
 **示例**:
 ```cpp
 // 支持 0.8x - 1.2x 缩放
-ShapeModel model = CreateScaledShapeModel(
-    templ, 4,
+ShapeModel model;
+CreateScaledShapeModel(
+    templ, model,           // 输出参数
+    4,
     0.0, RAD(360), 0.0,     // 角度
     0.8, 1.2, 0.0,          // 缩放范围
     "auto", "use_polarity", "auto", 10.0
@@ -226,10 +250,10 @@ void FindScaledShapeModel(
 
 ```cpp
 // 获取模型轮廓（用于可视化）
-void GetShapeModelContours(
+void GetShapeModelXLD(
     const ShapeModel& model,
-    double angle,                   // 旋转角度 [rad]
-    std::vector<QContour>& contours // [out] 轮廓数组
+    int32_t level,                  // 金字塔层级
+    QContourArray& contours         // [out] 轮廓数组
 );
 
 // 获取模型参数
@@ -251,7 +275,7 @@ void SetShapeModelOrigin(ShapeModel& model, double row, double col);
 
 // 读写模型文件
 void WriteShapeModel(const ShapeModel& model, const std::string& filename);
-ShapeModel ReadShapeModel(const std::string& filename);
+void ReadShapeModel(const std::string& filename, ShapeModel& model);
 
 // 释放模型
 void ClearShapeModel(ShapeModel& model);
@@ -610,10 +634,11 @@ if (model.Apply(image)) {
 读取图像文件。
 
 ```cpp
-QImage ReadImage(const std::string& filename);
+void ReadImage(const std::string& filename, QImage& image);
 
-QImage ReadImage(
+void ReadImage(
     const std::string& filename,
+    QImage& image,                  // [out] 输出图像
     ImageFormat format              // 强制指定格式
 );
 ```
@@ -633,7 +658,8 @@ QImage ReadImage(
 #include <QiVision/IO/ImageIO.h>
 using namespace Qi::Vision::IO;
 
-QImage img = ReadImage("photo.png");
+QImage img;
+ReadImage("photo.png", img);
 printf("Size: %d x %d, Channels: %d\n",
        img.Width(), img.Height(), img.Channels());
 ```
@@ -654,8 +680,9 @@ struct RawReadParams {
     bool bigEndian = false;         // 大端序（16位图像）
 };
 
-QImage ReadImageRaw(
+void ReadImageRaw(
     const std::string& filename,
+    QImage& image,                  // [out] 输出图像
     const RawReadParams& params
 );
 ```
@@ -669,7 +696,8 @@ params.pixelType = PixelType::UInt16;
 params.channelType = ChannelType::Gray;
 params.bigEndian = true;
 
-QImage raw = ReadImageRaw("camera.raw", params);
+QImage raw;
+ReadImageRaw("camera.raw", raw, params);
 ```
 
 ---
@@ -680,13 +708,17 @@ QImage raw = ReadImageRaw("camera.raw", params);
 
 ```cpp
 // 读取并转换为指定像素类型
-QImage ReadImageAs(
+void ReadImageAs(
     const std::string& filename,
+    QImage& image,                  // [out] 输出图像
     PixelType targetType            // UInt8, UInt16, Float32
 );
 
 // 读取为灰度图
-QImage ReadImageGray(const std::string& filename);
+void ReadImageGray(
+    const std::string& filename,
+    QImage& image                   // [out] 输出灰度图像
+);
 ```
 
 ---
@@ -767,16 +799,18 @@ bool WriteImageRaw(
 
 ```cpp
 // 批量读取
-std::vector<QImage> ReadSequence(
+void ReadSequence(
     const std::string& pattern,     // 文件名模式，如 "img_%04d.png"
+    std::vector<QImage>& images,    // [out] 输出图像数组
     int32_t startIndex,             // 起始索引
     int32_t endIndex,               // 结束索引
     int32_t step = 1                // 步长
 );
 
 // 读取目录
-std::vector<QImage> ReadDirectory(
+void ReadDirectory(
     const std::string& directory,
+    std::vector<QImage>& images,    // [out] 输出图像数组
     const std::vector<std::string>& extensions = {}  // 过滤扩展名
 );
 
@@ -792,10 +826,12 @@ int32_t WriteSequence(
 **示例**:
 ```cpp
 // 读取序列 frame_0001.png ~ frame_0100.png
-auto frames = ReadSequence("frames/frame_%04d.png", 1, 100);
+std::vector<QImage> frames;
+ReadSequence("frames/frame_%04d.png", frames, 1, 100);
 
 // 读取目录中所有 PNG 和 BMP
-auto images = ReadDirectory("images/", {".png", ".bmp"});
+std::vector<QImage> images;
+ReadDirectory("images/", images, {".png", ".bmp"});
 
 // 写入序列
 WriteSequence(frames, "output/out_%03d.png", 0);
@@ -860,24 +896,28 @@ enum class ColorSpace {
 
 ```cpp
 // RGB 转其他颜色空间
-QImage TransFromRgb(
+void TransFromRgb(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     ColorSpace toSpace              // 目标颜色空间
 );
 
-QImage TransFromRgb(
+void TransFromRgb(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     const std::string& colorSpace   // "hsv", "hsl", "lab", "yuv", "ycrcb"
 );
 
 // 其他颜色空间转 RGB
-QImage TransToRgb(
+void TransToRgb(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     ColorSpace fromSpace
 );
 
-QImage TransToRgb(
+void TransToRgb(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     const std::string& colorSpace
 );
 ```
@@ -887,15 +927,19 @@ QImage TransToRgb(
 #include <QiVision/Color/ColorConvert.h>
 using namespace Qi::Vision::Color;
 
-QImage rgb = IO::ReadImage("photo.png");
+QImage rgb;
+IO::ReadImage("photo.png", rgb);
 
 // RGB -> HSV
-QImage hsv = TransFromRgb(rgb, ColorSpace::HSV);
+QImage hsv;
+TransFromRgb(rgb, hsv, ColorSpace::HSV);
 // 或使用字符串
-QImage hsv2 = TransFromRgb(rgb, "hsv");
+QImage hsv2;
+TransFromRgb(rgb, hsv2, "hsv");
 
 // HSV -> RGB
-QImage back = TransToRgb(hsv, ColorSpace::HSV);
+QImage back;
+TransToRgb(hsv, back, ColorSpace::HSV);
 ```
 
 ---
@@ -906,8 +950,9 @@ QImage back = TransToRgb(hsv, ColorSpace::HSV);
 
 ```cpp
 // RGB 图像转灰度
-QImage Rgb1ToGray(
+void Rgb1ToGray(
     const QImage& image,
+    QImage& output,                 // [out] 输出灰度图像
     const std::string& method = "luminosity"
     // 方法:
     // - "luminosity": 0.299*R + 0.587*G + 0.114*B (默认)
@@ -919,15 +964,16 @@ QImage Rgb1ToGray(
 );
 
 // 三个单通道图像合成灰度
-QImage Rgb3ToGray(
+void Rgb3ToGray(
     const QImage& red,
     const QImage& green,
     const QImage& blue,
+    QImage& output,                 // [out] 输出灰度图像
     const std::string& method = "luminosity"
 );
 
-// 灰度转 RGB（复制到三通道）
-QImage GrayToRgb(const QImage& gray);
+// 灰度转 RGB（复制到三通道）- 类型转换函数，使用返回值
+void GrayToRgb(const QImage& gray, QImage& output);
 ```
 
 ---
@@ -971,18 +1017,20 @@ QImage processedG = Filter::GaussFilter(g, 2.0);
 通道合成。
 
 ```cpp
-QImage Compose3(
+void Compose3(
     const QImage& ch1,
     const QImage& ch2,
     const QImage& ch3,
+    QImage& output,                 // [out] 输出多通道图像
     ChannelType channelType = ChannelType::RGB
 );
 
-QImage Compose4(
+void Compose4(
     const QImage& ch1,
     const QImage& ch2,
     const QImage& ch3,
     const QImage& ch4,
+    QImage& output,                 // [out] 输出多通道图像
     ChannelType channelType = ChannelType::RGBA
 );
 ```
@@ -992,21 +1040,26 @@ QImage Compose4(
 ### 4.6 AccessChannel / SplitChannels / MergeChannels
 
 ```cpp
-// 访问单个通道（返回副本）
-QImage AccessChannel(
+// 访问单个通道
+void AccessChannel(
     const QImage& image,
+    QImage& output,                 // [out] 输出单通道图像
     int32_t channelIndex            // 0-based 索引
 );
 
-// 获取通道数
+// 获取通道数（查询函数，使用返回值）
 int32_t CountChannels(const QImage& image);
 
 // 分离所有通道
-std::vector<QImage> SplitChannels(const QImage& image);
+void SplitChannels(
+    const QImage& image,
+    std::vector<QImage>& channels   // [out] 输出通道数组
+);
 
 // 合并通道
-QImage MergeChannels(
+void MergeChannels(
     const std::vector<QImage>& channels,
+    QImage& output,                 // [out] 输出多通道图像
     ChannelType channelType = ChannelType::RGB
 );
 ```
@@ -1017,19 +1070,21 @@ QImage MergeChannels(
 
 ```cpp
 // RGB <-> BGR
-QImage RgbToBgr(const QImage& image);
-QImage BgrToRgb(const QImage& image);
+void RgbToBgr(const QImage& image, QImage& output);
+void BgrToRgb(const QImage& image, QImage& output);
 
 // 交换两个通道
-QImage SwapChannels(
+void SwapChannels(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     int32_t ch1,                    // 第一个通道索引
     int32_t ch2                     // 第二个通道索引
 );
 
 // 重排通道
-QImage ReorderChannels(
+void ReorderChannels(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     const std::vector<int32_t>& order  // 新顺序，如 {2, 1, 0} = BGR
 );
 ```
@@ -1040,47 +1095,55 @@ QImage ReorderChannels(
 
 ```cpp
 // 亮度调整
-QImage AdjustBrightness(
+void AdjustBrightness(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     double brightness               // [-255, 255]，正值增亮
 );
 
 // 对比度调整
-QImage AdjustContrast(
+void AdjustContrast(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     double contrast                 // 1.0=不变，>1增强，<1降低
 );
 
 // 饱和度调整（彩色图像）
-QImage AdjustSaturation(
+void AdjustSaturation(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     double saturation               // 0=灰度，1.0=不变，>1更饱和
 );
 
 // 色相偏移
-QImage AdjustHue(
+void AdjustHue(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     double hueShift                 // [-180, 180] 度
 );
 
 // Gamma 校正
-QImage AdjustGamma(
+void AdjustGamma(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     double gamma                    // 1.0=不变，<1增亮，>1变暗
 );
 
 // 颜色反转
-QImage InvertColors(const QImage& image);
+void InvertColors(const QImage& image, QImage& output);
 ```
 
 **示例**:
 ```cpp
 // 增加亮度和对比度
-QImage bright = AdjustBrightness(image, 30);
-QImage contrast = AdjustContrast(image, 1.2);
+QImage bright;
+AdjustBrightness(image, bright, 30);
+QImage contrast;
+AdjustContrast(image, contrast, 1.2);
 
 // Gamma 校正
-QImage corrected = AdjustGamma(image, 2.2);
+QImage corrected;
+AdjustGamma(image, corrected, 2.2);
 ```
 
 ---
@@ -1295,14 +1358,16 @@ bool HasAlphaChannel(ColorSpace space);
 
 ```cpp
 // 各向同性高斯
-QImage GaussFilter(
+void GaussFilter(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     double sigma                    // 标准差
 );
 
 // 各向异性高斯
-QImage GaussFilter(
+void GaussFilter(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     double sigmaX,                  // X 方向 sigma
     double sigmaY,                  // Y 方向 sigma
     const std::string& borderMode = "reflect"
@@ -1314,8 +1379,9 @@ QImage GaussFilter(
 );
 
 // 固定尺寸高斯
-QImage GaussImage(
+void GaussImage(
     const QImage& image,
+    QImage& output,                 // [out] 输出图像
     const std::string& size         // "3x3", "5x5", "7x7", "9x9", "11x11"
 );
 ```
@@ -1325,8 +1391,10 @@ QImage GaussImage(
 #include <QiVision/Filter/Filter.h>
 using namespace Qi::Vision::Filter;
 
-QImage smooth = GaussFilter(image, 1.5);
-QImage smooth2 = GaussImage(image, "5x5");
+QImage smooth;
+GaussFilter(image, smooth, 1.5);
+QImage smooth2;
+GaussImage(image, smooth2, "5x5");
 ```
 
 ---
@@ -1775,11 +1843,15 @@ enum class SortMode {
 
 ```cpp
 // 从区域提取连通组件
-std::vector<QRegion> Connection(const QRegion& region);
+void Connection(
+    const QRegion& region,
+    std::vector<QRegion>& regions   // [out] 输出连通域数组
+);
 
 // 从二值图像提取连通组件
-std::vector<QRegion> Connection(
+void Connection(
     const QImage& binaryImage,
+    std::vector<QRegion>& regions,  // [out] 输出连通域数组
     Connectivity connectivity = Connectivity::Eight  // Four 或 Eight
 );
 ```
@@ -1793,7 +1865,8 @@ using namespace Qi::Vision::Blob;
 QRegion binaryRegion = ThresholdToRegion(image, 128, 255);
 
 // 提取连通域
-auto blobs = Connection(binaryRegion);
+std::vector<QRegion> blobs;
+Connection(binaryRegion, blobs);
 std::cout << "Found " << blobs.size() << " blobs\n";
 ```
 
@@ -1954,8 +2027,9 @@ printf("Ellipse: Ra=%.2f, Rb=%.2f, Phi=%.2f°\n", ra, rb, DEG(phi));
 
 ```cpp
 // 使用枚举
-std::vector<QRegion> SelectShape(
+void SelectShape(
     const std::vector<QRegion>& regions,
+    std::vector<QRegion>& selected, // [out] 输出选中的区域
     ShapeFeature feature,
     SelectOperation operation,
     double minValue,
@@ -1963,8 +2037,9 @@ std::vector<QRegion> SelectShape(
 );
 
 // 使用字符串（Halcon 兼容）
-std::vector<QRegion> SelectShape(
+void SelectShape(
     const std::vector<QRegion>& regions,
+    std::vector<QRegion>& selected, // [out] 输出选中的区域
     const std::string& feature,     // "area", "circularity", ...
     const std::string& operation,   // "and" 或 "or"
     double minValue,
@@ -1972,18 +2047,21 @@ std::vector<QRegion> SelectShape(
 );
 
 // 快捷函数
-std::vector<QRegion> SelectShapeArea(
+void SelectShapeArea(
     const std::vector<QRegion>& regions,
+    std::vector<QRegion>& selected, // [out] 输出选中的区域
     int64_t minArea, int64_t maxArea
 );
 
-std::vector<QRegion> SelectShapeCircularity(
+void SelectShapeCircularity(
     const std::vector<QRegion>& regions,
+    std::vector<QRegion>& selected, // [out] 输出选中的区域
     double minCirc, double maxCirc
 );
 
-std::vector<QRegion> SelectShapeRectangularity(
+void SelectShapeRectangularity(
     const std::vector<QRegion>& regions,
+    std::vector<QRegion>& selected, // [out] 输出选中的区域
     double minRect, double maxRect
 );
 ```
@@ -1991,15 +2069,18 @@ std::vector<QRegion> SelectShapeRectangularity(
 **示例**:
 ```cpp
 // 选择面积 > 100 的 blob
-auto large = SelectShape(blobs, ShapeFeature::Area,
-                         SelectOperation::And, 100, 999999);
+std::vector<QRegion> large;
+SelectShape(blobs, large, ShapeFeature::Area,
+            SelectOperation::And, 100, 999999);
 
 // 选择圆形 blob
-auto circular = SelectShape(large, ShapeFeature::Circularity,
-                           SelectOperation::And, 0.8, 1.0);
+std::vector<QRegion> circular;
+SelectShape(large, circular, ShapeFeature::Circularity,
+            SelectOperation::And, 0.8, 1.0);
 
 // 或使用字符串
-auto selected = SelectShape(blobs, "area", "and", 100, 999999);
+std::vector<QRegion> selected;
+SelectShape(blobs, selected, "area", "and", 100, 999999);
 ```
 
 ---
@@ -2010,15 +2091,17 @@ auto selected = SelectShape(blobs, "area", "and", 100, 999999);
 
 ```cpp
 // 使用枚举
-std::vector<QRegion> SortRegion(
+void SortRegion(
     const std::vector<QRegion>& regions,
+    std::vector<QRegion>& sorted,   // [out] 输出排序后的区域
     SortMode mode,
     bool ascending = true
 );
 
 // 使用字符串（Halcon 兼容）
-std::vector<QRegion> SortRegion(
+void SortRegion(
     const std::vector<QRegion>& regions,
+    std::vector<QRegion>& sorted,   // [out] 输出排序后的区域
     const std::string& sortMode,    // "character", "first_point", ...
     const std::string& order,       // "true" 或 "false"
     const std::string& rowOrCol     // "row" 或 "column"
@@ -2086,17 +2169,23 @@ double circularity = 4 * M_PI * area / (perimeter * perimeter);
 ### 6.13 孔洞分析
 
 ```cpp
-// 计算孔洞数量
+// 计算孔洞数量（查询函数，使用返回值）
 int32_t CountHoles(const QRegion& region);
 
 // 计算欧拉数 (连通域数量 - 孔洞数量)
 int32_t EulerNumber(const QRegion& region);
 
 // 填充所有孔洞
-QRegion FillUp(const QRegion& region);
+void FillUp(
+    const QRegion& region,
+    QRegion& filled                 // [out] 输出填充后的区域
+);
 
 // 获取所有孔洞区域
-std::vector<QRegion> GetHoles(const QRegion& region);
+void GetHoles(
+    const QRegion& region,
+    std::vector<QRegion>& holes     // [out] 输出孔洞区域数组
+);
 ```
 
 **示例**:
@@ -2107,7 +2196,8 @@ if (holes > 0) {
     printf("Blob has %d holes\n", holes);
 
     // 获取孔洞区域
-    auto holeRegions = GetHoles(blob);
+    std::vector<QRegion> holeRegions;
+    GetHoles(blob, holeRegions);
     for (const auto& hole : holeRegions) {
         int64_t holeArea;
         double r, c;
@@ -2116,7 +2206,8 @@ if (holes > 0) {
     }
 
     // 填充孔洞
-    QRegion filled = FillUp(blob);
+    QRegion filled;
+    FillUp(blob, filled);
 }
 ```
 
@@ -2126,15 +2217,17 @@ if (holes > 0) {
 
 ```cpp
 // 按标准差选择（选择特征值在均值±N个标准差范围内的区域）
-std::vector<QRegion> SelectShapeStd(
+void SelectShapeStd(
     const std::vector<QRegion>& regions,
+    std::vector<QRegion>& selected, // [out] 输出选中的区域
     ShapeFeature feature,
     double deviationFactor          // 标准差倍数，如 1.0, 2.0
 );
 
 // 多特征选择
-std::vector<QRegion> SelectShapeMulti(
+void SelectShapeMulti(
     const std::vector<QRegion>& regions,
+    std::vector<QRegion>& selected, // [out] 输出选中的区域
     const std::vector<ShapeFeature>& features,
     SelectOperation operation,      // And: 全部满足, Or: 任一满足
     const std::vector<double>& minValues,
@@ -2142,20 +2235,23 @@ std::vector<QRegion> SelectShapeMulti(
 );
 
 // 按凸度选择
-std::vector<QRegion> SelectShapeConvexity(
+void SelectShapeConvexity(
     const std::vector<QRegion>& regions,
+    std::vector<QRegion>& selected, // [out] 输出选中的区域
     double minConvex, double maxConvex
 );
 
 // 按延伸度选择
-std::vector<QRegion> SelectShapeElongation(
+void SelectShapeElongation(
     const std::vector<QRegion>& regions,
+    std::vector<QRegion>& selected, // [out] 输出选中的区域
     double minElong, double maxElong
 );
 
 // 选择 N 个最大/最小区域
-std::vector<QRegion> SelectShapeProto(
+void SelectShapeProto(
     const std::vector<QRegion>& regions,
+    std::vector<QRegion>& selected, // [out] 输出选中的区域
     int32_t n,                      // 选择数量
     bool largest = true             // true=最大, false=最小
 );
@@ -2164,10 +2260,12 @@ std::vector<QRegion> SelectShapeProto(
 **示例**:
 ```cpp
 // 剔除异常大小的区域（面积在均值±2个标准差内）
-auto normal = SelectShapeStd(blobs, ShapeFeature::Area, 2.0);
+std::vector<QRegion> normal;
+SelectShapeStd(blobs, normal, ShapeFeature::Area, 2.0);
 
 // 选择同时满足多个条件的区域
-auto selected = SelectShapeMulti(blobs,
+std::vector<QRegion> selected;
+SelectShapeMulti(blobs, selected,
     {ShapeFeature::Area, ShapeFeature::Circularity},
     SelectOperation::And,
     {100, 0.7},     // 最小值
@@ -2175,10 +2273,12 @@ auto selected = SelectShapeMulti(blobs,
 );
 
 // 选择 5 个最大的区域
-auto top5 = SelectShapeProto(blobs, 5, true);
+std::vector<QRegion> top5;
+SelectShapeProto(blobs, top5, 5, true);
 
 // 选择凸度高的区域（接近凸形状）
-auto convex = SelectShapeConvexity(blobs, 0.9, 1.0);
+std::vector<QRegion> convex;
+SelectShapeConvexity(blobs, convex, 0.9, 1.0);
 ```
 
 ---
@@ -2466,7 +2566,7 @@ void DispEdgeResult(
 void MeasureRect(
     QImage& image,
     const MeasureRectangle2& handle,    // 卡尺句柄
-    const Color& color = Color::Cyan(),
+    const Scalar& color = Scalar::Cyan(),
     int32_t thickness = 1
 );
 
@@ -2474,7 +2574,7 @@ void MeasureRect(
 void MeasureRects(
     QImage& image,
     const std::vector<MeasureRectangle2>& handles,
-    const Color& color = Color::Cyan(),
+    const Scalar& color = Scalar::Cyan(),
     int32_t thickness = 1
 );
 
@@ -2490,21 +2590,21 @@ void EdgePointsWeighted(
 
 // 绘制测量结果
 void MetrologyLine(QImage& image, const MetrologyLineResult& result,
-                   const Color& color = Color::Green(), int32_t thickness = 2);
+                   const Scalar& color = Scalar::Green(), int32_t thickness = 2);
 void MetrologyCircle(QImage& image, const MetrologyCircleResult& result,
-                     const Color& color = Color::Green(), int32_t thickness = 2);
+                     const Scalar& color = Scalar::Green(), int32_t thickness = 2);
 void MetrologyEllipse(QImage& image, const MetrologyEllipseResult& result,
-                      const Color& color = Color::Green(), int32_t thickness = 2);
+                      const Scalar& color = Scalar::Green(), int32_t thickness = 2);
 void MetrologyRectangle(QImage& image, const MetrologyRectangle2Result& result,
-                        const Color& color = Color::Green(), int32_t thickness = 2);
+                        const Scalar& color = Scalar::Green(), int32_t thickness = 2);
 
 // 一键绘制完整测量模型（卡尺 + 边缘点 + 拟合结果）
 void MetrologyModelResult(
     QImage& image,
     const MetrologyModel& model,
-    const Color& objectColor = Color::Yellow(),   // 卡尺颜色
-    const Color& resultColor = Color::Green(),    // 结果颜色
-    const Color& pointColor = Color::Red(),       // 点颜色（fallback）
+    const Scalar& objectColor = Scalar::Yellow(),   // 卡尺颜色
+    const Scalar& resultColor = Scalar::Green(),    // 结果颜色
+    const Scalar& pointColor = Scalar::Red(),       // 点颜色（fallback）
     bool drawCalipers = true,
     bool drawPoints = true
 );
@@ -2524,18 +2624,19 @@ int circleIdx = model.AddCircleMeasure(500, 650, 220, params);
 model.Apply(image);
 
 // 绘制
-QImage display = Draw::PrepareForDrawing(image);
+QImage display;
+Color::GrayToRgb(image, display);
 
 // 方式1: 分步绘制
 auto calipers = model.GetObject(circleIdx)->GetCalipers();
-Draw::MeasureRects(display, calipers, Color::Cyan(), 1);
+Draw::MeasureRects(display, calipers, Scalar::Cyan(), 1);
 
 auto points = model.GetMeasuredPoints(circleIdx);
 auto weights = model.GetPointWeights(circleIdx);
 Draw::EdgePointsWeighted(display, points, weights, 3);
 
 auto result = model.GetCircleResult(circleIdx);
-Draw::MetrologyCircle(display, result, Color::Green(), 2);
+Draw::MetrologyCircle(display, result, Scalar::Green(), 2);
 
 // 方式2: 一键绘制
 Draw::MetrologyModelResult(display, model);
@@ -2545,21 +2646,23 @@ Draw::MetrologyModelResult(display, model);
 
 ### 7.11 图像转换工具
 
-```cpp
-// 灰度转 RGB（用于彩色绘图）
-QImage GrayToRgb(const QImage& gray);
+**头文件**: `<QiVision/Color/ColorConvert.h>`
 
-// 准备绘图（灰度自动转 RGB）
-QImage PrepareForDrawing(const QImage& image);
+```cpp
+namespace Color {
+// 灰度转 RGB（用于彩色绘图）
+void GrayToRgb(const QImage& gray, QImage& output);
+}
 ```
 
 **示例**:
 ```cpp
-#include <QiVision/Display/Display.h>
+#include <QiVision/Color/ColorConvert.h>
 using namespace Qi::Vision;
 
 // 准备图像
-QImage display = PrepareForDrawing(grayImage);
+QImage display;
+PrepareForDrawing(grayImage, display);
 
 // 绘制匹配结果
 for (size_t i = 0; i < rows.size(); ++i) {
@@ -2772,6 +2875,7 @@ enum class ChannelType {
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 0.4.0 | 2026-01-21 | **API 统一为 Halcon 风格** - 所有公开 API 改为 `void Func(..., output&)` |
 | 0.3.0 | 2026-01-20 | 添加 Metrology 模块文档，新增自动阈值 API |
 | 0.2.0 | 2026-01-17 | 添加 Blob, Display, GUI 模块文档 |
 | 0.1.0 | 2026-01-15 | 初始版本：Matching, Measure, IO, Color, Filter |

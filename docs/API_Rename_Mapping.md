@@ -1,182 +1,463 @@
-# QiVision API 重命名映射表
+# QiVision API 规范与重构映射表
 
-本文档记录 API 重命名的完整映射，用于追踪旧接口到新接口的对应关系。
+本文档定义 QiVision 公开 API 的统一规范，并追踪重构进度。
 
-## 命名规范
+## 核心规范：Halcon 风格
 
-参考 Halcon API 命名风格：`<动作><修饰词><模块名称>`
+### 参数顺序规则
 
-## 1. Matching 模块
+```
+函数名(输入参数..., 输出参数..., 配置参数...)
+```
 
-### 1.1 ShapeModel 类
-
-| 原函数名 | 新函数名 | 说明 | 状态 |
-|----------|----------|------|------|
-| `ShapeModel::Create(image, params)` | `CreateShapeModel()` 或 `ShapeModel::CreateModel()` | 创建只旋转模型 | 待重命名 |
-| `ShapeModel::Create(image, roi, params)` | `CreateShapeModelRoi()` 或 `ShapeModel::CreateModel()` | 创建只旋转模型(带ROI) | 待重命名 |
-| `ShapeModel::CreateWithOrigin()` | `CreateShapeModelOrigin()` 或 `ShapeModel::CreateModelOrigin()` | 创建带自定义原点模型 | 待重命名 |
-| `ShapeModel::Find(image, params)` | `FindShapeModel()` 或 `ShapeModel::FindModel()` | 查找只旋转匹配 | 待重命名 |
-| `ShapeModel::FindBest(image, params)` | `FindShapeModelBest()` 或 `ShapeModel::FindBest()` | 查找最佳匹配 | 保留 |
-| `ShapeModel::FindInROI()` | `FindShapeModelRoi()` 或 `ShapeModel::FindModelRoi()` | ROI内查找 | 待重命名 |
-| `ShapeModel::Save(filename)` | `WriteShapeModel()` 或 `ShapeModel::WriteModel()` | 保存模型 | 待重命名 |
-| `ShapeModel::Load(filename)` | `ReadShapeModel()` 或 `ShapeModel::ReadModel()` | 加载模型 | 待重命名 |
-| `ShapeModel::GetStats()` | `GetShapeModelParams()` 或 `ShapeModel::GetParams()` | 获取模型参数 | 待重命名 |
-| `ShapeModel::GetModelPoints()` | `GetShapeModelContours()` 或 `ShapeModel::GetContours()` | 获取轮廓点 | 待重命名 |
-| `ShapeModel::GetModelContour()` | `GetShapeModelContour()` | 获取显示轮廓 | 保留 |
-| `ShapeModel::GetMatchContour()` | `GetShapeModelMatchContour()` | 获取匹配轮廓 | 保留 |
-| `ShapeModel::Clear()` | `ClearShapeModel()` 或 `ShapeModel::Clear()` | 清除模型 | 保留 |
-| `ShapeModel::ComputeScore()` | `ShapeModel::ComputeScore()` | 计算匹配分数 | 保留 |
-| `ShapeModel::RefineMatch()` | `ShapeModel::RefineMatch()` | 亚像素精化 | 保留 |
-
-### 1.2 未来扩展 (Scaled 和 Aniso 模型)
-
-| Halcon 函数 | QiVision 函数 | 说明 | 状态 |
-|-------------|---------------|------|------|
-| `create_scaled_shape_model` | `CreateScaledShapeModel()` | 各向同性缩放模型 | 未实现 |
-| `create_aniso_shape_model` | `CreateAnisoShapeModel()` | 各向异性缩放模型 | 未实现 |
-| `create_shape_model_xld` | `CreateShapeModelXld()` | 从轮廓创建 | 未实现 |
-| `find_scaled_shape_model` | `FindScaledShapeModel()` | 查找带缩放 | 未实现 |
-| `find_aniso_shape_model` | `FindAnisoShapeModel()` | 查找各向异性 | 未实现 |
-| `find_shape_models` | `FindShapeModels()` | 多模型查找 | 未实现 |
-| `set_shape_model_origin` | `SetShapeModelOrigin()` | 设置模型原点 | 未实现 |
-| `determine_shape_model_params` | `DetermineShapeModelParams()` | 自动参数推荐 | 未实现 |
-
-## 2. Measure 模块
-
-### 2.1 Caliper 函数 (已符合规范)
-
-| 当前函数名 | 对应 Halcon 函数 | 说明 | 状态 |
-|------------|------------------|------|------|
-| `MeasurePos()` | `measure_pos` | 测量边缘位置 | ✅ 已符合 |
-| `MeasurePairs()` | `measure_pairs` | 测量边缘对 | ✅ 已符合 |
-| `FuzzyMeasurePos()` | `fuzzy_measure_pos` | 模糊边缘测量 | ✅ 已符合 |
-| `FuzzyMeasurePairs()` | `fuzzy_measure_pairs` | 模糊边缘对测量 | ✅ 已符合 |
-| `ExtractMeasureProfile()` | - | 提取测量剖面 | ✅ 已符合 |
-| `SelectEdges()` | `select_edge` | 筛选边缘 | ✅ 已符合 |
-| `SortEdges()` | - | 排序边缘 | ✅ 已符合 |
-
-### 2.2 MeasureHandle 函数 (已符合规范)
-
-| 当前函数名 | 对应 Halcon 函数 | 说明 | 状态 |
-|------------|------------------|------|------|
-| `CreateMeasureRect()` | `gen_measure_rectangle2` | 创建矩形测量句柄 | ✅ 已符合 |
-| `CreateMeasureArc()` | `gen_measure_arc` | 创建圆弧测量句柄 | ✅ 已符合 |
-| `CreateMeasureConcentricCircles()` | - | 创建同心圆测量句柄 | ✅ 已符合 |
-
-## 3. Core 模块
-
-### 3.1 QImage 类
-
-| 当前方法 | 说明 | 状态 |
-|----------|------|------|
-| `QImage::FromFile()` | 从文件创建 | ✅ 保留 |
-| `QImage::FromData()` | 从数据创建 | ✅ 保留 |
-| `QImage::Clone()` | 深拷贝 | ✅ 保留 |
-| `QImage::SubImage()` | 子图像 | ✅ 保留 |
-| `QImage::SaveToFile()` | 保存到文件 | ✅ 保留 |
-| `QImage::ConvertTo()` | 类型转换 | ✅ 保留 |
-| `QImage::ToGray()` | 转灰度 | ✅ 保留 |
-| `QImage::SetDomain()` | 设置Domain | ✅ 保留 |
-| `QImage::GetDomain()` | 获取Domain | ✅ 保留 |
-| `QImage::ReduceDomain()` | 缩小Domain | ✅ 保留 |
-| `QImage::ResetDomain()` | 重置Domain | ✅ 保留 |
-
-### 3.2 QRegion 类
-
-| 当前方法 | 说明 | 状态 |
-|----------|------|------|
-| `QRegion::Rectangle()` | 创建矩形区域 | ✅ 保留 |
-| `QRegion::Circle()` | 创建圆形区域 | ✅ 保留 |
-| `QRegion::Ellipse()` | 创建椭圆区域 | ✅ 保留 |
-| `QRegion::Union()` | 区域并集 | ✅ 保留 |
-| `QRegion::Intersection()` | 区域交集 | ✅ 保留 |
-| `QRegion::Difference()` | 区域差集 | ✅ 保留 |
-| `QRegion::Complement()` | 区域补集 | ✅ 保留 |
-| `QRegion::Dilate()` | 膨胀 | ✅ 保留 |
-| `QRegion::Erode()` | 腐蚀 | ✅ 保留 |
-| `QRegion::Opening()` | 开运算 | ✅ 保留 |
-| `QRegion::Closing()` | 闭运算 | ✅ 保留 |
-
-### 3.3 QContour 类
-
-| 当前方法 | 说明 | 状态 |
-|----------|------|------|
-| 待检查 | - | - |
-
-## 4. Platform 模块
-
-### 4.1 FileIO (待实现)
-
-| 计划函数名 | 对应 Halcon 函数 | 说明 | 状态 |
-|------------|------------------|------|------|
-| `ReadImage()` | `read_image` | 读取图像 | 待实现 |
-| `WriteImage()` | `write_image` | 写入图像 | 待实现 |
-| `ReadBinary()` | - | 读取二进制 | 待实现 |
-| `WriteBinary()` | - | 写入二进制 | 待实现 |
-
-### 4.2 Timer
-
-| 当前方法 | 说明 | 状态 |
-|----------|------|------|
-| 待检查 | - | - |
-
-## 5. Internal 模块 (内部使用，不导出)
-
-Internal 模块的函数命名不需要遵循 Halcon 风格，保持当前命名即可。
-
-| 模块 | 说明 | 状态 |
+| 类型 | 规则 | 示例 |
 |------|------|------|
-| `AnglePyramid` | 角度金字塔 | ✅ 内部使用 |
-| `Gradient` | 梯度计算 | ✅ 内部使用 |
-| `Pyramid` | 图像金字塔 | ✅ 内部使用 |
-| `Interpolate` | 插值 | ✅ 内部使用 |
-| `Fitting` | 拟合 | ✅ 内部使用 |
-| `Edge1D` | 1D边缘 | ✅ 内部使用 |
-| `Steger` | Steger算法 | ✅ 内部使用 |
-| `Hessian` | Hessian算法 | ✅ 内部使用 |
+| **输入** | `const T&`，在前 | `const QImage& input` |
+| **输出** | `T&`，在输入之后 | `QImage& output` |
+| **配置** | 值类型或 `const&`，在最后 | `double sigma` |
 
-## 重命名策略
+### API 类型分类
 
-### 推荐方案：类内方法重命名
+| 类型 | 签名风格 | 示例 |
+|------|---------|------|
+| **图像处理** | `void Func(const QImage& in, QImage& out, params)` | `GaussFilter`, `SobelAmp` |
+| **多输出** | `void Func(const T& in, T& out1, T& out2, ...)` | `Decompose3`, `FindShapeModel` |
+| **绘图** | `void Func(QImage& image, params)` | `DispLine`, `DispCircle` |
+| **查询** | `T Func(const T& obj)` 或 `T Obj::Method() const` | `Area()`, `Width()` |
+| **类型转换** | `T2 Func(const T1& in)` | `RegionToImage`, `ImageToRegion` |
+| **构造** | `T Func(params)` 或 `T::Create(params)` | `GenRectangle1`, `QImage::FromFile` |
 
-保持类结构，重命名类内方法：
+---
+
+## 1. Filter 模块 - ✅ 已完成 (31 个函数)
+
+### 平滑滤波
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 1 | `QImage GaussFilter(const QImage& image, double sigma)` | `void GaussFilter(const QImage& in, QImage& out, double sigma)` | ✅ |
+| 2 | `QImage GaussFilter(const QImage& image, double sigmaX, double sigmaY, const std::string& borderMode)` | `void GaussFilter(const QImage& in, QImage& out, double sigmaX, double sigmaY, const std::string& borderMode)` | ✅ |
+| 3 | `QImage GaussImage(const QImage& image, const std::string& size)` | `void GaussImage(const QImage& in, QImage& out, const std::string& size)` | ✅ |
+| 4 | `QImage MeanImage(const QImage& image, int32_t width, int32_t height, const std::string& borderMode)` | `void MeanImage(const QImage& in, QImage& out, int32_t width, int32_t height, const std::string& borderMode)` | ✅ |
+| 5 | `QImage MeanImage(const QImage& image, int32_t size, const std::string& borderMode)` | `void MeanImage(const QImage& in, QImage& out, int32_t size, const std::string& borderMode)` | ✅ |
+| 6 | `QImage MedianImage(const QImage& image, const std::string& maskType, int32_t radius, const std::string& marginMode)` | `void MedianImage(const QImage& in, QImage& out, const std::string& maskType, int32_t radius, const std::string& marginMode)` | ✅ |
+| 7 | `QImage MedianRect(const QImage& image, int32_t width, int32_t height)` | `void MedianRect(const QImage& in, QImage& out, int32_t width, int32_t height)` | ✅ |
+| 8 | `QImage BilateralFilter(const QImage& image, double sigmaSpatial, double sigmaIntensity)` | `void BilateralFilter(const QImage& in, QImage& out, double sigmaSpatial, double sigmaIntensity)` | ✅ |
+| 9 | `QImage BilateralFilter(const QImage& image, int32_t size, double sigmaSpatial, double sigmaIntensity)` | `void BilateralFilter(const QImage& in, QImage& out, int32_t size, double sigmaSpatial, double sigmaIntensity)` | ✅ |
+| 10 | `QImage BinomialFilter(const QImage& image, int32_t width, int32_t height, const std::string& borderMode)` | `void BinomialFilter(const QImage& in, QImage& out, int32_t width, int32_t height, const std::string& borderMode)` | ✅ |
+
+### 边缘检测/梯度
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 11 | `QImage SobelAmp(const QImage& image, const std::string& filterType, int32_t size)` | `void SobelAmp(const QImage& in, QImage& out, const std::string& filterType, int32_t size)` | ✅ |
+| 12 | `QImage SobelDir(const QImage& image, const std::string& dirType, int32_t size)` | `void SobelDir(const QImage& in, QImage& out, const std::string& dirType, int32_t size)` | ✅ |
+| 13 | `QImage PrewittAmp(const QImage& image, const std::string& filterType)` | `void PrewittAmp(const QImage& in, QImage& out, const std::string& filterType)` | ✅ |
+| 14 | `QImage RobertsAmp(const QImage& image, const std::string& filterType)` | `void RobertsAmp(const QImage& in, QImage& out, const std::string& filterType)` | ✅ |
+| 15 | `QImage DerivateGauss(const QImage& image, double sigma, const std::string& component)` | `void DerivateGauss(const QImage& in, QImage& out, double sigma, const std::string& component)` | ✅ |
+| 16 | `QImage GradientMagnitude(const QImage& image, double sigma)` | `void GradientMagnitude(const QImage& in, QImage& out, double sigma)` | ✅ |
+| 17 | `QImage GradientDirection(const QImage& image, double sigma)` | `void GradientDirection(const QImage& in, QImage& out, double sigma)` | ✅ |
+| 18 | `QImage Laplace(const QImage& image, const std::string& filterType)` | `void Laplace(const QImage& in, QImage& out, const std::string& filterType)` | ✅ |
+| 19 | `QImage LaplacianOfGaussian(const QImage& image, double sigma)` | `void LaplacianOfGaussian(const QImage& in, QImage& out, double sigma)` | ✅ |
+
+### 增强/锐化
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 20 | `QImage HighpassImage(const QImage& image, int32_t width, int32_t height)` | `void HighpassImage(const QImage& in, QImage& out, int32_t width, int32_t height)` | ✅ |
+| 21 | `QImage LowpassImage(const QImage& image, int32_t width, int32_t height)` | `void LowpassImage(const QImage& in, QImage& out, int32_t width, int32_t height)` | ✅ |
+| 22 | `QImage EmphasizeImage(const QImage& image, int32_t width, int32_t height, double factor)` | `void EmphasizeImage(const QImage& in, QImage& out, int32_t width, int32_t height, double factor)` | ✅ |
+| 23 | `QImage UnsharpMask(const QImage& image, double sigma, double amount, double threshold)` | `void UnsharpMask(const QImage& in, QImage& out, double sigma, double amount, double threshold)` | ✅ |
+| 24 | `QImage ShockFilter(const QImage& image, int32_t iterations, double dt)` | `void ShockFilter(const QImage& in, QImage& out, int32_t iterations, double dt)` | ✅ |
+| 25 | `QImage AnisoDiff(const QImage& image, const std::string& mode, double contrast, double theta, int32_t iterations)` | `void AnisoDiff(const QImage& in, QImage& out, const std::string& mode, double contrast, double theta, int32_t iterations)` | ✅ |
+
+### 卷积/秩滤波
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 26 | `QImage ConvolImage(const QImage& image, const std::vector<double>& kernel, int32_t kw, int32_t kh, bool normalize, const std::string& borderMode)` | `void ConvolImage(const QImage& in, QImage& out, const std::vector<double>& kernel, int32_t kw, int32_t kh, bool normalize, const std::string& borderMode)` | ✅ |
+| 27 | `QImage ConvolSeparable(const QImage& image, const std::vector<double>& kernelX, const std::vector<double>& kernelY, const std::string& borderMode)` | `void ConvolSeparable(const QImage& in, QImage& out, const std::vector<double>& kernelX, const std::vector<double>& kernelY, const std::string& borderMode)` | ✅ |
+| 28 | `QImage RankImage(const QImage& image, int32_t width, int32_t height, int32_t rank)` | `void RankImage(const QImage& in, QImage& out, int32_t width, int32_t height, int32_t rank)` | ✅ |
+| 29 | `QImage MinImage(const QImage& image, int32_t width, int32_t height)` | `void MinImage(const QImage& in, QImage& out, int32_t width, int32_t height)` | ✅ |
+| 30 | `QImage MaxImage(const QImage& image, int32_t width, int32_t height)` | `void MaxImage(const QImage& in, QImage& out, int32_t width, int32_t height)` | ✅ |
+
+### 纹理特征
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 31 | `QImage StdDevImage(const QImage& image, int32_t width, int32_t height)` | `void StdDevImage(const QImage& in, QImage& out, int32_t width, int32_t height)` | ✅ |
+| 32 | `QImage VarianceImage(const QImage& image, int32_t width, int32_t height)` | `void VarianceImage(const QImage& in, QImage& out, int32_t width, int32_t height)` | ✅ |
+| 33 | `QImage EntropyImage(const QImage& image, int32_t width, int32_t height, int32_t numBins)` | `void EntropyImage(const QImage& in, QImage& out, int32_t width, int32_t height, int32_t numBins)` | ✅ |
+
+---
+
+## 2. Color 模块 - ✅ 已完成 (30 个函数)
+
+### 颜色空间转换
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 1 | `QImage TransFromRgb(const QImage& image, ColorSpace toSpace)` | `void TransFromRgb(const QImage& in, QImage& out, ColorSpace toSpace)` | ✅ |
+| 2 | `QImage TransFromRgb(const QImage& image, const std::string& colorSpace)` | `void TransFromRgb(const QImage& in, QImage& out, const std::string& colorSpace)` | ✅ |
+| 3 | `QImage TransToRgb(const QImage& image, ColorSpace fromSpace)` | `void TransToRgb(const QImage& in, QImage& out, ColorSpace fromSpace)` | ✅ |
+| 4 | `QImage TransToRgb(const QImage& image, const std::string& colorSpace)` | `void TransToRgb(const QImage& in, QImage& out, const std::string& colorSpace)` | ✅ |
+| 5 | `QImage ConvertColorSpace(const QImage& image, ColorSpace from, ColorSpace to)` | `void ConvertColorSpace(const QImage& in, QImage& out, ColorSpace from, ColorSpace to)` | ✅ |
+
+### 灰度转换
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 6 | `QImage Rgb1ToGray(const QImage& image, const std::string& method)` | `void Rgb1ToGray(const QImage& in, QImage& out, const std::string& method)` | ✅ |
+| 7 | `QImage Rgb3ToGray(const QImage& r, const QImage& g, const QImage& b, const std::string& method)` | `void Rgb3ToGray(const QImage& r, const QImage& g, const QImage& b, QImage& out, const std::string& method)` | ✅ |
+| 8 | `QImage GrayToRgb(const QImage& gray)` | `void GrayToRgb(const QImage& in, QImage& out)` | ✅ |
+
+### 通道操作
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 9 | `void Decompose3(const QImage& image, QImage& ch1, QImage& ch2, QImage& ch3)` | - | ✅ 已符合 |
+| 10 | `void Decompose4(const QImage& image, QImage& ch1, QImage& ch2, QImage& ch3, QImage& ch4)` | - | ✅ 已符合 |
+| 11 | `QImage Compose3(const QImage& ch1, const QImage& ch2, const QImage& ch3, ChannelType type)` | `void Compose3(const QImage& ch1, const QImage& ch2, const QImage& ch3, QImage& out, ChannelType type)` | ✅ |
+| 12 | `QImage Compose4(const QImage& ch1, const QImage& ch2, const QImage& ch3, const QImage& ch4, ChannelType type)` | `void Compose4(const QImage& ch1, const QImage& ch2, const QImage& ch3, const QImage& ch4, QImage& out, ChannelType type)` | ✅ |
+| 13 | `QImage AccessChannel(const QImage& image, int32_t channelIndex)` | `void AccessChannel(const QImage& in, QImage& out, int32_t channelIndex)` | ✅ |
+| 14 | `std::vector<QImage> SplitChannels(const QImage& image)` | `void SplitChannels(const QImage& in, std::vector<QImage>& out)` | ✅ |
+| 15 | `QImage MergeChannels(const std::vector<QImage>& channels, ChannelType type)` | `void MergeChannels(const std::vector<QImage>& channels, QImage& out, ChannelType type)` | ✅ |
+
+### 通道交换
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 16 | `QImage RgbToBgr(const QImage& image)` | `void RgbToBgr(const QImage& in, QImage& out)` | ✅ |
+| 17 | `QImage BgrToRgb(const QImage& image)` | `void BgrToRgb(const QImage& in, QImage& out)` | ✅ |
+| 18 | `QImage SwapChannels(const QImage& image, int32_t ch1, int32_t ch2)` | `void SwapChannels(const QImage& in, QImage& out, int32_t ch1, int32_t ch2)` | ✅ |
+| 19 | `QImage ReorderChannels(const QImage& image, const std::vector<int32_t>& order)` | `void ReorderChannels(const QImage& in, QImage& out, const std::vector<int32_t>& order)` | ✅ |
+
+### 颜色调整
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 20 | `QImage AdjustBrightness(const QImage& image, double brightness)` | `void AdjustBrightness(const QImage& in, QImage& out, double brightness)` | ✅ |
+| 21 | `QImage AdjustContrast(const QImage& image, double contrast)` | `void AdjustContrast(const QImage& in, QImage& out, double contrast)` | ✅ |
+| 22 | `QImage AdjustSaturation(const QImage& image, double saturation)` | `void AdjustSaturation(const QImage& in, QImage& out, double saturation)` | ✅ |
+| 23 | `QImage AdjustHue(const QImage& image, double hueShift)` | `void AdjustHue(const QImage& in, QImage& out, double hueShift)` | ✅ |
+| 24 | `QImage AdjustGamma(const QImage& image, double gamma)` | `void AdjustGamma(const QImage& in, QImage& out, double gamma)` | ✅ |
+| 25 | `QImage InvertColors(const QImage& image)` | `void InvertColors(const QImage& in, QImage& out)` | ✅ |
+| 26 | `QImage ScaleImage(const QImage& image, double mult, double add)` | `void ScaleImage(const QImage& in, QImage& out, double mult, double add)` | ✅ |
+| 27 | `QImage ScaleImageMax(const QImage& image)` | `void ScaleImageMax(const QImage& in, QImage& out)` | ✅ |
+| 28 | `QImage EquHistoImage(const QImage& image)` | `void EquHistoImage(const QImage& in, QImage& out)` | ✅ |
+
+### 白平衡
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 29 | `QImage AutoWhiteBalance(const QImage& image, const std::string& method)` | `void AutoWhiteBalance(const QImage& in, QImage& out, const std::string& method)` | ✅ |
+| 30 | `QImage ApplyWhiteBalance(const QImage& image, double whiteR, double whiteG, double whiteB)` | `void ApplyWhiteBalance(const QImage& in, QImage& out, double whiteR, double whiteG, double whiteB)` | ✅ |
+
+### CFA/Bayer
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 31 | `QImage CfaToRgb(const QImage& cfaImage, const std::string& cfaType, const std::string& interpolation)` | `void CfaToRgb(const QImage& in, QImage& out, const std::string& cfaType, const std::string& interpolation)` | ✅ |
+
+### 颜色矩阵
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 32 | `QImage LinearTransColor(const QImage& image, const std::vector<double>& transMat, int32_t numOutputChannels)` | `void LinearTransColor(const QImage& in, QImage& out, const std::vector<double>& transMat, int32_t numOutputChannels)` | ✅ |
+| 33 | `QImage ApplyColorMatrix(const QImage& image, const std::vector<double>& matrix)` | `void ApplyColorMatrix(const QImage& in, QImage& out, const std::vector<double>& matrix)` | ✅ |
+| 34 | `QImage PrincipalComp(const QImage& image, int32_t numComponents)` | `void PrincipalComp(const QImage& in, QImage& out, int32_t numComponents)` | ✅ |
+
+### 已符合的查询函数
+
+| # | 当前 API | 说明 | 状态 |
+|---|----------|------|------|
+| - | `int32_t CountChannels(const QImage& image)` | 查询函数 | ✅ |
+| - | `std::vector<int64_t> GrayHistoAbs(const QImage& image)` | 查询函数 | ✅ |
+| - | `double EntropyGray(const QImage& image)` | 查询函数 | ✅ |
+| - | `double GrayHistoPercentile(const QImage& image, double percentile)` | 查询函数 | ✅ |
+| - | `void GrayHisto(const QImage& image, std::vector<int64_t>& absHisto, std::vector<double>& relHisto)` | 多输出参数 | ✅ |
+| - | `void MinMaxGray(const QImage& image, double& minGray, double& maxGray, double& range)` | 多输出参数 | ✅ |
+| - | `void Intensity(const QImage& image, double& mean, double& deviation)` | 多输出参数 | ✅ |
+| - | `void GenPrincipalCompTrans(...)` | 多输出参数 | ✅ |
+| - | `ColorTransLut CreateColorTransLut(...)` | 构造函数 | ✅ |
+| - | `std::string GetColorSpaceName(ColorSpace)` | 查询函数 | ✅ |
+| - | `ColorSpace ParseColorSpace(const std::string&)` | 类型转换 | ✅ |
+| - | `int32_t GetChannelCount(ColorSpace)` | 查询函数 | ✅ |
+| - | `bool HasAlphaChannel(ColorSpace)` | 查询函数 | ✅ |
+
+---
+
+## 3. IO 模块 - ✅ 已完成 (7 个函数)
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 1 | `QImage ReadImage(const std::string& filename)` | `void ReadImage(const std::string& filename, QImage& image)` | ✅ |
+| 2 | `QImage ReadImage(const std::string& filename, ImageFormat format)` | `void ReadImage(const std::string& filename, QImage& image, ImageFormat format)` | ✅ |
+| 3 | `QImage ReadImageRaw(const std::string& filename, const RawReadParams& params)` | `void ReadImageRaw(const std::string& filename, QImage& image, const RawReadParams& params)` | ✅ |
+| 4 | `QImage ReadImageAs(const std::string& filename, PixelType targetType)` | `void ReadImageAs(const std::string& filename, QImage& image, PixelType targetType)` | ✅ |
+| 5 | `QImage ReadImageGray(const std::string& filename)` | `void ReadImageGray(const std::string& filename, QImage& image)` | ✅ |
+| 6 | `bool WriteImage(const QImage& image, const std::string& filename)` | - | ✅ 已符合 |
+| 7 | `std::vector<QImage> ReadSequence(...)` | `void ReadSequence(const std::string& pattern, std::vector<QImage>& images, ...)` | ✅ |
+| 8 | `std::vector<QImage> ReadDirectory(...)` | `void ReadDirectory(const std::string& directory, std::vector<QImage>& images, ...)` | ✅ |
+
+---
+
+## 4. Matching 模块 - ✅ 已完成 (6 个函数)
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 1 | `ShapeModel CreateShapeModel(const QImage& templateImage, ...)` | `void CreateShapeModel(const QImage& templateImage, ShapeModel& model, ...)` | ✅ |
+| 2 | `ShapeModel CreateShapeModel(const QImage& templateImage, const Rect2i& roi, ...)` | `void CreateShapeModel(const QImage& templateImage, const Rect2i& roi, ShapeModel& model, ...)` | ✅ |
+| 3 | `ShapeModel CreateShapeModel(const QImage& templateImage, const QRegion& region, ...)` | `void CreateShapeModel(const QImage& templateImage, const QRegion& region, ShapeModel& model, ...)` | ✅ |
+| 4 | `ShapeModel CreateScaledShapeModel(...)` | `void CreateScaledShapeModel(const QImage& templateImage, ShapeModel& model, ...)` | ✅ |
+| 5 | `ShapeModel ReadShapeModel(const std::string& filename)` | `void ReadShapeModel(const std::string& filename, ShapeModel& model)` | ✅ |
+| 6 | `QContourArray GetShapeModelXLD(const ShapeModel& model, int32_t level)` | `void GetShapeModelXLD(const ShapeModel& model, int32_t level, QContourArray& contours)` | ✅ |
+| 7 | `void FindShapeModel(...)` | - | ✅ 已符合 |
+| 8 | `void FindScaledShapeModel(...)` | - | ✅ 已符合 |
+| 9 | `void WriteShapeModel(const ShapeModel& model, const std::string& filename)` | - | ✅ 已符合 |
+| 10 | `void GetShapeModelOrigin(const ShapeModel& model, double& row, double& col)` | - | ✅ 已符合 |
+| 11 | `void SetShapeModelOrigin(ShapeModel& model, double row, double col)` | - | ✅ 已符合 |
+
+---
+
+## 5. Blob 模块 - ✅ 已完成 (15 个函数)
+
+### 连通域分析
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 1 | `std::vector<QRegion> Connection(const QRegion& region)` | `void Connection(const QRegion& in, std::vector<QRegion>& out)` | ✅ |
+| 2 | `std::vector<QRegion> Connection(const QImage& binaryImage, Connectivity connectivity)` | `void Connection(const QImage& in, std::vector<QRegion>& out, Connectivity connectivity)` | ✅ |
+
+### 形状选择
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 3 | `std::vector<QRegion> SelectShape(...)` | `void SelectShape(const std::vector<QRegion>& in, std::vector<QRegion>& out, ...)` | ✅ |
+| 4 | `std::vector<QRegion> SelectShape(...string...)` | `void SelectShape(const std::vector<QRegion>& in, std::vector<QRegion>& out, ...)` | ✅ |
+| 5 | `std::vector<QRegion> SelectShapeArea(...)` | `void SelectShapeArea(const std::vector<QRegion>& in, std::vector<QRegion>& out, ...)` | ✅ |
+| 6 | `std::vector<QRegion> SelectShapeCircularity(...)` | `void SelectShapeCircularity(const std::vector<QRegion>& in, std::vector<QRegion>& out, ...)` | ✅ |
+| 7 | `std::vector<QRegion> SelectShapeRectangularity(...)` | `void SelectShapeRectangularity(const std::vector<QRegion>& in, std::vector<QRegion>& out, ...)` | ✅ |
+| 8 | `std::vector<QRegion> SelectShapeStd(...)` | `void SelectShapeStd(const std::vector<QRegion>& in, std::vector<QRegion>& out, ...)` | ✅ |
+| 9 | `std::vector<QRegion> SelectShapeMulti(...)` | `void SelectShapeMulti(const std::vector<QRegion>& in, std::vector<QRegion>& out, ...)` | ✅ |
+| 10 | `std::vector<QRegion> SelectShapeConvexity(...)` | `void SelectShapeConvexity(const std::vector<QRegion>& in, std::vector<QRegion>& out, ...)` | ✅ |
+| 11 | `std::vector<QRegion> SelectShapeElongation(...)` | `void SelectShapeElongation(const std::vector<QRegion>& in, std::vector<QRegion>& out, ...)` | ✅ |
+| 12 | `std::vector<QRegion> SelectShapeProto(...)` | `void SelectShapeProto(const std::vector<QRegion>& in, std::vector<QRegion>& out, ...)` | ✅ |
+
+### 排序
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 13 | `std::vector<QRegion> SortRegion(...)` | `void SortRegion(const std::vector<QRegion>& in, std::vector<QRegion>& out, ...)` | ✅ |
+| 14 | `std::vector<QRegion> SortRegion(...string...)` | `void SortRegion(const std::vector<QRegion>& in, std::vector<QRegion>& out, ...)` | ✅ |
+
+### 孔洞分析
+
+| # | 当前 API | 目标 API | 状态 |
+|---|----------|----------|------|
+| 15 | `std::vector<QRegion> GetHoles(const QRegion& region)` | `void GetHoles(const QRegion& in, std::vector<QRegion>& out)` | ✅ |
+| - | `QRegion FillUp(const QRegion& region)` | `void FillUp(const QRegion& in, QRegion& out)` | ✅ |
+
+### 已符合的函数
+
+| # | 当前 API | 说明 | 状态 |
+|---|----------|------|------|
+| - | `void AreaCenter(const QRegion& region, int64_t& area, double& row, double& column)` | 多输出参数 | ✅ |
+| - | `void SmallestRectangle1(const QRegion& region, int32_t& row1, int32_t& column1, int32_t& row2, int32_t& column2)` | 多输出参数 | ✅ |
+| - | `void SmallestRectangle2(const QRegion& region, double& row, double& column, double& phi, double& length1, double& length2)` | 多输出参数 | ✅ |
+| - | `void SmallestCircle(const QRegion& region, double& row, double& column, double& radius)` | 多输出参数 | ✅ |
+| - | `void EllipticAxis(const QRegion& region, double& ra, double& rb, double& phi)` | 多输出参数 | ✅ |
+| - | `double Circularity(const QRegion& region)` | 查询函数 | ✅ |
+| - | `double Compactness(const QRegion& region)` | 查询函数 | ✅ |
+| - | `double Convexity(const QRegion& region)` | 查询函数 | ✅ |
+| - | `double Rectangularity(const QRegion& region)` | 查询函数 | ✅ |
+| - | `double OrientationRegion(const QRegion& region)` | 查询函数 | ✅ |
+| - | `int32_t CountObj(const std::vector<QRegion>& regions)` | 查询函数 | ✅ |
+| - | `QRegion SelectObj(const std::vector<QRegion>& regions, int32_t index)` | 对象选择 | ✅ |
+
+---
+
+## 6. Measure 模块 - 已符合
+
+所有 Measure 模块函数已符合 Halcon 风格，返回结果集合是合理设计。
+
+| 当前 API | 说明 | 状态 |
+|----------|------|------|
+| `std::vector<EdgeResult> MeasurePos(const QImage& image, const MeasureRectangle2& handle, const MeasureParams& params)` | 返回值合理（结果集合） | ✅ |
+| `std::vector<PairResult> MeasurePairs(const QImage& image, const MeasureRectangle2& handle, const MeasureParams& params)` | 返回值合理 | ✅ |
+| `MetrologyModel::Apply(const QImage& image)` | in-place 更新模型状态 | ✅ |
+| `MetrologyModel::GetCircleResult(int32_t idx)` | 查询方法 | ✅ |
+
+---
+
+## 7. Display/Draw 模块 - 已符合
+
+绘图函数使用 in-place 修改风格（累积绘制），这是合理的设计。
+
+| 当前 API | 说明 | 状态 |
+|----------|------|------|
+| `void DispLine(QImage& image, ...)` | in-place 绘制 | ✅ |
+| `void DispCircle(QImage& image, ...)` | in-place 绘制 | ✅ |
+| `void DispContour(QImage& image, ...)` | in-place 绘制 | ✅ |
+| `void Draw::Rectangle(QImage& image, ...)` | in-place 绘制 | ✅ |
+| `void Draw::Contour(QImage& image, ...)` | in-place 绘制 | ✅ |
+| `void Draw::ToRGB(const QImage& gray, QImage& output)` | Halcon 风格 | ✅ |
+| `void Draw::PrepareForDrawing(const QImage& image, QImage& output)` | Halcon 风格 | ✅ |
+
+---
+
+## 8. Core 模块 - 保持现有风格
+
+类成员方法保持现有风格，不需要修改。
+
+| 当前 API | 说明 | 状态 |
+|----------|------|------|
+| `QImage::FromFile(filename)` | 静态构造 | ✅ 保留 |
+| `QImage::ToGray()` | 类型转换方法 | ✅ 保留 |
+| `QImage::Clone()` | 深拷贝 | ✅ 保留 |
+| `QRegion::Union(other)` | 返回新区域 | ✅ 保留 |
+| `QContour::Length()` | 查询 | ✅ 保留 |
+
+---
+
+## 9. GUI 模块 - 保持现有风格
+
+GUI 模块保持现有设计，窗口类使用对象方法风格。
+
+---
+
+## 10. Internal 模块 - 不导出
+
+内部模块不遵循公开 API 规范，保持现有命名。
+
+---
+
+## 重构统计
+
+| 模块 | 需重构 | 已符合 | 总计 | 状态 |
+|------|--------|--------|------|--------|
+| Filter | 0 | 33 | 33 | ✅ **完成** |
+| Color | 0 | 34+ | 34+ | ✅ **完成** |
+| IO | 0 | 8 | 8 | ✅ **完成** |
+| Matching | 0 | 11 | 11 | ✅ **完成** |
+| Blob | 0 | 25+ | 25+ | ✅ **完成** |
+| Measure | 0 | 全部 | - | ✅ **完成** |
+| Display/Draw | 0 | 全部 | - | ✅ **完成** |
+| Core | 0 | 全部 | - | ✅ **完成** |
+| **总计** | **0** | **100+** | - | ✅ **全部完成** |
+
+---
+
+## 重构示例
+
+### Filter 模块重构示例
 
 ```cpp
-// 当前
-class ShapeModel {
-    bool Create(const QImage& image, const ModelParams& params);
-    std::vector<MatchResult> Find(const QImage& image, const SearchParams& params);
-    bool Save(const std::string& filename);
-    bool Load(const std::string& filename);
-};
+// ============ 重构前 ============
+QImage GaussFilter(const QImage& image, double sigma);
 
-// 重命名后
-class ShapeModel {
-    bool CreateModel(const QImage& image, const ModelParams& params);
-    std::vector<MatchResult> FindModel(const QImage& image, const SearchParams& params);
-    bool WriteModel(const std::string& filename);
-    bool ReadModel(const std::string& filename);
-    ModelStats GetParams() const;
-    std::vector<ModelPoint> GetContours(int32_t level = 0) const;
-};
+// 调用
+QImage result = GaussFilter(input, 1.5);
+
+// ============ 重构后 ============
+void GaussFilter(const QImage& input, QImage& output, double sigma);
+
+// 调用
+QImage result;
+GaussFilter(input, result, 1.5);
+
+// 或者复用缓冲区
+static QImage buffer;  // 预分配
+GaussFilter(input, buffer, 1.5);
 ```
 
-### 备选方案：全局函数
-
-提供 Halcon 风格的全局函数包装：
+### Blob 模块重构示例
 
 ```cpp
-// 全局函数包装
-bool CreateShapeModel(ShapeModel& model, const QImage& image, const ModelParams& params);
-std::vector<MatchResult> FindShapeModel(const ShapeModel& model, const QImage& image, const SearchParams& params);
-bool WriteShapeModel(const ShapeModel& model, const std::string& filename);
-bool ReadShapeModel(ShapeModel& model, const std::string& filename);
+// ============ 重构前 ============
+std::vector<QRegion> Connection(const QRegion& region);
+
+// 调用
+auto blobs = Connection(region);
+
+// ============ 重构后 ============
+void Connection(const QRegion& input, std::vector<QRegion>& output);
+
+// 调用
+std::vector<QRegion> blobs;
+Connection(region, blobs);
 ```
+
+### Matching 模块重构示例
+
+```cpp
+// ============ 重构前 ============
+ShapeModel CreateShapeModel(const QImage& image, ...);
+
+// 调用
+ShapeModel model = CreateShapeModel(templ, ...);
+
+// ============ 重构后 ============
+void CreateShapeModel(const QImage& templateImage, ShapeModel& model, ...);
+
+// 调用
+ShapeModel model;
+CreateShapeModel(templ, model, ...);
+```
+
+---
 
 ## 变更日志
+
+### 2026-01-21 (API 重构全部完成 🎉)
+
+**最终统计**：共重构 **100+** 个公开 API 函数，全部符合 Halcon 风格规范。
+
+#### IO 模块 (7 个函数)
+- `ReadImage` (2个重载)、`ReadImageRaw`、`ReadImageAs`、`ReadImageGray` → 改为 `void Func(..., QImage& out, ...)`
+- `ReadSequence`、`ReadDirectory` → 改为 `void Func(..., std::vector<QImage>& out, ...)`
+- 无外部调用需更新，编译验证通过
+
+#### Matching 模块 (6 个函数)
+- `CreateShapeModel` (3个重载)、`CreateScaledShapeModel` → 改为 `void Func(..., ShapeModel& model, ...)`
+- `ReadShapeModel` → 改为 `void ReadShapeModel(filename, ShapeModel& model)`
+- `GetShapeModelXLD` → 改为 `void GetShapeModelXLD(model, level, QContourArray& contours)`
+- 已更新调用：shape_match.cpp、test_create_model.cpp、Draw.cpp
+- 编译验证通过
+
+#### Blob 模块 (15 个函数)
+- `Connection` (2个重载) → 改为 `void Connection(..., std::vector<QRegion>& out)`
+- `SelectShape` 系列 (10个) → 改为 `void SelectShape(..., std::vector<QRegion>& out, ...)`
+- `SortRegion` (2个重载) → 改为 `void SortRegion(..., std::vector<QRegion>& out, ...)`
+- `GetHoles` → 改为 `void GetHoles(region, std::vector<QRegion>& holes)`
+- `FillUp` → 改为 `void FillUp(region, QRegion& filled)`
+- 无外部调用需更新，编译验证通过
+
+**允许返回值的例外情况**（符合规范）：
+- 查询函数：`Circularity()`, `Compactness()`, `SelectObj()` 等
+- 类型转换：`GrayToRgb()`, `PrepareForDrawing()` 等
+- 构造函数：`QImage::FromFile()`, `CreateColorTransLut()` 等
+- Internal 模块：非公开 API，不强制遵循规范
+
+### 2026-01-21 (Color 模块)
+- **Color 模块重构完成**：所有 34 个 Color 函数已转换为 Halcon 风格 API
+  - 修改 ColorConvert.h 头文件：所有函数签名改为 `void Func(const QImage& in, QImage& out, params)`
+  - 修改 ColorConvert.cpp 源文件：所有实现改为输出参数风格
+  - 编译验证通过
+
+### 2026-01-21 (Filter 模块)
+- **Filter 模块重构完成**：所有 33 个 Filter 函数已转换为 Halcon 风格 API
+  - 修改 Filter.h 头文件：所有函数签名改为 `void Func(const QImage& in, QImage& out, params)`
+  - 修改 Filter.cpp 源文件：所有实现改为输出参数风格
+  - 编译验证通过
+
+### 2026-01-21
+- **重大更新**：完整列出所有需要重构的公开 API（85 个函数）
+- 添加详细的函数签名对照表
+- 添加重构统计表
+- 确认 Measure、Display、Core 模块已符合规范
+- Filter (31个)、Color (28个)、Blob (13个)、IO (7个)、Matching (6个) 需要重构
 
 ### 2025-01-12
 - 创建 API 重命名映射文档
 - 分析所有公共 API 并确定重命名策略
-- 确认 Measure 模块已符合命名规范
-- ShapeModel 模块需要重命名

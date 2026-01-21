@@ -4,6 +4,8 @@
  * @file Filter.h
  * @brief Image filtering operations (Halcon-style API)
  *
+ * API Style: void Func(const QImage& in, QImage& out, params...)
+ *
  * Halcon reference operators:
  * - gauss_filter, mean_image, median_image
  * - bilateral_filter, binomial_filter
@@ -33,39 +35,41 @@ namespace Qi::Vision::Filter {
  * Equivalent to Halcon's gauss_filter / gauss_image operator.
  *
  * @param image Input image
+ * @param output Output filtered image
  * @param sigma Gaussian sigma (standard deviation)
- * @return Filtered image
  *
  * @code
- * QImage smooth = GaussFilter(image, 1.5);  // sigma = 1.5
+ * QImage smooth;
+ * GaussFilter(image, smooth, 1.5);  // sigma = 1.5
  * @endcode
  */
-QImage GaussFilter(const QImage& image, double sigma);
+void GaussFilter(const QImage& image, QImage& output, double sigma);
 
 /**
  * @brief Apply Gaussian filter with separate X/Y sigmas
  *
  * @param image Input image
+ * @param output Output filtered image
  * @param sigmaX Sigma in X direction
  * @param sigmaY Sigma in Y direction
  * @param borderMode Border handling mode: "reflect", "replicate", "constant"
- * @return Filtered image
  */
-QImage GaussFilter(const QImage& image, double sigmaX, double sigmaY,
-                    const std::string& borderMode = "reflect");
+void GaussFilter(const QImage& image, QImage& output, double sigmaX, double sigmaY,
+                  const std::string& borderMode = "reflect");
 
 /**
  * @brief Apply Gaussian filter with specified kernel size
  *
  * @param image Input image
+ * @param output Output filtered image
  * @param size Filter size: "3x3", "5x5", "7x7", "9x9", "11x11"
- * @return Filtered image
  *
  * @code
- * QImage smooth = GaussImage(image, "5x5");
+ * QImage smooth;
+ * GaussImage(image, smooth, "5x5");
  * @endcode
  */
-QImage GaussImage(const QImage& image, const std::string& size);
+void GaussImage(const QImage& image, QImage& output, const std::string& size);
 
 /**
  * @brief Apply mean (box) filter
@@ -73,19 +77,19 @@ QImage GaussImage(const QImage& image, const std::string& size);
  * Equivalent to Halcon's mean_image operator.
  *
  * @param image Input image
+ * @param output Output filtered image
  * @param width Kernel width
  * @param height Kernel height
  * @param borderMode Border handling mode
- * @return Filtered image
  */
-QImage MeanImage(const QImage& image, int32_t width, int32_t height,
-                  const std::string& borderMode = "reflect");
+void MeanImage(const QImage& image, QImage& output, int32_t width, int32_t height,
+                const std::string& borderMode = "reflect");
 
 /**
  * @brief Apply mean filter with square kernel
  */
-QImage MeanImage(const QImage& image, int32_t size,
-                  const std::string& borderMode = "reflect");
+void MeanImage(const QImage& image, QImage& output, int32_t size,
+                const std::string& borderMode = "reflect");
 
 /**
  * @brief Apply median filter
@@ -93,22 +97,23 @@ QImage MeanImage(const QImage& image, int32_t size,
  * Equivalent to Halcon's median_image operator.
  *
  * @param image Input image
+ * @param output Output filtered image
  * @param maskType Mask type: "circle", "square", "rhombus"
  * @param radius Mask radius
  * @param marginMode Border handling: "mirrored", "cyclic", "continued"
- * @return Filtered image
  *
  * @code
- * QImage denoised = MedianImage(image, "circle", 2, "mirrored");
+ * QImage denoised;
+ * MedianImage(image, denoised, "circle", 2, "mirrored");
  * @endcode
  */
-QImage MedianImage(const QImage& image, const std::string& maskType,
-                    int32_t radius, const std::string& marginMode = "mirrored");
+void MedianImage(const QImage& image, QImage& output, const std::string& maskType,
+                  int32_t radius, const std::string& marginMode = "mirrored");
 
 /**
  * @brief Apply median filter with rectangular mask
  */
-QImage MedianRect(const QImage& image, int32_t width, int32_t height);
+void MedianRect(const QImage& image, QImage& output, int32_t width, int32_t height);
 
 /**
  * @brief Apply bilateral filter (edge-preserving smoothing)
@@ -116,27 +121,28 @@ QImage MedianRect(const QImage& image, int32_t width, int32_t height);
  * Equivalent to Halcon's bilateral_filter operator.
  *
  * @param image Input image
+ * @param output Output filtered image
  * @param sigmaSpatial Spatial sigma (distance weight)
  * @param sigmaIntensity Intensity sigma (color similarity weight)
- * @return Filtered image
  *
  * @code
- * QImage smooth = BilateralFilter(image, 5.0, 30.0);
+ * QImage smooth;
+ * BilateralFilter(image, smooth, 5.0, 30.0);
  * @endcode
  */
-QImage BilateralFilter(const QImage& image, double sigmaSpatial, double sigmaIntensity);
+void BilateralFilter(const QImage& image, QImage& output, double sigmaSpatial, double sigmaIntensity);
 
 /**
  * @brief Apply bilateral filter with kernel size
  *
  * @param image Input image
+ * @param output Output filtered image
  * @param size Kernel size
  * @param sigmaSpatial Spatial sigma
  * @param sigmaIntensity Intensity sigma
- * @return Filtered image
  */
-QImage BilateralFilter(const QImage& image, int32_t size,
-                        double sigmaSpatial, double sigmaIntensity);
+void BilateralFilter(const QImage& image, QImage& output, int32_t size,
+                      double sigmaSpatial, double sigmaIntensity);
 
 /**
  * @brief Apply binomial filter (approximation of Gaussian)
@@ -145,13 +151,13 @@ QImage BilateralFilter(const QImage& image, int32_t size,
  * Faster than Gaussian, uses binomial coefficients.
  *
  * @param image Input image
+ * @param output Output filtered image
  * @param width Kernel width (odd, typically 3, 5, 7)
  * @param height Kernel height (odd)
  * @param borderMode Border handling
- * @return Filtered image
  */
-QImage BinomialFilter(const QImage& image, int32_t width, int32_t height,
-                       const std::string& borderMode = "reflect");
+void BinomialFilter(const QImage& image, QImage& output, int32_t width, int32_t height,
+                     const std::string& borderMode = "reflect");
 
 // =============================================================================
 // Derivative Filters
@@ -163,16 +169,17 @@ QImage BinomialFilter(const QImage& image, int32_t width, int32_t height,
  * Equivalent to Halcon's sobel_amp operator.
  *
  * @param image Input image
+ * @param output Output gradient magnitude image
  * @param filterType Filter type: "sum_abs" (|Gx|+|Gy|), "sum_sqrt" (sqrt(Gx^2+Gy^2))
  * @param size Kernel size: 3, 5, 7
- * @return Gradient magnitude image
  *
  * @code
- * QImage edges = SobelAmp(image, "sum_abs", 3);
+ * QImage edges;
+ * SobelAmp(image, edges, "sum_abs", 3);
  * @endcode
  */
-QImage SobelAmp(const QImage& image, const std::string& filterType = "sum_abs",
-                 int32_t size = 3);
+void SobelAmp(const QImage& image, QImage& output, const std::string& filterType = "sum_abs",
+               int32_t size = 3);
 
 /**
  * @brief Compute Sobel direction (gradient angle)
@@ -180,12 +187,12 @@ QImage SobelAmp(const QImage& image, const std::string& filterType = "sum_abs",
  * Equivalent to Halcon's sobel_dir operator.
  *
  * @param image Input image
+ * @param output Output direction image (angle in radians)
  * @param dirType Direction type: "gradient" (edge normal), "tangent" (edge direction)
  * @param size Kernel size
- * @return Direction image (angle in radians)
  */
-QImage SobelDir(const QImage& image, const std::string& dirType = "gradient",
-                 int32_t size = 3);
+void SobelDir(const QImage& image, QImage& output, const std::string& dirType = "gradient",
+               int32_t size = 3);
 
 /**
  * @brief Compute Prewitt amplitude (gradient magnitude)
@@ -194,14 +201,15 @@ QImage SobelDir(const QImage& image, const std::string& dirType = "gradient",
  * Uses uniform smoothing kernel [1,1,1]/3 instead of Sobel's [1,2,1]/4.
  *
  * @param image Input image
+ * @param output Output gradient magnitude image
  * @param filterType Filter type: "sum_abs" (|Gx|+|Gy|), "sum_sqrt" (sqrt(Gx^2+Gy^2))
- * @return Gradient magnitude image
  *
  * @code
- * QImage edges = PrewittAmp(image, "sum_abs");
+ * QImage edges;
+ * PrewittAmp(image, edges, "sum_abs");
  * @endcode
  */
-QImage PrewittAmp(const QImage& image, const std::string& filterType = "sum_abs");
+void PrewittAmp(const QImage& image, QImage& output, const std::string& filterType = "sum_abs");
 
 /**
  * @brief Compute Roberts cross gradient (2x2 diagonal derivative)
@@ -210,14 +218,15 @@ QImage PrewittAmp(const QImage& image, const std::string& filterType = "sum_abs"
  * Uses 2x2 kernels: [[1,0],[0,-1]] and [[0,1],[-1,0]]
  *
  * @param image Input image
+ * @param output Output gradient magnitude image
  * @param filterType Filter type: "sum_abs" (|Gx|+|Gy|), "sum_sqrt" (sqrt(Gx^2+Gy^2))
- * @return Gradient magnitude image
  *
  * @code
- * QImage edges = RobertsAmp(image, "sum_abs");
+ * QImage edges;
+ * RobertsAmp(image, edges, "sum_abs");
  * @endcode
  */
-QImage RobertsAmp(const QImage& image, const std::string& filterType = "sum_abs");
+void RobertsAmp(const QImage& image, QImage& output, const std::string& filterType = "sum_abs");
 
 /**
  * @brief Compute Gaussian derivative
@@ -225,44 +234,45 @@ QImage RobertsAmp(const QImage& image, const std::string& filterType = "sum_abs"
  * Equivalent to Halcon's derivate_gauss operator.
  *
  * @param image Input image
+ * @param output Output derivative image
  * @param sigma Gaussian sigma
  * @param component Derivative component: "x", "y", "xx", "xy", "yy", "gradient"
- * @return Derivative image
  *
  * @code
- * QImage gx = DerivateGauss(image, 1.5, "x");      // First derivative in X
- * QImage gxx = DerivateGauss(image, 1.5, "xx");    // Second derivative in X
- * QImage gxy = DerivateGauss(image, 1.5, "xy");    // Mixed second derivative
+ * QImage gx;
+ * DerivateGauss(image, gx, 1.5, "x");      // First derivative in X
+ * QImage gxx;
+ * DerivateGauss(image, gxx, 1.5, "xx");    // Second derivative in X
  * @endcode
  */
-QImage DerivateGauss(const QImage& image, double sigma, const std::string& component);
+void DerivateGauss(const QImage& image, QImage& output, double sigma, const std::string& component);
 
 /**
  * @brief Compute gradient magnitude using Gaussian derivatives
  *
  * @param image Input image
+ * @param output Output gradient magnitude image
  * @param sigma Gaussian sigma
- * @return Gradient magnitude image
  */
-QImage GradientMagnitude(const QImage& image, double sigma);
+void GradientMagnitude(const QImage& image, QImage& output, double sigma);
 
 /**
  * @brief Compute gradient direction using Gaussian derivatives
  *
  * @param image Input image
+ * @param output Output gradient direction image (radians)
  * @param sigma Gaussian sigma
- * @return Gradient direction image (radians)
  */
-QImage GradientDirection(const QImage& image, double sigma);
+void GradientDirection(const QImage& image, QImage& output, double sigma);
 
 /**
  * @brief Apply Laplacian filter
  *
  * @param image Input image
+ * @param output Output Laplacian image
  * @param filterType Filter type: "3x3", "5x5", "n4" (4-connected), "n8" (8-connected)
- * @return Laplacian image
  */
-QImage Laplace(const QImage& image, const std::string& filterType = "3x3");
+void Laplace(const QImage& image, QImage& output, const std::string& filterType = "3x3");
 
 /**
  * @brief Apply Laplacian of Gaussian (LoG) filter
@@ -270,14 +280,15 @@ QImage Laplace(const QImage& image, const std::string& filterType = "3x3");
  * Equivalent to Halcon's laplace_of_gauss operator.
  *
  * @param image Input image
+ * @param output Output LoG filtered image
  * @param sigma Gaussian sigma
- * @return LoG filtered image
  *
  * @code
- * QImage log = LaplacianOfGaussian(image, 2.0);
+ * QImage log;
+ * LaplacianOfGaussian(image, log, 2.0);
  * @endcode
  */
-QImage LaplacianOfGaussian(const QImage& image, double sigma);
+void LaplacianOfGaussian(const QImage& image, QImage& output, double sigma);
 
 // =============================================================================
 // Frequency Domain Filters
@@ -289,11 +300,11 @@ QImage LaplacianOfGaussian(const QImage& image, double sigma);
  * Equivalent to Halcon's highpass_image operator.
  *
  * @param image Input image
+ * @param output Output highpass filtered image
  * @param width Kernel width
  * @param height Kernel height
- * @return Highpass filtered image
  */
-QImage HighpassImage(const QImage& image, int32_t width, int32_t height);
+void HighpassImage(const QImage& image, QImage& output, int32_t width, int32_t height);
 
 /**
  * @brief Apply lowpass filter
@@ -302,11 +313,11 @@ QImage HighpassImage(const QImage& image, int32_t width, int32_t height);
  * Same as MeanImage but with different naming convention.
  *
  * @param image Input image
+ * @param output Output lowpass filtered image
  * @param width Kernel width
  * @param height Kernel height
- * @return Lowpass filtered image
  */
-QImage LowpassImage(const QImage& image, int32_t width, int32_t height);
+void LowpassImage(const QImage& image, QImage& output, int32_t width, int32_t height);
 
 // =============================================================================
 // Enhancement Filters
@@ -318,38 +329,39 @@ QImage LowpassImage(const QImage& image, int32_t width, int32_t height);
  * Equivalent to Halcon's emphasize operator.
  *
  * @param image Input image
+ * @param output Output enhanced image
  * @param width Kernel width
  * @param height Kernel height
  * @param factor Enhancement factor (1.0 = no change, >1 = more enhancement)
- * @return Enhanced image
  *
  * @code
- * QImage sharp = EmphasizeImage(image, 7, 7, 1.5);
+ * QImage sharp;
+ * EmphasizeImage(image, sharp, 7, 7, 1.5);
  * @endcode
  */
-QImage EmphasizeImage(const QImage& image, int32_t width, int32_t height, double factor);
+void EmphasizeImage(const QImage& image, QImage& output, int32_t width, int32_t height, double factor);
 
 /**
  * @brief Apply unsharp mask (sharpening)
  *
  * @param image Input image
+ * @param output Output sharpened image
  * @param sigma Gaussian sigma for blur
  * @param amount Sharpening amount (1.0 = standard)
  * @param threshold Threshold for detail (0 = sharpen everything)
- * @return Sharpened image
  */
-QImage UnsharpMask(const QImage& image, double sigma, double amount = 1.0,
-                    double threshold = 0.0);
+void UnsharpMask(const QImage& image, QImage& output, double sigma, double amount = 1.0,
+                  double threshold = 0.0);
 
 /**
  * @brief Apply shock filter (edge-enhancing diffusion)
  *
  * @param image Input image
+ * @param output Output filtered image
  * @param iterations Number of iterations
  * @param dt Time step
- * @return Filtered image
  */
-QImage ShockFilter(const QImage& image, int32_t iterations, double dt = 0.1);
+void ShockFilter(const QImage& image, QImage& output, int32_t iterations, double dt = 0.1);
 
 // =============================================================================
 // Anisotropic Diffusion
@@ -362,19 +374,20 @@ QImage ShockFilter(const QImage& image, int32_t iterations, double dt = 0.1);
  * Edge-preserving smoothing using nonlinear diffusion.
  *
  * @param image Input image
+ * @param output Output filtered image
  * @param mode Diffusion mode: "pm1" (favors high-contrast edges),
  *             "pm2" (favors wide regions)
  * @param contrast Contrast parameter (edge threshold)
  * @param theta Diffusion coefficient (0-0.25)
  * @param iterations Number of iterations
- * @return Filtered image
  *
  * @code
- * QImage smooth = AnisoDiff(image, "pm1", 30.0, 0.25, 10);
+ * QImage smooth;
+ * AnisoDiff(image, smooth, "pm1", 30.0, 0.25, 10);
  * @endcode
  */
-QImage AnisoDiff(const QImage& image, const std::string& mode,
-                  double contrast, double theta, int32_t iterations);
+void AnisoDiff(const QImage& image, QImage& output, const std::string& mode,
+                double contrast, double theta, int32_t iterations);
 
 // =============================================================================
 // Custom Convolution
@@ -386,32 +399,32 @@ QImage AnisoDiff(const QImage& image, const std::string& mode,
  * Equivalent to Halcon's convol_image operator.
  *
  * @param image Input image
+ * @param output Output convolved image
  * @param kernel Convolution kernel (row-major, size = kernelWidth * kernelHeight)
  * @param kernelWidth Kernel width (must be odd)
  * @param kernelHeight Kernel height (must be odd)
  * @param normalize If true, normalize kernel to sum to 1
  * @param borderMode Border handling
- * @return Convolved image
  */
-QImage ConvolImage(const QImage& image,
-                    const std::vector<double>& kernel,
-                    int32_t kernelWidth, int32_t kernelHeight,
-                    bool normalize = false,
-                    const std::string& borderMode = "reflect");
+void ConvolImage(const QImage& image, QImage& output,
+                  const std::vector<double>& kernel,
+                  int32_t kernelWidth, int32_t kernelHeight,
+                  bool normalize = false,
+                  const std::string& borderMode = "reflect");
 
 /**
  * @brief Apply separable convolution
  *
  * @param image Input image
+ * @param output Output convolved image
  * @param kernelX Horizontal kernel
  * @param kernelY Vertical kernel
  * @param borderMode Border handling
- * @return Convolved image
  */
-QImage ConvolSeparable(const QImage& image,
-                        const std::vector<double>& kernelX,
-                        const std::vector<double>& kernelY,
-                        const std::string& borderMode = "reflect");
+void ConvolSeparable(const QImage& image, QImage& output,
+                      const std::vector<double>& kernelX,
+                      const std::vector<double>& kernelY,
+                      const std::string& borderMode = "reflect");
 
 // =============================================================================
 // Rank Filters
@@ -421,22 +434,22 @@ QImage ConvolSeparable(const QImage& image,
  * @brief Apply rank filter
  *
  * @param image Input image
+ * @param output Output filtered image
  * @param width Kernel width
  * @param height Kernel height
  * @param rank Rank (0 = minimum, width*height-1 = maximum)
- * @return Filtered image
  */
-QImage RankImage(const QImage& image, int32_t width, int32_t height, int32_t rank);
+void RankImage(const QImage& image, QImage& output, int32_t width, int32_t height, int32_t rank);
 
 /**
  * @brief Apply minimum filter (gray erosion)
  */
-QImage MinImage(const QImage& image, int32_t width, int32_t height);
+void MinImage(const QImage& image, QImage& output, int32_t width, int32_t height);
 
 /**
  * @brief Apply maximum filter (gray dilation)
  */
-QImage MaxImage(const QImage& image, int32_t width, int32_t height);
+void MaxImage(const QImage& image, QImage& output, int32_t width, int32_t height);
 
 // =============================================================================
 // Texture Filters
@@ -446,33 +459,33 @@ QImage MaxImage(const QImage& image, int32_t width, int32_t height);
  * @brief Compute local standard deviation
  *
  * @param image Input image
+ * @param output Output standard deviation image
  * @param width Window width
  * @param height Window height
- * @return Standard deviation image
  */
-QImage StdDevImage(const QImage& image, int32_t width, int32_t height);
+void StdDevImage(const QImage& image, QImage& output, int32_t width, int32_t height);
 
 /**
  * @brief Compute local variance
  *
  * @param image Input image
+ * @param output Output variance image
  * @param width Window width
  * @param height Window height
- * @return Variance image
  */
-QImage VarianceImage(const QImage& image, int32_t width, int32_t height);
+void VarianceImage(const QImage& image, QImage& output, int32_t width, int32_t height);
 
 /**
  * @brief Compute local entropy
  *
  * @param image Input image
+ * @param output Output entropy image
  * @param width Window width
  * @param height Window height
  * @param numBins Number of histogram bins
- * @return Entropy image
  */
-QImage EntropyImage(const QImage& image, int32_t width, int32_t height,
-                     int32_t numBins = 256);
+void EntropyImage(const QImage& image, QImage& output, int32_t width, int32_t height,
+                   int32_t numBins = 256);
 
 // =============================================================================
 // Utility Functions

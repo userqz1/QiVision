@@ -4,6 +4,8 @@
  * @file ColorConvert.h
  * @brief Color space conversion and channel operations (Halcon-style API)
  *
+ * API Style: void Func(const QImage& in, QImage& out, params...)
+ *
  * Halcon reference operators:
  * - trans_from_rgb, trans_to_rgb
  * - decompose3, decompose4, compose3, compose4
@@ -69,18 +71,17 @@ enum class WhitePoint {
  * @brief Convert image from one color space to another
  *
  * @param image Input image
+ * @param output Output converted image
  * @param fromSpace Source color space
  * @param toSpace Target color space
- * @return Converted image
  *
  * @code
- * QImage hsv = ConvertColorSpace(rgb, ColorSpace::RGB, ColorSpace::HSV);
- * QImage lab = ConvertColorSpace(rgb, ColorSpace::RGB, ColorSpace::Lab);
+ * QImage hsv;
+ * ConvertColorSpace(rgb, hsv, ColorSpace::RGB, ColorSpace::HSV);
  * @endcode
  */
-QImage ConvertColorSpace(const QImage& image,
-                          ColorSpace fromSpace,
-                          ColorSpace toSpace);
+void ConvertColorSpace(const QImage& image, QImage& output,
+                        ColorSpace fromSpace, ColorSpace toSpace);
 
 /**
  * @brief Convert RGB image to specified color space
@@ -88,20 +89,20 @@ QImage ConvertColorSpace(const QImage& image,
  * Equivalent to Halcon's trans_from_rgb operator.
  *
  * @param image Input RGB image
+ * @param output Output converted image
  * @param toSpace Target color space
- * @return Converted image
  */
-QImage TransFromRgb(const QImage& image, ColorSpace toSpace);
+void TransFromRgb(const QImage& image, QImage& output, ColorSpace toSpace);
 
 /**
  * @brief Convert RGB image to specified color space (string version)
  *
  * @param image Input RGB image
+ * @param output Output converted image
  * @param colorSpace Color space name: "gray", "hsv", "hsl", "lab", "luv",
  *                   "xyz", "ycrcb", "yuv", "bgr"
- * @return Converted image
  */
-QImage TransFromRgb(const QImage& image, const std::string& colorSpace);
+void TransFromRgb(const QImage& image, QImage& output, const std::string& colorSpace);
 
 /**
  * @brief Convert image to RGB from specified color space
@@ -109,15 +110,15 @@ QImage TransFromRgb(const QImage& image, const std::string& colorSpace);
  * Equivalent to Halcon's trans_to_rgb operator.
  *
  * @param image Input image in source color space
+ * @param output Output RGB image
  * @param fromSpace Source color space
- * @return RGB image
  */
-QImage TransToRgb(const QImage& image, ColorSpace fromSpace);
+void TransToRgb(const QImage& image, QImage& output, ColorSpace fromSpace);
 
 /**
  * @brief Convert image to RGB (string version)
  */
-QImage TransToRgb(const QImage& image, const std::string& colorSpace);
+void TransToRgb(const QImage& image, QImage& output, const std::string& colorSpace);
 
 // =============================================================================
 // Grayscale Conversion
@@ -129,6 +130,7 @@ QImage TransToRgb(const QImage& image, const std::string& colorSpace);
  * Equivalent to Halcon's rgb1_to_gray operator.
  *
  * @param image Input RGB/RGBA image
+ * @param output Output grayscale image
  * @param method Conversion method:
  *        - "luminosity" (default): 0.299*R + 0.587*G + 0.114*B
  *        - "average": (R + G + B) / 3
@@ -137,9 +139,9 @@ QImage TransToRgb(const QImage& image, const std::string& colorSpace);
  *        - "bt709": ITU-R BT.709 (0.2126*R + 0.7152*G + 0.0722*B)
  *        - "max": max(R, G, B)
  *        - "min": min(R, G, B)
- * @return Grayscale image
  */
-QImage Rgb1ToGray(const QImage& image, const std::string& method = "luminosity");
+void Rgb1ToGray(const QImage& image, QImage& output,
+                 const std::string& method = "luminosity");
 
 /**
  * @brief Convert 3-channel RGB to grayscale
@@ -149,19 +151,19 @@ QImage Rgb1ToGray(const QImage& image, const std::string& method = "luminosity")
  * @param red Red channel image
  * @param green Green channel image
  * @param blue Blue channel image
+ * @param output Output grayscale image
  * @param method Conversion method
- * @return Grayscale image
  */
-QImage Rgb3ToGray(const QImage& red, const QImage& green, const QImage& blue,
-                   const std::string& method = "luminosity");
+void Rgb3ToGray(const QImage& red, const QImage& green, const QImage& blue,
+                 QImage& output, const std::string& method = "luminosity");
 
 /**
  * @brief Convert grayscale to RGB (replicate to 3 channels)
  *
  * @param gray Grayscale image
- * @return RGB image with R=G=B=gray
+ * @param output Output RGB image with R=G=B=gray
  */
-QImage GrayToRgb(const QImage& gray);
+void GrayToRgb(const QImage& gray, QImage& output);
 
 // =============================================================================
 // Channel Decomposition
@@ -180,9 +182,6 @@ QImage GrayToRgb(const QImage& gray);
  * @code
  * QImage r, g, b;
  * Decompose3(rgbImage, r, g, b);
- *
- * QImage h, s, v;
- * Decompose3(hsvImage, h, s, v);
  * @endcode
  */
 void Decompose3(const QImage& image,
@@ -204,20 +203,20 @@ void Decompose4(const QImage& image,
  * @param ch1 First channel
  * @param ch2 Second channel
  * @param ch3 Third channel
+ * @param output Output composed multi-channel image
  * @param channelType Output channel type (RGB, HSV, Lab, etc.)
- * @return Composed multi-channel image
  */
-QImage Compose3(const QImage& ch1, const QImage& ch2, const QImage& ch3,
-                 ChannelType channelType = ChannelType::RGB);
+void Compose3(const QImage& ch1, const QImage& ch2, const QImage& ch3,
+               QImage& output, ChannelType channelType = ChannelType::RGB);
 
 /**
  * @brief Compose 4 channels into multi-channel image
  *
  * Equivalent to Halcon's compose4 operator.
  */
-QImage Compose4(const QImage& ch1, const QImage& ch2,
-                 const QImage& ch3, const QImage& ch4,
-                 ChannelType channelType = ChannelType::RGBA);
+void Compose4(const QImage& ch1, const QImage& ch2,
+               const QImage& ch3, const QImage& ch4,
+               QImage& output, ChannelType channelType = ChannelType::RGBA);
 
 // =============================================================================
 // Channel Access
@@ -229,15 +228,15 @@ QImage Compose4(const QImage& ch1, const QImage& ch2,
  * Equivalent to Halcon's access_channel operator.
  *
  * @param image Input image
+ * @param output Output single channel image (copy)
  * @param channelIndex Channel index (0-based)
- * @return Single channel image (copy)
  *
  * @code
- * QImage blue = AccessChannel(rgbImage, 2);  // RGB: 0=R, 1=G, 2=B
- * QImage hue = AccessChannel(hsvImage, 0);   // HSV: 0=H, 1=S, 2=V
+ * QImage blue;
+ * AccessChannel(rgbImage, blue, 2);  // RGB: 0=R, 1=G, 2=B
  * @endcode
  */
-QImage AccessChannel(const QImage& image, int32_t channelIndex);
+void AccessChannel(const QImage& image, QImage& output, int32_t channelIndex);
 
 /**
  * @brief Get number of channels in image
@@ -253,19 +252,19 @@ int32_t CountChannels(const QImage& image);
  * @brief Extract all channels as vector of images
  *
  * @param image Input image
- * @return Vector of single-channel images
+ * @param channels Output vector of single-channel images
  */
-std::vector<QImage> SplitChannels(const QImage& image);
+void SplitChannels(const QImage& image, std::vector<QImage>& channels);
 
 /**
  * @brief Merge vector of channels into multi-channel image
  *
  * @param channels Vector of single-channel images
+ * @param output Output merged multi-channel image
  * @param channelType Output channel type
- * @return Merged multi-channel image
  */
-QImage MergeChannels(const std::vector<QImage>& channels,
-                      ChannelType channelType = ChannelType::RGB);
+void MergeChannels(const std::vector<QImage>& channels, QImage& output,
+                    ChannelType channelType = ChannelType::RGB);
 
 // =============================================================================
 // Channel Swapping and Reordering
@@ -275,29 +274,30 @@ QImage MergeChannels(const std::vector<QImage>& channels,
  * @brief Convert between RGB and BGR
  *
  * @param image Input image
- * @return Image with swapped R and B channels
+ * @param output Output image with swapped R and B channels
  */
-QImage RgbToBgr(const QImage& image);
-QImage BgrToRgb(const QImage& image);
+void RgbToBgr(const QImage& image, QImage& output);
+void BgrToRgb(const QImage& image, QImage& output);
 
 /**
  * @brief Swap two channels
  *
  * @param image Input image
+ * @param output Output image with swapped channels
  * @param ch1 First channel index
  * @param ch2 Second channel index
- * @return Image with swapped channels
  */
-QImage SwapChannels(const QImage& image, int32_t ch1, int32_t ch2);
+void SwapChannels(const QImage& image, QImage& output, int32_t ch1, int32_t ch2);
 
 /**
  * @brief Reorder channels
  *
  * @param image Input image
+ * @param output Output image with reordered channels
  * @param order Channel order (e.g., {2, 1, 0} for RGB->BGR)
- * @return Image with reordered channels
  */
-QImage ReorderChannels(const QImage& image, const std::vector<int32_t>& order);
+void ReorderChannels(const QImage& image, QImage& output,
+                      const std::vector<int32_t>& order);
 
 // =============================================================================
 // Color Adjustment
@@ -307,54 +307,54 @@ QImage ReorderChannels(const QImage& image, const std::vector<int32_t>& order);
  * @brief Adjust image brightness
  *
  * @param image Input image
+ * @param output Output adjusted image
  * @param brightness Brightness adjustment [-255, 255]
- * @return Adjusted image
  */
-QImage AdjustBrightness(const QImage& image, double brightness);
+void AdjustBrightness(const QImage& image, QImage& output, double brightness);
 
 /**
  * @brief Adjust image contrast
  *
  * @param image Input image
+ * @param output Output adjusted image
  * @param contrast Contrast factor (1.0 = no change, >1 = more contrast)
- * @return Adjusted image
  */
-QImage AdjustContrast(const QImage& image, double contrast);
+void AdjustContrast(const QImage& image, QImage& output, double contrast);
 
 /**
  * @brief Adjust saturation (for color images)
  *
  * @param image Input image (RGB)
+ * @param output Output adjusted image
  * @param saturation Saturation factor (1.0 = no change, 0 = grayscale, >1 = more saturated)
- * @return Adjusted image
  */
-QImage AdjustSaturation(const QImage& image, double saturation);
+void AdjustSaturation(const QImage& image, QImage& output, double saturation);
 
 /**
  * @brief Adjust hue (for color images)
  *
  * @param image Input image (RGB)
+ * @param output Output adjusted image
  * @param hueShift Hue shift in degrees [-180, 180]
- * @return Adjusted image
  */
-QImage AdjustHue(const QImage& image, double hueShift);
+void AdjustHue(const QImage& image, QImage& output, double hueShift);
 
 /**
  * @brief Apply gamma correction
  *
  * @param image Input image
+ * @param output Output gamma-corrected image
  * @param gamma Gamma value (1.0 = no change, <1 = brighter, >1 = darker)
- * @return Gamma-corrected image
  */
-QImage AdjustGamma(const QImage& image, double gamma);
+void AdjustGamma(const QImage& image, QImage& output, double gamma);
 
 /**
  * @brief Invert image colors
  *
  * @param image Input image
- * @return Inverted image (255 - pixel for UInt8)
+ * @param output Output inverted image (255 - pixel for UInt8)
  */
-QImage InvertColors(const QImage& image);
+void InvertColors(const QImage& image, QImage& output);
 
 /**
  * @brief Scale image intensity values linearly
@@ -363,16 +363,16 @@ QImage InvertColors(const QImage& image);
  * Output = Input * mult + add
  *
  * @param image Input image
+ * @param output Output scaled image
  * @param mult Multiplication factor
  * @param add Addition value
- * @return Scaled image
  *
  * @code
- * QImage bright = ScaleImage(image, 1.2, 20);  // Increase brightness
- * QImage contrast = ScaleImage(image, 1.5, -64);  // Increase contrast
+ * QImage bright;
+ * ScaleImage(image, bright, 1.2, 20);  // Increase brightness
  * @endcode
  */
-QImage ScaleImage(const QImage& image, double mult, double add);
+void ScaleImage(const QImage& image, QImage& output, double mult, double add);
 
 /**
  * @brief Scale image to full dynamic range
@@ -381,13 +381,9 @@ QImage ScaleImage(const QImage& image, double mult, double add);
  * Linearly maps [min, max] to [0, 255].
  *
  * @param image Input image
- * @return Scaled image with full dynamic range
- *
- * @code
- * QImage enhanced = ScaleImageMax(image);
- * @endcode
+ * @param output Output scaled image with full dynamic range
  */
-QImage ScaleImageMax(const QImage& image);
+void ScaleImageMax(const QImage& image, QImage& output);
 
 /**
  * @brief Apply histogram equalization
@@ -396,13 +392,9 @@ QImage ScaleImageMax(const QImage& image);
  * Enhances contrast by redistributing intensity values.
  *
  * @param image Input grayscale image
- * @return Equalized image
- *
- * @code
- * QImage enhanced = EquHistoImage(image);
- * @endcode
+ * @param output Output equalized image
  */
-QImage EquHistoImage(const QImage& image);
+void EquHistoImage(const QImage& image, QImage& output);
 
 // =============================================================================
 // Histogram Analysis
@@ -416,12 +408,6 @@ QImage EquHistoImage(const QImage& image);
  * @param image Input grayscale image
  * @param[out] absoluteHisto Absolute histogram (pixel counts, 256 bins)
  * @param[out] relativeHisto Relative histogram (normalized to sum=1)
- *
- * @code
- * std::vector<int64_t> absHisto;
- * std::vector<double> relHisto;
- * GrayHisto(image, absHisto, relHisto);
- * @endcode
  */
 void GrayHisto(const QImage& image,
                std::vector<int64_t>& absoluteHisto,
@@ -487,24 +473,26 @@ double GrayHistoPercentile(const QImage& image, double percentile);
  * @brief Apply automatic white balance
  *
  * @param image Input RGB image
+ * @param output Output white-balanced image
  * @param method Method:
  *        - "gray_world": Assume average color is gray
  *        - "white_patch": Assume brightest pixel is white
  *        - "histogram_stretch": Per-channel histogram stretching
- * @return White-balanced image
  */
-QImage AutoWhiteBalance(const QImage& image, const std::string& method = "gray_world");
+void AutoWhiteBalance(const QImage& image, QImage& output,
+                       const std::string& method = "gray_world");
 
 /**
  * @brief Apply white balance with specified white point
  *
  * @param image Input RGB image
+ * @param output Output white-balanced image
  * @param whiteR Reference R value for white
  * @param whiteG Reference G value for white
  * @param whiteB Reference B value for white
- * @return White-balanced image
  */
-QImage ApplyWhiteBalance(const QImage& image, double whiteR, double whiteG, double whiteB);
+void ApplyWhiteBalance(const QImage& image, QImage& output,
+                        double whiteR, double whiteG, double whiteB);
 
 // =============================================================================
 // Utility Functions
@@ -564,7 +552,7 @@ private:
     friend ColorTransLut CreateColorTransLut(const std::string&, const std::string&, int32_t);
     friend void ApplyColorTransLut(const QImage&, const QImage&, const QImage&,
                                    QImage&, QImage&, QImage&, const ColorTransLut&);
-    friend QImage ApplyColorTransLut(const QImage&, const ColorTransLut&);
+    friend void ApplyColorTransLut(const QImage&, QImage&, const ColorTransLut&);
     friend void ClearColorTransLut(ColorTransLut&);
 
     std::vector<uint8_t> lut_;  // 256*256*256*3 = 48MB
@@ -584,21 +572,6 @@ private:
  * @return LUT handle
  *
  * @note LUT requires ~48MB memory. Use ClearColorTransLut to release.
- *
- * @code
- * // Create LUT for RGB -> HSV
- * ColorTransLut lut = CreateColorTransLut("hsv", "from_rgb", 8);
- *
- * // Apply to many images
- * for (auto& img : images) {
- *     QImage h, s, v;
- *     Decompose3(img, r, g, b);
- *     ApplyColorTransLut(r, g, b, h, s, v, lut);
- * }
- *
- * // Release when done
- * ClearColorTransLut(lut);
- * @endcode
  */
 ColorTransLut CreateColorTransLut(const std::string& colorSpace,
                                    const std::string& transDirection = "from_rgb",
@@ -625,10 +598,10 @@ void ApplyColorTransLut(const QImage& image1, const QImage& image2, const QImage
  * @brief Apply color transformation using LUT (multi-channel version)
  *
  * @param image Input 3-channel image
+ * @param output Output transformed 3-channel image
  * @param lut LUT handle
- * @return Transformed 3-channel image
  */
-QImage ApplyColorTransLut(const QImage& image, const ColorTransLut& lut);
+void ApplyColorTransLut(const QImage& image, QImage& output, const ColorTransLut& lut);
 
 /**
  * @brief Release look-up table memory
@@ -650,6 +623,7 @@ void ClearColorTransLut(ColorTransLut& lut);
  * Used for single-chip CCD/CMOS camera raw images.
  *
  * @param cfaImage Input single-channel Bayer image (UInt8 or UInt16)
+ * @param output Output RGB image (3 channels, same bit depth as input)
  * @param cfaType Bayer pattern type:
  *        - "bayer_rg": RGGB pattern (R at top-left)
  *        - "bayer_gr": GRBG pattern (G at top-left, R next)
@@ -658,19 +632,15 @@ void ClearColorTransLut(ColorTransLut& lut);
  * @param interpolation Interpolation method:
  *        - "bilinear": Standard bilinear interpolation
  *        - "bilinear_dir": Direction-aware bilinear (reduces zipper artifacts)
- * @return RGB image (3 channels, same bit depth as input)
  *
  * @code
- * // Read raw Bayer image from camera
- * QImage raw = ReadImage("camera_raw.pgm");
- *
- * // Convert to RGB (camera uses RGGB pattern)
- * QImage rgb = CfaToRgb(raw, "bayer_rg", "bilinear_dir");
+ * QImage rgb;
+ * CfaToRgb(raw, rgb, "bayer_rg", "bilinear_dir");
  * @endcode
  */
-QImage CfaToRgb(const QImage& cfaImage,
-                const std::string& cfaType = "bayer_gb",
-                const std::string& interpolation = "bilinear");
+void CfaToRgb(const QImage& cfaImage, QImage& output,
+               const std::string& cfaType = "bayer_gb",
+               const std::string& interpolation = "bilinear");
 
 // =============================================================================
 // Linear Color Transformation
@@ -683,32 +653,25 @@ QImage CfaToRgb(const QImage& cfaImage,
  * Performs: output[i] = sum(transMat[i][j] * input[j]) + transMat[i][n]
  *
  * @param image Input multichannel image
+ * @param output Output transformed image (Float32 type)
  * @param transMat Transformation matrix (row-major, m x (n+1)):
  *        - m = number of output channels
  *        - n = number of input channels
  *        - Last column = offset values
  * @param numOutputChannels Number of output channels (rows in matrix)
- * @return Transformed image (Float32 type)
  *
  * @code
  * // RGB to grayscale with custom weights
  * std::vector<double> mat = {
  *     0.299, 0.587, 0.114, 0.0  // Y = 0.299*R + 0.587*G + 0.114*B + 0
  * };
- * QImage gray = LinearTransColor(rgbImage, mat, 1);
- *
- * // Color correction matrix (3x4)
- * std::vector<double> colorMat = {
- *     1.2, -0.1, -0.1, 0.0,   // R' = 1.2*R - 0.1*G - 0.1*B
- *     -0.1, 1.2, -0.1, 0.0,   // G' = -0.1*R + 1.2*G - 0.1*B
- *     -0.1, -0.1, 1.2, 0.0    // B' = -0.1*R - 0.1*G + 1.2*B
- * };
- * QImage corrected = LinearTransColor(image, colorMat, 3);
+ * QImage gray;
+ * LinearTransColor(rgbImage, gray, mat, 1);
  * @endcode
  */
-QImage LinearTransColor(const QImage& image,
-                        const std::vector<double>& transMat,
-                        int32_t numOutputChannels);
+void LinearTransColor(const QImage& image, QImage& output,
+                       const std::vector<double>& transMat,
+                       int32_t numOutputChannels);
 
 /**
  * @brief Apply color matrix transformation (3x3 matrix, no offset)
@@ -716,10 +679,11 @@ QImage LinearTransColor(const QImage& image,
  * Simplified version for common 3x3 color matrix.
  *
  * @param image Input 3-channel image
+ * @param output Output transformed 3-channel image
  * @param matrix 3x3 transformation matrix (row-major, 9 elements)
- * @return Transformed 3-channel image
  */
-QImage ApplyColorMatrix(const QImage& image, const std::vector<double>& matrix);
+void ApplyColorMatrix(const QImage& image, QImage& output,
+                       const std::vector<double>& matrix);
 
 // =============================================================================
 // Principal Component Analysis
@@ -731,10 +695,10 @@ QImage ApplyColorMatrix(const QImage& image, const std::vector<double>& matrix);
  * Equivalent to Halcon's principal_comp operator.
  *
  * @param image Input multichannel image
+ * @param output Output image with principal component channels
  * @param numComponents Number of principal components to compute (0 = all)
- * @return Transformed image with principal component channels
  */
-QImage PrincipalComp(const QImage& image, int32_t numComponents = 0);
+void PrincipalComp(const QImage& image, QImage& output, int32_t numComponents = 0);
 
 /**
  * @brief Generate principal component transformation matrix

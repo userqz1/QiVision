@@ -23,6 +23,7 @@
 #include <QiVision/Core/QContour.h>
 #include <QiVision/Core/QContourArray.h>
 #include <QiVision/Core/Types.h>
+#include <QiVision/Core/Draw.h>  // For Color struct
 
 #include <string>
 #include <vector>
@@ -37,34 +38,6 @@ namespace Measure {
     struct EdgeResult;
     struct PairResult;
 }
-
-// =============================================================================
-// Color Definition
-// =============================================================================
-
-/**
- * @brief RGB Color for drawing
- */
-struct DrawColor {
-    uint8_t r = 255;
-    uint8_t g = 255;
-    uint8_t b = 255;
-
-    DrawColor() = default;
-    DrawColor(uint8_t r_, uint8_t g_, uint8_t b_) : r(r_), g(g_), b(b_) {}
-    DrawColor(uint8_t gray) : r(gray), g(gray), b(gray) {}
-
-    // Predefined colors (Halcon style names)
-    static DrawColor Red()     { return DrawColor(255, 0, 0); }
-    static DrawColor Green()   { return DrawColor(0, 255, 0); }
-    static DrawColor Blue()    { return DrawColor(0, 0, 255); }
-    static DrawColor Yellow()  { return DrawColor(255, 255, 0); }
-    static DrawColor Cyan()    { return DrawColor(0, 255, 255); }
-    static DrawColor Magenta() { return DrawColor(255, 0, 255); }
-    static DrawColor White()   { return DrawColor(255, 255, 255); }
-    static DrawColor Black()   { return DrawColor(0, 0, 0); }
-    static DrawColor Orange()  { return DrawColor(255, 165, 0); }
-};
 
 // =============================================================================
 // Image Display Functions
@@ -110,13 +83,13 @@ void CleanDispImages();
  * @param thickness Line thickness (default: 1)
  */
 void DispLine(QImage& image, double row1, double col1, double row2, double col2,
-              const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+              const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
  * @brief Draw a line from Line2d
  */
 void DispLine(QImage& image, const Line2d& line, double length,
-              const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+              const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 // =============================================================================
 // Drawing Primitives - Circles and Arcs
@@ -135,13 +108,13 @@ void DispLine(QImage& image, const Line2d& line, double length,
  * @param thickness Line thickness (default: 1)
  */
 void DispCircle(QImage& image, double row, double column, double radius,
-                const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+                const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
  * @brief Draw a circle from Circle2d
  */
 void DispCircle(QImage& image, const Circle2d& circle,
-                const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+                const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
  * @brief Draw an ellipse
@@ -159,13 +132,13 @@ void DispCircle(QImage& image, const Circle2d& circle,
  */
 void DispEllipse(QImage& image, double row, double column, double phi,
                  double ra, double rb,
-                 const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+                 const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
  * @brief Draw an ellipse from Ellipse2d
  */
 void DispEllipse(QImage& image, const Ellipse2d& ellipse,
-                 const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+                 const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 // =============================================================================
 // Drawing Primitives - Rectangles
@@ -185,13 +158,13 @@ void DispEllipse(QImage& image, const Ellipse2d& ellipse,
  * @param thickness Line thickness
  */
 void DispRectangle1(QImage& image, double row1, double col1, double row2, double col2,
-                    const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+                    const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
  * @brief Draw an axis-aligned rectangle from Rect2i
  */
 void DispRectangle1(QImage& image, const Rect2i& rect,
-                    const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+                    const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
  * @brief Draw a rotated rectangle
@@ -209,7 +182,7 @@ void DispRectangle1(QImage& image, const Rect2i& rect,
  */
 void DispRectangle2(QImage& image, double row, double column, double phi,
                     double length1, double length2,
-                    const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+                    const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 // =============================================================================
 // Drawing Primitives - Markers
@@ -230,7 +203,7 @@ void DispRectangle2(QImage& image, double row, double column, double phi,
  */
 void DispCross(QImage& image, double row, double column, int32_t size,
                double angle = 0.0,
-               const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+               const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
  * @brief Draw an arrow
@@ -248,7 +221,7 @@ void DispCross(QImage& image, double row, double column, int32_t size,
  */
 void DispArrow(QImage& image, double row1, double col1, double row2, double col2,
                double headSize = 10.0,
-               const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+               const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 // =============================================================================
 // Drawing Primitives - Polygons and Contours
@@ -267,7 +240,7 @@ void DispArrow(QImage& image, double row1, double col1, double row2, double col2
  */
 void DispPolygon(QImage& image, const std::vector<double>& rows,
                  const std::vector<double>& cols,
-                 const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+                 const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
  * @brief Draw a contour (XLD)
@@ -280,13 +253,13 @@ void DispPolygon(QImage& image, const std::vector<double>& rows,
  * @param thickness Line thickness
  */
 void DispContour(QImage& image, const QContour& contour,
-                 const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+                 const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 /**
  * @brief Draw multiple contours
  */
 void DispContours(QImage& image, const QContourArray& contours,
-                  const DrawColor& color = DrawColor::Green(), int32_t thickness = 1);
+                  const Scalar& color = Scalar::Green(), int32_t thickness = 1);
 
 // =============================================================================
 // Drawing Primitives - Points
@@ -301,7 +274,7 @@ void DispContours(QImage& image, const QContourArray& contours,
  * @param color Drawing color
  */
 void DispPoint(QImage& image, double row, double column,
-               const DrawColor& color = DrawColor::Green());
+               const Scalar& color = Scalar::Green());
 
 /**
  * @brief Draw multiple points
@@ -313,7 +286,7 @@ void DispPoint(QImage& image, double row, double column,
  */
 void DispPoints(QImage& image, const std::vector<double>& rows,
                 const std::vector<double>& cols,
-                const DrawColor& color = DrawColor::Green());
+                const Scalar& color = Scalar::Green());
 
 // =============================================================================
 // Drawing Primitives - Text
@@ -332,7 +305,7 @@ void DispPoints(QImage& image, const std::vector<double>& rows,
  * @param scale Font scale (default: 1)
  */
 void DispText(QImage& image, double row, double column, const std::string& text,
-              const DrawColor& color = DrawColor::Green(), int32_t scale = 1);
+              const Scalar& color = Scalar::Green(), int32_t scale = 1);
 
 // =============================================================================
 // High-Level Drawing Functions
@@ -351,7 +324,7 @@ void DispText(QImage& image, double row, double column, const std::string& text,
  */
 void DispMatchResult(QImage& image, double row, double column, double angle,
                      double score = 1.0,
-                     const DrawColor& color = DrawColor::Green(),
+                     const Scalar& color = Scalar::Green(),
                      int32_t markerSize = 20);
 
 /**
@@ -364,27 +337,7 @@ void DispMatchResult(QImage& image, double row, double column, double angle,
  * @param markerSize Cross marker size
  */
 void DispEdgeResult(QImage& image, double row, double column,
-                    const DrawColor& color = DrawColor::Green(),
+                    const Scalar& color = Scalar::Green(),
                     int32_t markerSize = 5);
-
-// =============================================================================
-// Image Conversion Utilities
-// =============================================================================
-
-/**
- * @brief Convert grayscale image to RGB for colored drawing
- *
- * @param gray Input grayscale image
- * @return RGB image
- */
-QImage GrayToRgb(const QImage& gray);
-
-/**
- * @brief Prepare image for drawing (converts to RGB if grayscale)
- *
- * @param image Input image
- * @return Image suitable for colored drawing
- */
-QImage PrepareForDrawing(const QImage& image);
 
 } // namespace Qi::Vision

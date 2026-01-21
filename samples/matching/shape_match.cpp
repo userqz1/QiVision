@@ -11,8 +11,10 @@
 
 #include <QiVision/Core/QImage.h>
 #include <QiVision/Core/Draw.h>
+#include <QiVision/Color/ColorConvert.h>
 #include <QiVision/Matching/ShapeModel.h>
 #include <QiVision/Matching/MatchTypes.h>
+#include <QiVision/IO/ImageIO.h>
 #include <QiVision/Platform/Timer.h>
 #include <QiVision/Platform/FileIO.h>
 #include <QiVision/GUI/Window.h>
@@ -27,52 +29,13 @@
 
 using namespace Qi::Vision;
 using namespace Qi::Vision::Matching;
+using namespace Qi::Vision::IO;
 using namespace Qi::Vision::Platform;
 using namespace Qi::Vision::GUI;
 namespace fs = std::filesystem;
 
 // Display interval in milliseconds
 constexpr int32_t DISPLAY_INTERVAL_MS = 1000;
-
-// Convert to grayscale helper
-QImage ToGrayscale(const QImage& img) {
-    if (img.Channels() == 1) return img;
-
-    QImage gray(img.Width(), img.Height(), PixelType::UInt8, ChannelType::Gray);
-    const uint8_t* src = static_cast<const uint8_t*>(img.Data());
-    uint8_t* dst = static_cast<uint8_t*>(gray.Data());
-    size_t srcStride = img.Stride();
-    size_t dstStride = gray.Stride();
-
-    for (int32_t y = 0; y < img.Height(); ++y) {
-        const uint8_t* srcRow = src + y * srcStride;
-        uint8_t* dstRow = dst + y * dstStride;
-        for (int32_t x = 0; x < img.Width(); ++x) {
-            uint8_t r = srcRow[x * 3 + 0];
-            uint8_t g = srcRow[x * 3 + 1];
-            uint8_t b = srcRow[x * 3 + 2];
-            dstRow[x] = static_cast<uint8_t>(0.299 * r + 0.587 * g + 0.114 * b);
-        }
-    }
-    return gray;
-}
-
-// Convert grayscale to RGB for drawing
-QImage ToRGB(const QImage& gray) {
-    QImage colorImg(gray.Width(), gray.Height(), PixelType::UInt8, ChannelType::RGB);
-    const uint8_t* src = static_cast<const uint8_t*>(gray.Data());
-    uint8_t* dst = static_cast<uint8_t*>(colorImg.Data());
-    for (int32_t y = 0; y < gray.Height(); ++y) {
-        for (int32_t x = 0; x < gray.Width(); ++x) {
-            uint8_t v = src[y * gray.Stride() + x];
-            size_t dstIdx = y * colorImg.Stride() + x * 3;
-            dst[dstIdx + 0] = v;
-            dst[dstIdx + 1] = v;
-            dst[dstIdx + 2] = v;
-        }
-    }
-    return colorImg;
-}
 
 // Get all image files in a directory (excluding result_* files)
 std::vector<std::string> GetImageFiles(const std::string& dir) {
@@ -117,12 +80,12 @@ void DrawMatchBoundingBox(QImage& colorImg, double row, double col, double angle
         px[k] = static_cast<int32_t>(col + cosA * corners[k][0] - sinA * corners[k][1]);
         py[k] = static_cast<int32_t>(row + sinA * corners[k][0] + cosA * corners[k][1]);
     }
-    Draw::Line(colorImg, px[0], py[0], px[1], py[1], Color::Cyan(), 2);
-    Draw::Line(colorImg, px[1], py[1], px[2], py[2], Color::Cyan(), 2);
-    Draw::Line(colorImg, px[2], py[2], px[3], py[3], Color::Cyan(), 2);
-    Draw::Line(colorImg, px[3], py[3], px[0], py[0], Color::Cyan(), 2);
+    Draw::Line(colorImg, px[0], py[0], px[1], py[1], Scalar::Cyan(), 2);
+    Draw::Line(colorImg, px[1], py[1], px[2], py[2], Scalar::Cyan(), 2);
+    Draw::Line(colorImg, px[2], py[2], px[3], py[3], Scalar::Cyan(), 2);
+    Draw::Line(colorImg, px[3], py[3], px[0], py[0], Scalar::Cyan(), 2);
 
-    Draw::Cross(colorImg, Point2d{col, row}, 15, angle, Color::Yellow(), 2);
+    Draw::Cross(colorImg, Point2d{col, row}, 15, angle, Scalar::Yellow(), 2);
 }
 
 int main(int argc, char* argv[]) {
@@ -161,7 +124,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "Failed to load template!" << std::endl;
         return 1;
     }
-    QImage templateGray = ToGrayscale(templateImg);
+    QImage templateGray = templateImg.ToGray();
     std::cout << "   Size: " << templateGray.Width() << " x " << templateGray.Height() << std::endl;
 
     // Interactive ROI selection
@@ -188,8 +151,9 @@ int main(int argc, char* argv[]) {
     std::cout << "\n3. Creating shape model..." << std::endl;
     timer.Start();
 
-    ShapeModel model = CreateShapeModel(
-        templateGray, roi,
+    ShapeModel model;
+    CreateShapeModel(
+        templateGray, roi, model,
         4,                      // numLevels
         0, RAD(360), 0,         // angleStart, angleExtent, angleStep (auto)
         "auto",                 // optimization
@@ -204,7 +168,8 @@ int main(int argc, char* argv[]) {
     std::cout << "   Model created in " << timer.ElapsedMs() << " ms" << std::endl;
 
     // Get model info
-    QContourArray contours = GetShapeModelXLD(model, 1);
+    QContourArray contours;
+    GetShapeModelXLD(model, 1, contours);
     size_t totalPoints = 0;
     for (size_t c = 0; c < contours.Size(); ++c) {
         totalPoints += contours[c].Size();
@@ -212,8 +177,9 @@ int main(int argc, char* argv[]) {
     std::cout << "   Model points: " << totalPoints << ", contours: " << contours.Size() << std::endl;
 
     // Display model
-    QImage roiVis = ToRGB(templateGray);
-    Draw::Rectangle(roiVis, roi.x, roi.y, roi.width, roi.height, Color::Green(), 2);
+    QImage roiVis;
+    Color::GrayToRgb(templateGray, roiVis);
+    Draw::Rectangle(roiVis, roi.x, roi.y, roi.width, roi.height, Scalar::Green(), 2);
     win.SetTitle("Template with ROI");
     win.DispImage(roiVis);
     win.WaitKey(1000);
@@ -230,7 +196,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "   [" << (i+1) << "] Failed to load: " << imageFiles[i] << std::endl;
             continue;
         }
-        QImage searchGray = ToGrayscale(searchImg);
+        QImage searchGray = searchImg.ToGray();
 
         std::vector<double> rows, cols, angles, scores;
 
@@ -260,7 +226,8 @@ int main(int argc, char* argv[]) {
         std::cout << " [" << std::setprecision(1) << searchTime << "ms]" << std::endl;
 
         // Display result
-        QImage colorImg = ToRGB(searchGray);
+        QImage colorImg;
+        Color::GrayToRgb(searchGray, colorImg);
 
         std::vector<MatchResult> matches;
         for (size_t j = 0; j < rows.size(); ++j) {
@@ -274,7 +241,7 @@ int main(int argc, char* argv[]) {
 
         // Draw model contours at match positions (Halcon-style)
         Draw::ShapeMatchingResults(colorImg, model, matches,
-                                    Color::Green(), Color::Red(), 2, 0.5);
+                                    Scalar::Green(), Scalar::Red(), 2, 0.5);
 
         // Draw bounding boxes and center crosses
         for (size_t j = 0; j < rows.size(); ++j) {
@@ -297,7 +264,7 @@ int main(int argc, char* argv[]) {
 
         // Save result
         std::string outPath = dataDir + "result_" + std::to_string(i+1) + ".bmp";
-        colorImg.SaveToFile(outPath);
+        IO::WriteImage(colorImg, outPath);
 
         int32_t key = win.WaitKey(DISPLAY_INTERVAL_MS);
         if (key == 'q' || key == 'Q' || key == 27) {

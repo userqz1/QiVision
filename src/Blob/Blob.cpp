@@ -20,12 +20,13 @@ namespace Qi::Vision::Blob {
 // Connection
 // =============================================================================
 
-std::vector<QRegion> Connection(const QRegion& region) {
-    if (region.Empty()) return {};
+void Connection(const QRegion& region, std::vector<QRegion>& regions) {
+    regions.clear();
+    if (region.Empty()) return;
 
     // Get runs and find connected components
     const auto& runs = region.Runs();
-    if (runs.empty()) return {};
+    if (runs.empty()) return;
 
     // Build adjacency using RLE
     // Two runs are connected if they are in adjacent rows and overlap in columns
@@ -83,35 +84,32 @@ std::vector<QRegion> Connection(const QRegion& region) {
     }
 
     // Create result regions
-    std::vector<QRegion> result;
-    result.reserve(componentRuns.size());
+    regions.reserve(componentRuns.size());
     for (auto& [label, compRuns] : componentRuns) {
-        result.emplace_back(std::move(compRuns));
+        regions.emplace_back(std::move(compRuns));
     }
-
-    return result;
 }
 
-std::vector<QRegion> Connection(const QImage& binaryImage, Connectivity connectivity) {
-    if (binaryImage.Empty()) return {};
+void Connection(const QImage& binaryImage,
+                std::vector<QRegion>& regions,
+                Connectivity connectivity) {
+    regions.clear();
+    if (binaryImage.Empty()) return;
 
     int32_t numLabels = 0;
     QImage labels = Internal::LabelConnectedComponents(binaryImage, connectivity, numLabels);
 
-    if (numLabels == 0) return {};
+    if (numLabels == 0) return;
 
-    std::vector<QRegion> result;
-    result.reserve(numLabels);
+    regions.reserve(numLabels);
 
     for (int32_t label = 1; label <= numLabels; ++label) {
         QImage component = Internal::ExtractComponent(labels, label);
         QRegion region = Internal::NonZeroToRegion(component);
         if (!region.Empty()) {
-            result.push_back(std::move(region));
+            regions.push_back(std::move(region));
         }
     }
-
-    return result;
 }
 
 QRegion SelectObj(const std::vector<QRegion>& regions, int32_t index) {
@@ -309,22 +307,21 @@ std::vector<double> GetRegionFeatures(const std::vector<QRegion>& regions,
     return result;
 }
 
-std::vector<QRegion> SelectShape(const std::vector<QRegion>& regions,
-                                  ShapeFeature feature,
-                                  SelectOperation /*operation*/,
-                                  double minValue,
-                                  double maxValue) {
-    std::vector<QRegion> result;
-    result.reserve(regions.size());
+void SelectShape(const std::vector<QRegion>& regions,
+                 std::vector<QRegion>& selected,
+                 ShapeFeature feature,
+                 SelectOperation /*operation*/,
+                 double minValue,
+                 double maxValue) {
+    selected.clear();
+    selected.reserve(regions.size());
 
     for (const auto& region : regions) {
         double value = GetRegionFeature(region, feature);
         if (value >= minValue && value <= maxValue) {
-            result.push_back(region);
+            selected.push_back(region);
         }
     }
-
-    return result;
 }
 
 ShapeFeature ParseShapeFeature(const std::string& name) {
@@ -380,11 +377,12 @@ std::string GetShapeFeatureName(ShapeFeature feature) {
     }
 }
 
-std::vector<QRegion> SelectShape(const std::vector<QRegion>& regions,
-                                  const std::string& features,
-                                  const std::string& operation,
-                                  double minValue,
-                                  double maxValue) {
+void SelectShape(const std::vector<QRegion>& regions,
+                 std::vector<QRegion>& selected,
+                 const std::string& features,
+                 const std::string& operation,
+                 double minValue,
+                 double maxValue) {
     ShapeFeature feature = ParseShapeFeature(features);
     SelectOperation op = SelectOperation::And;
     std::string lowerOp = operation;
@@ -392,37 +390,43 @@ std::vector<QRegion> SelectShape(const std::vector<QRegion>& regions,
     if (lowerOp == "or") {
         op = SelectOperation::Or;
     }
-    return SelectShape(regions, feature, op, minValue, maxValue);
+    SelectShape(regions, selected, feature, op, minValue, maxValue);
 }
 
-std::vector<QRegion> SelectShapeArea(const std::vector<QRegion>& regions,
-                                      int64_t minArea,
-                                      int64_t maxArea) {
-    return SelectShape(regions, ShapeFeature::Area, SelectOperation::And,
-                       static_cast<double>(minArea), static_cast<double>(maxArea));
+void SelectShapeArea(const std::vector<QRegion>& regions,
+                     std::vector<QRegion>& selected,
+                     int64_t minArea,
+                     int64_t maxArea) {
+    SelectShape(regions, selected, ShapeFeature::Area, SelectOperation::And,
+                static_cast<double>(minArea), static_cast<double>(maxArea));
 }
 
-std::vector<QRegion> SelectShapeCircularity(const std::vector<QRegion>& regions,
-                                             double minCirc,
-                                             double maxCirc) {
-    return SelectShape(regions, ShapeFeature::Circularity, SelectOperation::And, minCirc, maxCirc);
+void SelectShapeCircularity(const std::vector<QRegion>& regions,
+                            std::vector<QRegion>& selected,
+                            double minCirc,
+                            double maxCirc) {
+    SelectShape(regions, selected, ShapeFeature::Circularity, SelectOperation::And, minCirc, maxCirc);
 }
 
-std::vector<QRegion> SelectShapeRectangularity(const std::vector<QRegion>& regions,
-                                                double minRect,
-                                                double maxRect) {
-    return SelectShape(regions, ShapeFeature::Rectangularity, SelectOperation::And, minRect, maxRect);
+void SelectShapeRectangularity(const std::vector<QRegion>& regions,
+                               std::vector<QRegion>& selected,
+                               double minRect,
+                               double maxRect) {
+    SelectShape(regions, selected, ShapeFeature::Rectangularity, SelectOperation::And, minRect, maxRect);
 }
 
 // =============================================================================
 // Region Sorting
 // =============================================================================
 
-std::vector<QRegion> SortRegion(const std::vector<QRegion>& regions,
-                                 SortMode mode,
-                                 bool ascending) {
+void SortRegion(const std::vector<QRegion>& regions,
+                std::vector<QRegion>& sorted,
+                SortMode mode,
+                bool ascending) {
+    sorted.clear();
     if (regions.empty() || mode == SortMode::None) {
-        return regions;
+        sorted = regions;
+        return;
     }
 
     std::vector<std::pair<double, size_t>> sortKeys;
@@ -466,19 +470,17 @@ std::vector<QRegion> SortRegion(const std::vector<QRegion>& regions,
         std::sort(sortKeys.begin(), sortKeys.end(), std::greater<>());
     }
 
-    std::vector<QRegion> result;
-    result.reserve(regions.size());
+    sorted.reserve(regions.size());
     for (const auto& [key, idx] : sortKeys) {
-        result.push_back(regions[idx]);
+        sorted.push_back(regions[idx]);
     }
-
-    return result;
 }
 
-std::vector<QRegion> SortRegion(const std::vector<QRegion>& regions,
-                                 const std::string& sortMode,
-                                 const std::string& order,
-                                 const std::string& /*rowOrCol*/) {
+void SortRegion(const std::vector<QRegion>& regions,
+                std::vector<QRegion>& sorted,
+                const std::string& sortMode,
+                const std::string& order,
+                const std::string& /*rowOrCol*/) {
     std::string lowerMode = sortMode;
     std::transform(lowerMode.begin(), lowerMode.end(), lowerMode.begin(), ::tolower);
 
@@ -493,7 +495,7 @@ std::vector<QRegion> SortRegion(const std::vector<QRegion>& regions,
     std::transform(lowerOrder.begin(), lowerOrder.end(), lowerOrder.begin(), ::tolower);
     bool ascending = (lowerOrder != "false" && lowerOrder != "descending");
 
-    return SortRegion(regions, mode, ascending);
+    SortRegion(regions, sorted, mode, ascending);
 }
 
 // =============================================================================
@@ -594,14 +596,16 @@ int32_t CountHoles(const QRegion& region) {
     if (region.Empty()) return 0;
 
     // Fill the region and count the difference
-    QRegion filled = FillUp(region);
+    QRegion filled;
+    FillUp(region, filled);
     int64_t filledArea = Internal::ComputeArea(filled);
     int64_t originalArea = Internal::ComputeArea(region);
 
     if (filledArea == originalArea) return 0;
 
     // Get holes and count connected components
-    auto holes = GetHoles(region);
+    std::vector<QRegion> holes;
+    GetHoles(region, holes);
     return static_cast<int32_t>(holes.size());
 }
 
@@ -610,8 +614,11 @@ int32_t EulerNumber(const QRegion& region) {
     return 1 - CountHoles(region);
 }
 
-QRegion FillUp(const QRegion& region) {
-    if (region.Empty()) return region;
+void FillUp(const QRegion& region, QRegion& filled) {
+    if (region.Empty()) {
+        filled = region;
+        return;
+    }
 
     // Get bounding box
     Rect2i bbox = Internal::ComputeBoundingBox(region);
@@ -683,34 +690,38 @@ QRegion FillUp(const QRegion& region) {
         }
     }
 
-    return QRegion(std::move(runs));
+    filled = QRegion(std::move(runs));
 }
 
-std::vector<QRegion> GetHoles(const QRegion& region) {
-    if (region.Empty()) return {};
+void GetHoles(const QRegion& region, std::vector<QRegion>& holes) {
+    holes.clear();
+    if (region.Empty()) return;
 
-    QRegion filled = FillUp(region);
+    QRegion filled;
+    FillUp(region, filled);
     int64_t filledArea = Internal::ComputeArea(filled);
     int64_t originalArea = Internal::ComputeArea(region);
 
-    if (filledArea == originalArea) return {};
+    if (filledArea == originalArea) return;
 
     // Compute difference: filled - original
-    QRegion holes = filled.Difference(region);
-    if (holes.Empty()) return {};
+    QRegion holeRegion = filled.Difference(region);
+    if (holeRegion.Empty()) return;
 
     // Find connected components of holes
-    return Connection(holes);
+    Connection(holeRegion, holes);
 }
 
 // =============================================================================
 // Additional Selection Functions
 // =============================================================================
 
-std::vector<QRegion> SelectShapeStd(const std::vector<QRegion>& regions,
-                                     ShapeFeature feature,
-                                     double deviationFactor) {
-    if (regions.empty() || deviationFactor <= 0) return {};
+void SelectShapeStd(const std::vector<QRegion>& regions,
+                    std::vector<QRegion>& selected,
+                    ShapeFeature feature,
+                    double deviationFactor) {
+    selected.clear();
+    if (regions.empty() || deviationFactor <= 0) return;
 
     // Compute feature values
     std::vector<double> values = GetRegionFeatures(regions, feature);
@@ -729,27 +740,24 @@ std::vector<QRegion> SelectShapeStd(const std::vector<QRegion>& regions,
     double minVal = mean - deviationFactor * stdDev;
     double maxVal = mean + deviationFactor * stdDev;
 
-    std::vector<QRegion> result;
     for (size_t i = 0; i < regions.size(); ++i) {
         if (values[i] >= minVal && values[i] <= maxVal) {
-            result.push_back(regions[i]);
+            selected.push_back(regions[i]);
         }
     }
-
-    return result;
 }
 
-std::vector<QRegion> SelectShapeMulti(const std::vector<QRegion>& regions,
-                                       const std::vector<ShapeFeature>& features,
-                                       SelectOperation operation,
-                                       const std::vector<double>& minValues,
-                                       const std::vector<double>& maxValues) {
-    if (regions.empty() || features.empty()) return {};
+void SelectShapeMulti(const std::vector<QRegion>& regions,
+                      std::vector<QRegion>& selected,
+                      const std::vector<ShapeFeature>& features,
+                      SelectOperation operation,
+                      const std::vector<double>& minValues,
+                      const std::vector<double>& maxValues) {
+    selected.clear();
+    if (regions.empty() || features.empty()) return;
     if (features.size() != minValues.size() || features.size() != maxValues.size()) {
-        return {};
+        return;
     }
-
-    std::vector<QRegion> result;
 
     for (const auto& region : regions) {
         bool matches = (operation == SelectOperation::And);
@@ -772,30 +780,35 @@ std::vector<QRegion> SelectShapeMulti(const std::vector<QRegion>& regions,
         }
 
         if (matches) {
-            result.push_back(region);
+            selected.push_back(region);
         }
     }
-
-    return result;
 }
 
-std::vector<QRegion> SelectShapeConvexity(const std::vector<QRegion>& regions,
-                                           double minConvex,
-                                           double maxConvex) {
-    return SelectShape(regions, ShapeFeature::Convexity, SelectOperation::And, minConvex, maxConvex);
+void SelectShapeConvexity(const std::vector<QRegion>& regions,
+                          std::vector<QRegion>& selected,
+                          double minConvex,
+                          double maxConvex) {
+    SelectShape(regions, selected, ShapeFeature::Convexity, SelectOperation::And, minConvex, maxConvex);
 }
 
-std::vector<QRegion> SelectShapeElongation(const std::vector<QRegion>& regions,
-                                            double minElong,
-                                            double maxElong) {
-    return SelectShape(regions, ShapeFeature::Elongation, SelectOperation::And, minElong, maxElong);
+void SelectShapeElongation(const std::vector<QRegion>& regions,
+                           std::vector<QRegion>& selected,
+                           double minElong,
+                           double maxElong) {
+    SelectShape(regions, selected, ShapeFeature::Elongation, SelectOperation::And, minElong, maxElong);
 }
 
-std::vector<QRegion> SelectShapeProto(const std::vector<QRegion>& regions,
-                                       int32_t n,
-                                       bool largest) {
-    if (regions.empty() || n <= 0) return {};
-    if (n >= static_cast<int32_t>(regions.size())) return regions;
+void SelectShapeProto(const std::vector<QRegion>& regions,
+                      std::vector<QRegion>& selected,
+                      int32_t n,
+                      bool largest) {
+    selected.clear();
+    if (regions.empty() || n <= 0) return;
+    if (n >= static_cast<int32_t>(regions.size())) {
+        selected = regions;
+        return;
+    }
 
     // Get areas and sort
     std::vector<std::pair<int64_t, size_t>> areaIdx;
@@ -812,13 +825,10 @@ std::vector<QRegion> SelectShapeProto(const std::vector<QRegion>& regions,
                          [](const auto& a, const auto& b) { return a.first < b.first; });
     }
 
-    std::vector<QRegion> result;
-    result.reserve(n);
+    selected.reserve(n);
     for (int32_t i = 0; i < n; ++i) {
-        result.push_back(regions[areaIdx[i].second]);
+        selected.push_back(regions[areaIdx[i].second]);
     }
-
-    return result;
 }
 
 } // namespace Qi::Vision::Blob

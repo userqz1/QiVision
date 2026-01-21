@@ -36,55 +36,55 @@ namespace Matching {
 }
 
 /**
- * @brief Color for drawing (RGB)
+ * @brief Scalar for drawing (RGB)
  */
-struct Color {
+struct Scalar {
     uint8_t r = 255;
     uint8_t g = 255;
     uint8_t b = 255;
 
-    Color() = default;
-    Color(uint8_t r_, uint8_t g_, uint8_t b_) : r(r_), g(g_), b(b_) {}
-    Color(uint8_t gray) : r(gray), g(gray), b(gray) {}
+    Scalar() = default;
+    Scalar(uint8_t r_, uint8_t g_, uint8_t b_) : r(r_), g(g_), b(b_) {}
+    Scalar(uint8_t gray) : r(gray), g(gray), b(gray) {}
 
     // Predefined colors
-    static Color Red()     { return Color(255, 0, 0); }
-    static Color Green()   { return Color(0, 255, 0); }
-    static Color Blue()    { return Color(0, 0, 255); }
-    static Color Yellow()  { return Color(255, 255, 0); }
-    static Color Cyan()    { return Color(0, 255, 255); }
-    static Color Magenta() { return Color(255, 0, 255); }
-    static Color White()   { return Color(255, 255, 255); }
-    static Color Black()   { return Color(0, 0, 0); }
-    static Color Orange()  { return Color(255, 165, 0); }
-    static Color Pink()    { return Color(255, 192, 203); }
-    static Color Purple()  { return Color(128, 0, 128); }
-    static Color Brown()   { return Color(139, 69, 19); }
-    static Color Gray()    { return Color(128, 128, 128); }
-    static Color LightGray() { return Color(192, 192, 192); }
-    static Color DarkGray()  { return Color(64, 64, 64); }
+    static Scalar Red()     { return Scalar(255, 0, 0); }
+    static Scalar Green()   { return Scalar(0, 255, 0); }
+    static Scalar Blue()    { return Scalar(0, 0, 255); }
+    static Scalar Yellow()  { return Scalar(255, 255, 0); }
+    static Scalar Cyan()    { return Scalar(0, 255, 255); }
+    static Scalar Magenta() { return Scalar(255, 0, 255); }
+    static Scalar White()   { return Scalar(255, 255, 255); }
+    static Scalar Black()   { return Scalar(0, 0, 0); }
+    static Scalar Orange()  { return Scalar(255, 165, 0); }
+    static Scalar Pink()    { return Scalar(255, 192, 203); }
+    static Scalar Purple()  { return Scalar(128, 0, 128); }
+    static Scalar Brown()   { return Scalar(139, 69, 19); }
+    static Scalar Gray()    { return Scalar(128, 128, 128); }
+    static Scalar LightGray() { return Scalar(192, 192, 192); }
+    static Scalar DarkGray()  { return Scalar(64, 64, 64); }
 
     // Create color from HSV (h: 0-360, s: 0-1, v: 0-1)
-    static Color FromHSV(double h, double s, double v);
+    static Scalar FromHSV(double h, double s, double v);
 
     // Create color with alpha blend
-    Color Blend(const Color& other, double alpha) const;
+    Scalar Blend(const Scalar& other, double alpha) const;
 };
 
 /**
  * @brief Drawing style parameters
  */
 struct DrawStyle {
-    Color color = Color::Green();
+    Scalar color = Scalar::Green();
     int32_t thickness = 1;      // Line thickness (pixels)
     int32_t fontSize = 1;       // Font scale (1 = 5x7 base)
     bool filled = false;        // Fill shapes
     bool antiAlias = false;     // Anti-aliased drawing (slower)
 
     DrawStyle() = default;
-    DrawStyle(const Color& c) : color(c) {}
-    DrawStyle(const Color& c, int32_t thick) : color(c), thickness(thick) {}
-    DrawStyle(const Color& c, int32_t thick, int32_t font)
+    DrawStyle(const Scalar& c) : color(c) {}
+    DrawStyle(const Scalar& c, int32_t thick) : color(c), thickness(thick) {}
+    DrawStyle(const Scalar& c, int32_t thick, int32_t font)
         : color(c), thickness(thick), fontSize(font) {}
 };
 
@@ -98,79 +98,79 @@ public:
     // =========================================================================
 
     /** @brief Draw a single pixel */
-    static void Pixel(QImage& image, int32_t x, int32_t y, const Color& color);
+    static void Pixel(QImage& image, int32_t x, int32_t y, const Scalar& color);
 
     /** @brief Draw pixel with alpha blending */
-    static void PixelAlpha(QImage& image, int32_t x, int32_t y, const Color& color, double alpha);
+    static void PixelAlpha(QImage& image, int32_t x, int32_t y, const Scalar& color, double alpha);
 
     /** @brief Draw a line (Bresenham algorithm) */
     static void Line(QImage& image, int32_t x1, int32_t y1, int32_t x2, int32_t y2,
-                     const Color& color, int32_t thickness = 1);
+                     const Scalar& color, int32_t thickness = 1);
 
     /** @brief Draw a line from Point2d */
     static void Line(QImage& image, const Point2d& p1, const Point2d& p2,
-                     const Color& color, int32_t thickness = 1);
+                     const Scalar& color, int32_t thickness = 1);
 
     /** @brief Draw anti-aliased line (Wu's algorithm) */
     static void LineAA(QImage& image, double x1, double y1, double x2, double y2,
-                       const Color& color);
+                       const Scalar& color);
 
     /** @brief Draw a rectangle outline */
     static void Rectangle(QImage& image, int32_t x, int32_t y, int32_t width, int32_t height,
-                          const Color& color, int32_t thickness = 1);
+                          const Scalar& color, int32_t thickness = 1);
 
     /** @brief Draw a rectangle from Rect2i */
     static void Rectangle(QImage& image, const Rect2i& rect,
-                          const Color& color, int32_t thickness = 1);
+                          const Scalar& color, int32_t thickness = 1);
 
     /** @brief Draw a filled rectangle */
-    static void FilledRectangle(QImage& image, const Rect2i& rect, const Color& color);
+    static void FilledRectangle(QImage& image, const Rect2i& rect, const Scalar& color);
 
     /** @brief Draw a circle outline */
     static void Circle(QImage& image, int32_t cx, int32_t cy, int32_t radius,
-                       const Color& color, int32_t thickness = 1);
+                       const Scalar& color, int32_t thickness = 1);
 
     /** @brief Draw a circle from Point2d center */
     static void Circle(QImage& image, const Point2d& center, double radius,
-                       const Color& color, int32_t thickness = 1);
+                       const Scalar& color, int32_t thickness = 1);
 
     /** @brief Draw a filled circle */
     static void FilledCircle(QImage& image, int32_t cx, int32_t cy, int32_t radius,
-                             const Color& color);
+                             const Scalar& color);
 
     /** @brief Draw a filled circle from Point2d */
     static void FilledCircle(QImage& image, const Point2d& center, double radius,
-                             const Color& color);
+                             const Scalar& color);
 
     /** @brief Draw an ellipse outline */
     static void Ellipse(QImage& image, int32_t cx, int32_t cy,
                         int32_t radiusX, int32_t radiusY,
-                        const Color& color, int32_t thickness = 1);
+                        const Scalar& color, int32_t thickness = 1);
 
     /** @brief Draw a rotated ellipse */
     static void Ellipse(QImage& image, const Point2d& center,
                         double radiusX, double radiusY, double angle,
-                        const Color& color, int32_t thickness = 1);
+                        const Scalar& color, int32_t thickness = 1);
 
     /** @brief Draw a filled ellipse */
     static void FilledEllipse(QImage& image, int32_t cx, int32_t cy,
-                              int32_t radiusX, int32_t radiusY, const Color& color);
+                              int32_t radiusX, int32_t radiusY, const Scalar& color);
 
     /** @brief Draw a cross marker */
     static void Cross(QImage& image, int32_t cx, int32_t cy, int32_t size,
-                      const Color& color, int32_t thickness = 1);
+                      const Scalar& color, int32_t thickness = 1);
 
     /** @brief Draw a cross at Point2d */
     static void Cross(QImage& image, const Point2d& center, int32_t size,
-                      const Color& color, int32_t thickness = 1);
+                      const Scalar& color, int32_t thickness = 1);
 
     /** @brief Draw a rotated cross marker */
     static void Cross(QImage& image, const Point2d& center, int32_t size,
-                      double angle, const Color& color, int32_t thickness = 1);
+                      double angle, const Scalar& color, int32_t thickness = 1);
 
     /** @brief Draw an arrow */
     static void Arrow(QImage& image, const Point2d& from, const Point2d& to,
-                      const Color& color, int32_t thickness = 1, double arrowSize = 10.0);
+                      const Scalar& color, int32_t thickness = 1, double arrowSize = 10.0);
 
     // =========================================================================
     // Polylines and Contours
@@ -178,21 +178,21 @@ public:
 
     /** @brief Draw a polyline (connected line segments) */
     static void Polyline(QImage& image, const std::vector<Point2d>& points,
-                         const Color& color, int32_t thickness = 1, bool closed = false);
+                         const Scalar& color, int32_t thickness = 1, bool closed = false);
 
     /** @brief Draw a filled polygon */
     static void FilledPolygon(QImage& image, const std::vector<Point2d>& points,
-                              const Color& color);
+                              const Scalar& color);
 
     /** @brief Draw a rotated rectangle */
     static void RotatedRectangle(QImage& image, const Point2d& center,
                                   double width, double height, double angle,
-                                  const Color& color, int32_t thickness = 1);
+                                  const Scalar& color, int32_t thickness = 1);
 
     /** @brief Draw an arc */
     static void Arc(QImage& image, const Point2d& center, double radius,
                     double startAngle, double endAngle,
-                    const Color& color, int32_t thickness = 1);
+                    const Scalar& color, int32_t thickness = 1);
 
     // =========================================================================
     // Match Result Visualization
@@ -200,16 +200,16 @@ public:
 
     /** @brief Draw match result with cross marker and angle indicator */
     static void MatchResult(QImage& image, const Matching::MatchResult& match,
-                            const Color& color, int32_t markerSize = 20);
+                            const Scalar& color, int32_t markerSize = 20);
 
     /** @brief Draw match result with model contour */
     static void MatchResultWithContour(QImage& image, const Matching::MatchResult& match,
                                         const std::vector<Point2d>& modelContour,
-                                        const Color& color, int32_t thickness = 1);
+                                        const Scalar& color, int32_t thickness = 1);
 
     /** @brief Draw multiple match results */
     static void MatchResults(QImage& image, const std::vector<Matching::MatchResult>& matches,
-                             const Color& color, int32_t markerSize = 20);
+                             const Scalar& color, int32_t markerSize = 20);
 
     /**
      * @brief Draw shape matching results with quality coloring (Halcon-style)
@@ -222,16 +222,16 @@ public:
      * @param image Target image (also used for gradient comparison)
      * @param model ShapeModel used for matching
      * @param matches Match results from FindShapeModel
-     * @param matchedColor Color for matched segments (default green)
-     * @param unmatchedColor Color for unmatched segments (default red)
+     * @param matchedColor Scalar for matched segments (default green)
+     * @param unmatchedColor Scalar for unmatched segments (default red)
      * @param thickness Line thickness
      * @param threshold Quality threshold for "matched" (default 0.5)
      */
     static void ShapeMatchingResults(QImage& image,
                                       const Matching::ShapeModel& model,
                                       const std::vector<Matching::MatchResult>& matches,
-                                      const Color& matchedColor = Color::Green(),
-                                      const Color& unmatchedColor = Color::Red(),
+                                      const Scalar& matchedColor = Scalar::Green(),
+                                      const Scalar& unmatchedColor = Scalar::Red(),
                                       int32_t thickness = 1,
                                       double threshold = 0.5);
 
@@ -240,14 +240,14 @@ public:
      *
      * @param image Target image
      * @param contour MatchedContour from GetShapeModelContoursWithQuality
-     * @param matchedColor Color for matched segments
-     * @param unmatchedColor Color for unmatched segments
+     * @param matchedColor Scalar for matched segments
+     * @param unmatchedColor Scalar for unmatched segments
      * @param thickness Line thickness
      */
     static void MatchedContour(QImage& image,
                                 const Matching::MatchedContour& contour,
-                                const Color& matchedColor = Color::Green(),
-                                const Color& unmatchedColor = Color::Red(),
+                                const Scalar& matchedColor = Scalar::Green(),
+                                const Scalar& unmatchedColor = Scalar::Red(),
                                 int32_t thickness = 1);
 
     /**
@@ -257,15 +257,15 @@ public:
      *
      * @param image Target image
      * @param contour MatchedContour with points
-     * @param matchedColor Color for matched segments
-     * @param unmatchedColor Color for unmatched segments
+     * @param matchedColor Scalar for matched segments
+     * @param unmatchedColor Scalar for unmatched segments
      * @param thickness Line thickness
      * @param autoClose Whether to close the contour
      */
     static void MatchedContourSegment(QImage& image,
                                        const Matching::MatchedContour& contour,
-                                       const Color& matchedColor,
-                                       const Color& unmatchedColor,
+                                       const Scalar& matchedColor,
+                                       const Scalar& unmatchedColor,
                                        int32_t thickness,
                                        bool autoClose);
 
@@ -281,14 +281,14 @@ public:
      * @param thickness Line thickness
      */
     static void MeasureRect(QImage& image, const Measure::MeasureRectangle2& handle,
-                            const Color& color, int32_t thickness = 1);
+                            const Scalar& color, int32_t thickness = 1);
 
     /**
      * @brief Draw multiple MeasureRectangle2 handles
      */
     static void MeasureRects(QImage& image,
                              const std::vector<Measure::MeasureRectangle2>& handles,
-                             const Color& color, int32_t thickness = 1);
+                             const Scalar& color, int32_t thickness = 1);
 
     /**
      * @brief Draw a QContour
@@ -298,7 +298,7 @@ public:
      * @param thickness Line thickness
      */
     static void Contour(QImage& image, const QContour& contour,
-                        const Color& color, int32_t thickness = 1);
+                        const Scalar& color, int32_t thickness = 1);
 
     /**
      * @brief Draw edge points with cross markers
@@ -308,7 +308,7 @@ public:
      * @param markerSize Cross marker size
      */
     static void EdgePoints(QImage& image, const std::vector<Point2d>& points,
-                           const Color& color, int32_t markerSize = 5);
+                           const Scalar& color, int32_t markerSize = 5);
 
     /**
      * @brief Draw edge points with weight-based coloring (auto-detects weight type)
@@ -330,7 +330,7 @@ public:
      * @param thickness Line thickness
      */
     static void MetrologyLine(QImage& image, const Measure::MetrologyLineResult& result,
-                              const Color& color, int32_t thickness = 2);
+                              const Scalar& color, int32_t thickness = 2);
 
     /**
      * @brief Draw Metrology circle result
@@ -340,7 +340,7 @@ public:
      * @param thickness Line thickness
      */
     static void MetrologyCircle(QImage& image, const Measure::MetrologyCircleResult& result,
-                                const Color& color, int32_t thickness = 2);
+                                const Scalar& color, int32_t thickness = 2);
 
     /**
      * @brief Draw Metrology ellipse result
@@ -350,7 +350,7 @@ public:
      * @param thickness Line thickness
      */
     static void MetrologyEllipse(QImage& image, const Measure::MetrologyEllipseResult& result,
-                                 const Color& color, int32_t thickness = 2);
+                                 const Scalar& color, int32_t thickness = 2);
 
     /**
      * @brief Draw Metrology rectangle result
@@ -360,7 +360,7 @@ public:
      * @param thickness Line thickness
      */
     static void MetrologyRectangle(QImage& image, const Measure::MetrologyRectangle2Result& result,
-                                   const Color& color, int32_t thickness = 2);
+                                   const Scalar& color, int32_t thickness = 2);
 
     /**
      * @brief Draw complete Metrology model visualization
@@ -373,16 +373,16 @@ public:
      *
      * @param image Target image
      * @param model MetrologyModel after Apply()
-     * @param objectColor Color for object outlines and calipers
-     * @param resultColor Color for fitted results
-     * @param pointColor Color for edge points
+     * @param objectColor Scalar for object outlines and calipers
+     * @param resultColor Scalar for fitted results
+     * @param pointColor Scalar for edge points
      * @param drawCalipers Whether to draw caliper handles
      * @param drawPoints Whether to draw edge points
      */
     static void MetrologyModelResult(QImage& image, const Measure::MetrologyModel& model,
-                                     const Color& objectColor = Color::Yellow(),
-                                     const Color& resultColor = Color::Green(),
-                                     const Color& pointColor = Color::Red(),
+                                     const Scalar& objectColor = Scalar::Yellow(),
+                                     const Scalar& resultColor = Scalar::Green(),
+                                     const Scalar& pointColor = Scalar::Red(),
                                      bool drawCalipers = true,
                                      bool drawPoints = true);
 
@@ -395,7 +395,7 @@ public:
      * @param scale Font scale (1 = 5x7 base, 2 = 10x14, etc.)
      */
     static void Text(QImage& image, int32_t x, int32_t y, const std::string& text,
-                     const Color& color, int32_t scale = 1);
+                     const Scalar& color, int32_t scale = 1);
 
     /**
      * @brief Draw text with DrawStyle
@@ -410,28 +410,18 @@ public:
     static std::pair<int32_t, int32_t> TextSize(const std::string& text, int32_t scale = 1);
 
     // =========================================================================
-    // Image Conversion
-    // =========================================================================
-
-    /** @brief Convert grayscale image to RGB for colored drawing */
-    static QImage ToRGB(const QImage& gray);
-
-    /** @brief Create a copy suitable for drawing (converts to RGB if needed) */
-    static QImage PrepareForDrawing(const QImage& image);
-
-    // =========================================================================
     // Utility
     // =========================================================================
 
     /** @brief Generate N distinct colors for visualization */
-    static std::vector<Color> GenerateColors(int32_t n);
+    static std::vector<Scalar> GenerateColors(int32_t n);
 };
 
 // =============================================================================
 // Inline Implementations
 // =============================================================================
 
-inline Color Color::FromHSV(double h, double s, double v) {
+inline Scalar Scalar::FromHSV(double h, double s, double v) {
     double c = v * s;
     double x = c * (1.0 - std::fabs(std::fmod(h / 60.0, 2.0) - 1.0));
     double m = v - c;
@@ -444,22 +434,22 @@ inline Color Color::FromHSV(double h, double s, double v) {
     else if (h < 300) { r = x; g = 0; b = c; }
     else              { r = c; g = 0; b = x; }
 
-    return Color(
+    return Scalar(
         static_cast<uint8_t>((r + m) * 255),
         static_cast<uint8_t>((g + m) * 255),
         static_cast<uint8_t>((b + m) * 255)
     );
 }
 
-inline Color Color::Blend(const Color& other, double alpha) const {
-    return Color(
+inline Scalar Scalar::Blend(const Scalar& other, double alpha) const {
+    return Scalar(
         static_cast<uint8_t>(r * (1 - alpha) + other.r * alpha),
         static_cast<uint8_t>(g * (1 - alpha) + other.g * alpha),
         static_cast<uint8_t>(b * (1 - alpha) + other.b * alpha)
     );
 }
 
-inline void Draw::Pixel(QImage& image, int32_t x, int32_t y, const Color& color) {
+inline void Draw::Pixel(QImage& image, int32_t x, int32_t y, const Scalar& color) {
     if (x < 0 || x >= image.Width() || y < 0 || y >= image.Height()) {
         return;
     }
@@ -478,7 +468,7 @@ inline void Draw::Pixel(QImage& image, int32_t x, int32_t y, const Color& color)
     }
 }
 
-inline void Draw::PixelAlpha(QImage& image, int32_t x, int32_t y, const Color& color, double alpha) {
+inline void Draw::PixelAlpha(QImage& image, int32_t x, int32_t y, const Scalar& color, double alpha) {
     if (x < 0 || x >= image.Width() || y < 0 || y >= image.Height() || alpha <= 0) {
         return;
     }
@@ -504,19 +494,19 @@ inline void Draw::PixelAlpha(QImage& image, int32_t x, int32_t y, const Color& c
 }
 
 inline void Draw::Cross(QImage& image, int32_t cx, int32_t cy, int32_t size,
-                        const Color& color, int32_t thickness) {
+                        const Scalar& color, int32_t thickness) {
     Line(image, cx - size, cy, cx + size, cy, color, thickness);
     Line(image, cx, cy - size, cx, cy + size, color, thickness);
 }
 
 inline void Draw::Cross(QImage& image, const Point2d& center, int32_t size,
-                        const Color& color, int32_t thickness) {
+                        const Scalar& color, int32_t thickness) {
     Cross(image, static_cast<int32_t>(center.x + 0.5), static_cast<int32_t>(center.y + 0.5),
           size, color, thickness);
 }
 
 inline void Draw::Cross(QImage& image, const Point2d& center, int32_t size,
-                        double angle, const Color& color, int32_t thickness) {
+                        double angle, const Scalar& color, int32_t thickness) {
     double cosA = std::cos(angle);
     double sinA = std::sin(angle);
     double s = static_cast<double>(size);
@@ -531,25 +521,25 @@ inline void Draw::Cross(QImage& image, const Point2d& center, int32_t size,
 }
 
 inline void Draw::Line(QImage& image, const Point2d& p1, const Point2d& p2,
-                       const Color& color, int32_t thickness) {
+                       const Scalar& color, int32_t thickness) {
     Line(image, static_cast<int32_t>(p1.x + 0.5), static_cast<int32_t>(p1.y + 0.5),
          static_cast<int32_t>(p2.x + 0.5), static_cast<int32_t>(p2.y + 0.5),
          color, thickness);
 }
 
 inline void Draw::Rectangle(QImage& image, const Rect2i& rect,
-                            const Color& color, int32_t thickness) {
+                            const Scalar& color, int32_t thickness) {
     Rectangle(image, rect.x, rect.y, rect.width, rect.height, color, thickness);
 }
 
 inline void Draw::Circle(QImage& image, const Point2d& center, double radius,
-                         const Color& color, int32_t thickness) {
+                         const Scalar& color, int32_t thickness) {
     Circle(image, static_cast<int32_t>(center.x + 0.5), static_cast<int32_t>(center.y + 0.5),
            static_cast<int32_t>(radius + 0.5), color, thickness);
 }
 
 inline void Draw::FilledCircle(QImage& image, const Point2d& center, double radius,
-                               const Color& color) {
+                               const Scalar& color) {
     FilledCircle(image, static_cast<int32_t>(center.x + 0.5),
                  static_cast<int32_t>(center.y + 0.5),
                  static_cast<int32_t>(radius + 0.5), color);
@@ -560,12 +550,12 @@ inline void Draw::Text(QImage& image, int32_t x, int32_t y, const std::string& t
     Text(image, x, y, text, style.color, style.fontSize);
 }
 
-inline std::vector<Color> Draw::GenerateColors(int32_t n) {
-    std::vector<Color> colors;
+inline std::vector<Scalar> Draw::GenerateColors(int32_t n) {
+    std::vector<Scalar> colors;
     colors.reserve(n);
     for (int32_t i = 0; i < n; ++i) {
         double hue = (360.0 * i) / n;
-        colors.push_back(Color::FromHSV(hue, 0.8, 0.9));
+        colors.push_back(Scalar::FromHSV(hue, 0.8, 0.9));
     }
     return colors;
 }

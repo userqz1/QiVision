@@ -87,6 +87,7 @@ private:
  * Equivalent to Halcon's create_shape_model operator.
  *
  * @param templateImage Template image (grayscale)
+ * @param model         [out] Created shape model handle
  * @param numLevels     Number of pyramid levels (0 = auto)
  * @param angleStart    Smallest rotation angle [rad]
  * @param angleExtent   Extent of rotation angles [rad] (0 = all orientations)
@@ -97,13 +98,13 @@ private:
  *                      "ignore_local_polarity", "ignore_color_polarity"
  * @param contrast      Threshold for edge extraction (or "auto")
  * @param minContrast   Minimum contrast in search images
- * @return Shape model handle
  *
  * @note The center of the template is used as the model origin.
  *       Use SetShapeModelOrigin() to change it.
  */
-ShapeModel CreateShapeModel(
+void CreateShapeModel(
     const QImage& templateImage,
+    ShapeModel& model,
     int32_t numLevels,
     double angleStart,
     double angleExtent,
@@ -119,6 +120,7 @@ ShapeModel CreateShapeModel(
  *
  * @param templateImage Source image
  * @param roi           Rectangular region of interest
+ * @param model         [out] Created shape model handle
  * @param numLevels     Number of pyramid levels (0 = auto)
  * @param angleStart    Smallest rotation angle [rad]
  * @param angleExtent   Extent of rotation angles [rad]
@@ -127,11 +129,11 @@ ShapeModel CreateShapeModel(
  * @param metric        Match metric
  * @param contrast      Threshold for edge extraction
  * @param minContrast   Minimum contrast in search images
- * @return Shape model handle
  */
-ShapeModel CreateShapeModel(
+void CreateShapeModel(
     const QImage& templateImage,
     const Rect2i& roi,
+    ShapeModel& model,
     int32_t numLevels,
     double angleStart,
     double angleExtent,
@@ -149,6 +151,7 @@ ShapeModel CreateShapeModel(
  *
  * @param templateImage Source image
  * @param region        Region of interest (supports any shape)
+ * @param model         [out] Created shape model handle
  * @param numLevels     Number of pyramid levels (0 = auto)
  * @param angleStart    Smallest rotation angle [rad]
  * @param angleExtent   Extent of rotation angles [rad]
@@ -157,22 +160,24 @@ ShapeModel CreateShapeModel(
  * @param metric        Match metric
  * @param contrast      Threshold for edge extraction
  * @param minContrast   Minimum contrast in search images
- * @return Shape model handle
  *
  * @code
  * // Create circular ROI
  * QRegion circle = QRegion::Circle(320, 240, 100);
- * ShapeModel model = CreateShapeModel(image, circle, 4, 0, RAD(360), 0,
- *                                     "auto", "use_polarity", "auto", 10);
+ * ShapeModel model;
+ * CreateShapeModel(image, circle, model, 4, 0, RAD(360), 0,
+ *                  "auto", "use_polarity", "auto", 10);
  *
  * // Create complex ROI (union of shapes)
  * QRegion roi = QRegion::Circle(100, 100, 50) | QRegion::Rectangle(200, 50, 100, 100);
- * ShapeModel model2 = CreateShapeModel(image, roi, ...);
+ * ShapeModel model2;
+ * CreateShapeModel(image, roi, model2, ...);
  * @endcode
  */
-ShapeModel CreateShapeModel(
+void CreateShapeModel(
     const QImage& templateImage,
     const QRegion& region,
+    ShapeModel& model,
     int32_t numLevels,
     double angleStart,
     double angleExtent,
@@ -189,6 +194,7 @@ ShapeModel CreateShapeModel(
  * Equivalent to Halcon's create_scaled_shape_model operator.
  *
  * @param templateImage Template image
+ * @param model         [out] Created shape model handle
  * @param numLevels     Number of pyramid levels (0 = auto)
  * @param angleStart    Smallest rotation angle [rad]
  * @param angleExtent   Extent of rotation angles [rad]
@@ -200,10 +206,10 @@ ShapeModel CreateShapeModel(
  * @param metric        Match metric
  * @param contrast      Threshold for edge extraction
  * @param minContrast   Minimum contrast in search images
- * @return Shape model handle
  */
-ShapeModel CreateScaledShapeModel(
+void CreateScaledShapeModel(
     const QImage& templateImage,
+    ShapeModel& model,
     int32_t numLevels,
     double angleStart,
     double angleExtent,
@@ -332,11 +338,12 @@ void GetShapeModelContours(
  *
  * @param model         Shape model handle
  * @param level         Pyramid level (1 = highest resolution)
- * @return QContourArray containing model contours
+ * @param contours      [out] QContourArray containing model contours
  */
-QContourArray GetShapeModelXLD(
+void GetShapeModelXLD(
     const ShapeModel& model,
-    int32_t level
+    int32_t level,
+    QContourArray& contours
 );
 
 /**
@@ -419,10 +426,11 @@ void WriteShapeModel(
  * Equivalent to Halcon's read_shape_model operator.
  *
  * @param filename      Input file path
- * @return Shape model handle
+ * @param model         [out] Loaded shape model handle
  */
-ShapeModel ReadShapeModel(
-    const std::string& filename
+void ReadShapeModel(
+    const std::string& filename,
+    ShapeModel& model
 );
 
 /**

@@ -105,33 +105,33 @@ struct RawReadParams {
  * Equivalent to Halcon's read_image operator.
  *
  * @param filename Input file path
- * @return Loaded image
+ * @param[out] image Loaded image
  * @throws IOException if file cannot be read
  *
  * @code
- * QImage img = ReadImage("test.png");
- * QImage img16 = ReadImage("16bit.tiff");
+ * QImage img;
+ * ReadImage("test.png", img);
  * @endcode
  */
-QImage ReadImage(const std::string& filename);
+void ReadImage(const std::string& filename, QImage& image);
 
 /**
  * @brief Read image with format hint
  *
  * @param filename Input file path
+ * @param[out] image Loaded image
  * @param format Force specific format (Auto = detect from extension)
- * @return Loaded image
  */
-QImage ReadImage(const std::string& filename, ImageFormat format);
+void ReadImage(const std::string& filename, QImage& image, ImageFormat format);
 
 /**
  * @brief Read raw binary image data
  *
  * @param filename Input file path
+ * @param[out] image Loaded image
  * @param params Raw read parameters (width, height, type required)
- * @return Loaded image
  */
-QImage ReadImageRaw(const std::string& filename, const RawReadParams& params);
+void ReadImageRaw(const std::string& filename, QImage& image, const RawReadParams& params);
 
 /**
  * @brief Read image metadata without loading full image
@@ -148,18 +148,18 @@ bool ReadImageMetadata(const std::string& filename, ImageMetadata& metadata);
  * @brief Read image and convert to specified type
  *
  * @param filename Input file path
+ * @param[out] image Loaded and converted image
  * @param targetType Target pixel type for conversion
- * @return Loaded and converted image
  */
-QImage ReadImageAs(const std::string& filename, PixelType targetType);
+void ReadImageAs(const std::string& filename, QImage& image, PixelType targetType);
 
 /**
  * @brief Read image and convert to grayscale
  *
  * @param filename Input file path
- * @return Grayscale image
+ * @param[out] image Grayscale image
  */
-QImage ReadImageGray(const std::string& filename);
+void ReadImageGray(const std::string& filename, QImage& image);
 
 // =============================================================================
 // Image Write Functions
@@ -214,29 +214,32 @@ bool WriteImageRaw(const QImage& image, const std::string& filename,
  * Equivalent to Halcon's read_sequence operator.
  *
  * @param pattern File pattern with printf-style placeholder (e.g., "img_%03d.png")
+ * @param[out] images Vector of loaded images
  * @param startIndex Starting index
  * @param endIndex Ending index (inclusive)
  * @param step Index step (default 1)
- * @return Vector of loaded images
  *
  * @code
- * auto images = ReadSequence("frame_%04d.png", 0, 99);
+ * std::vector<QImage> images;
+ * ReadSequence("frame_%04d.png", images, 0, 99);
  * @endcode
  */
-std::vector<QImage> ReadSequence(const std::string& pattern,
-                                  int32_t startIndex,
-                                  int32_t endIndex,
-                                  int32_t step = 1);
+void ReadSequence(const std::string& pattern,
+                  std::vector<QImage>& images,
+                  int32_t startIndex,
+                  int32_t endIndex,
+                  int32_t step = 1);
 
 /**
  * @brief Read all images from directory
  *
  * @param directory Directory path
+ * @param[out] images Vector of loaded images
  * @param extensions Filter by extensions (empty = all supported)
- * @return Vector of loaded images
  */
-std::vector<QImage> ReadDirectory(const std::string& directory,
-                                   const std::vector<std::string>& extensions = {});
+void ReadDirectory(const std::string& directory,
+                   std::vector<QImage>& images,
+                   const std::vector<std::string>& extensions = {});
 
 /**
  * @brief Write image sequence

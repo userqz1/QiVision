@@ -20,7 +20,7 @@ namespace Qi::Vision {
 
 // Helper: draw single-pixel Bresenham line
 static void BresenhamLine(QImage& image, int32_t x1, int32_t y1, int32_t x2, int32_t y2,
-                          const Color& color) {
+                          const Scalar& color) {
     int32_t dx = std::abs(x2 - x1);
     int32_t dy = std::abs(y2 - y1);
     int32_t sx = (x1 < x2) ? 1 : -1;
@@ -38,7 +38,7 @@ static void BresenhamLine(QImage& image, int32_t x1, int32_t y1, int32_t x2, int
 }
 
 void Draw::Line(QImage& image, int32_t x1, int32_t y1, int32_t x2, int32_t y2,
-                const Color& color, int32_t thickness) {
+                const Scalar& color, int32_t thickness) {
     if (thickness <= 1) {
         BresenhamLine(image, x1, y1, x2, y2, color);
     } else {
@@ -70,7 +70,7 @@ void Draw::Line(QImage& image, int32_t x1, int32_t y1, int32_t x2, int32_t y2,
 // =============================================================================
 
 void Draw::LineAA(QImage& image, double x1, double y1, double x2, double y2,
-                  const Color& color) {
+                  const Scalar& color) {
     auto ipart = [](double x) { return static_cast<int32_t>(std::floor(x)); };
     auto fpart = [](double x) { return x - std::floor(x); };
     auto rfpart = [&fpart](double x) { return 1.0 - fpart(x); };
@@ -141,14 +141,14 @@ void Draw::LineAA(QImage& image, double x1, double y1, double x2, double y2,
 // =============================================================================
 
 void Draw::Rectangle(QImage& image, int32_t x, int32_t y, int32_t width, int32_t height,
-                     const Color& color, int32_t thickness) {
+                     const Scalar& color, int32_t thickness) {
     Line(image, x, y, x + width - 1, y, color, thickness);
     Line(image, x, y + height - 1, x + width - 1, y + height - 1, color, thickness);
     Line(image, x, y, x, y + height - 1, color, thickness);
     Line(image, x + width - 1, y, x + width - 1, y + height - 1, color, thickness);
 }
 
-void Draw::FilledRectangle(QImage& image, const Rect2i& rect, const Color& color) {
+void Draw::FilledRectangle(QImage& image, const Rect2i& rect, const Scalar& color) {
     int32_t x0 = std::max(0, rect.x);
     int32_t y0 = std::max(0, rect.y);
     int32_t x1 = std::min(image.Width(), rect.x + rect.width);
@@ -166,7 +166,7 @@ void Draw::FilledRectangle(QImage& image, const Rect2i& rect, const Color& color
 // =============================================================================
 
 void Draw::Circle(QImage& image, int32_t cx, int32_t cy, int32_t radius,
-                  const Color& color, int32_t thickness) {
+                  const Scalar& color, int32_t thickness) {
     if (radius <= 0) return;
 
     // Use parametric method: connect points with lines for smooth result
@@ -196,7 +196,7 @@ void Draw::Circle(QImage& image, int32_t cx, int32_t cy, int32_t radius,
 }
 
 void Draw::FilledCircle(QImage& image, int32_t cx, int32_t cy, int32_t radius,
-                        const Color& color) {
+                        const Scalar& color) {
     if (radius <= 0) return;
 
     for (int32_t y = -radius; y <= radius; ++y) {
@@ -213,7 +213,7 @@ void Draw::FilledCircle(QImage& image, int32_t cx, int32_t cy, int32_t radius,
 
 void Draw::Ellipse(QImage& image, int32_t cx, int32_t cy,
                    int32_t radiusX, int32_t radiusY,
-                   const Color& color, int32_t thickness) {
+                   const Scalar& color, int32_t thickness) {
     if (radiusX <= 0 || radiusY <= 0) return;
 
     // Use parametric method with enough segments for smooth result
@@ -242,7 +242,7 @@ void Draw::Ellipse(QImage& image, int32_t cx, int32_t cy,
 
 void Draw::Ellipse(QImage& image, const Point2d& center,
                    double radiusX, double radiusY, double angle,
-                   const Color& color, int32_t thickness) {
+                   const Scalar& color, int32_t thickness) {
     if (radiusX <= 0 || radiusY <= 0) return;
 
     // Use parametric method with rotation
@@ -278,7 +278,7 @@ void Draw::Ellipse(QImage& image, const Point2d& center,
 }
 
 void Draw::FilledEllipse(QImage& image, int32_t cx, int32_t cy,
-                         int32_t radiusX, int32_t radiusY, const Color& color) {
+                         int32_t radiusX, int32_t radiusY, const Scalar& color) {
     if (radiusX <= 0 || radiusY <= 0) return;
 
     for (int32_t y = -radiusY; y <= radiusY; ++y) {
@@ -295,7 +295,7 @@ void Draw::FilledEllipse(QImage& image, int32_t cx, int32_t cy,
 // =============================================================================
 
 void Draw::Arrow(QImage& image, const Point2d& from, const Point2d& to,
-                 const Color& color, int32_t thickness, double arrowSize) {
+                 const Scalar& color, int32_t thickness, double arrowSize) {
     Line(image, from, to, color, thickness);
 
     double dx = to.x - from.x;
@@ -329,7 +329,7 @@ void Draw::Arrow(QImage& image, const Point2d& from, const Point2d& to,
 
 void Draw::Arc(QImage& image, const Point2d& center, double radius,
                double startAngle, double endAngle,
-               const Color& color, int32_t thickness) {
+               const Scalar& color, int32_t thickness) {
     if (radius <= 0) return;
 
     // Normalize angles
@@ -354,7 +354,7 @@ void Draw::Arc(QImage& image, const Point2d& center, double radius,
 // =============================================================================
 
 void Draw::Polyline(QImage& image, const std::vector<Point2d>& points,
-                    const Color& color, int32_t thickness, bool closed) {
+                    const Scalar& color, int32_t thickness, bool closed) {
     if (points.size() < 2) return;
 
     for (size_t i = 0; i < points.size() - 1; ++i) {
@@ -367,7 +367,7 @@ void Draw::Polyline(QImage& image, const std::vector<Point2d>& points,
 }
 
 void Draw::FilledPolygon(QImage& image, const std::vector<Point2d>& points,
-                         const Color& color) {
+                         const Scalar& color) {
     if (points.size() < 3) return;
 
     // Find bounding box
@@ -412,7 +412,7 @@ void Draw::FilledPolygon(QImage& image, const std::vector<Point2d>& points,
 
 void Draw::RotatedRectangle(QImage& image, const Point2d& center,
                             double width, double height, double angle,
-                            const Color& color, int32_t thickness) {
+                            const Scalar& color, int32_t thickness) {
     double cosA = std::cos(angle);
     double sinA = std::sin(angle);
     double hw = width / 2.0;
@@ -433,7 +433,7 @@ void Draw::RotatedRectangle(QImage& image, const Point2d& center,
 // =============================================================================
 
 void Draw::MatchResult(QImage& image, const Matching::MatchResult& match,
-                       const Color& color, int32_t markerSize) {
+                       const Scalar& color, int32_t markerSize) {
     Cross(image, Point2d{match.x, match.y}, markerSize, match.angle, color, 2);
 
     double cosA = std::cos(match.angle);
@@ -447,7 +447,7 @@ void Draw::MatchResult(QImage& image, const Matching::MatchResult& match,
 
 void Draw::MatchResultWithContour(QImage& image, const Matching::MatchResult& match,
                                    const std::vector<Point2d>& modelContour,
-                                   const Color& color, int32_t /*thickness*/) {
+                                   const Scalar& color, int32_t /*thickness*/) {
     if (modelContour.empty()) {
         MatchResult(image, match, color, 20);
         return;
@@ -472,14 +472,14 @@ void Draw::MatchResultWithContour(QImage& image, const Matching::MatchResult& ma
 }
 
 void Draw::MatchResults(QImage& image, const std::vector<Matching::MatchResult>& matches,
-                        const Color& color, int32_t markerSize) {
-    std::vector<Color> colors = {
-        Color::Green(), Color::Red(), Color::Blue(),
-        Color::Yellow(), Color::Cyan(), Color::Magenta()
+                        const Scalar& color, int32_t markerSize) {
+    std::vector<Scalar> colors = {
+        Scalar::Green(), Scalar::Red(), Scalar::Blue(),
+        Scalar::Yellow(), Scalar::Cyan(), Scalar::Magenta()
     };
 
     for (size_t i = 0; i < matches.size(); ++i) {
-        const Color& c = (matches.size() == 1) ? color : colors[i % colors.size()];
+        const Scalar& c = (matches.size() == 1) ? color : colors[i % colors.size()];
         MatchResult(image, matches[i], c, markerSize);
     }
 }
@@ -683,7 +683,7 @@ static const uint8_t FONT_5x7[][7] = {
 };
 
 void Draw::Text(QImage& image, int32_t x, int32_t y, const std::string& text,
-                const Color& color, int32_t scale) {
+                const Scalar& color, int32_t scale) {
     if (scale < 1) scale = 1;
     int32_t curX = x;
 
@@ -723,41 +723,6 @@ std::pair<int32_t, int32_t> Draw::TextSize(const std::string& text, int32_t scal
 }
 
 // =============================================================================
-// Image Conversion
-// =============================================================================
-
-QImage Draw::ToRGB(const QImage& gray) {
-    if (gray.Channels() == 3) {
-        return gray.Clone();
-    }
-
-    QImage rgb(gray.Width(), gray.Height(), PixelType::UInt8, ChannelType::RGB);
-    const uint8_t* src = static_cast<const uint8_t*>(gray.Data());
-    uint8_t* dst = static_cast<uint8_t*>(rgb.Data());
-    size_t srcStride = gray.Stride();
-    size_t dstStride = rgb.Stride();
-
-    for (int32_t y = 0; y < gray.Height(); ++y) {
-        for (int32_t x = 0; x < gray.Width(); ++x) {
-            uint8_t val = src[y * srcStride + x];
-            uint8_t* px = dst + y * dstStride + x * 3;
-            px[0] = val;
-            px[1] = val;
-            px[2] = val;
-        }
-    }
-
-    return rgb;
-}
-
-QImage Draw::PrepareForDrawing(const QImage& image) {
-    if (image.Channels() == 3) {
-        return image.Clone();
-    }
-    return ToRGB(image);
-}
-
-// =============================================================================
 // Metrology Visualization
 // =============================================================================
 
@@ -770,7 +735,7 @@ QImage Draw::PrepareForDrawing(const QImage& image) {
 namespace Qi::Vision {
 
 void Draw::MeasureRect(QImage& image, const Measure::MeasureRectangle2& handle,
-                       const Color& color, int32_t thickness) {
+                       const Scalar& color, int32_t thickness) {
     // MeasureRectangle2 geometry (Halcon compatible):
     // - Row, Column: Rectangle center
     // - Phi: Edge direction (perpendicular to profile/measurement direction)
@@ -811,7 +776,7 @@ void Draw::MeasureRect(QImage& image, const Measure::MeasureRectangle2& handle,
 
 void Draw::MeasureRects(QImage& image,
                         const std::vector<Measure::MeasureRectangle2>& handles,
-                        const Color& color, int32_t thickness) {
+                        const Scalar& color, int32_t thickness) {
     if (handles.empty()) return;
 
     // 1. Draw curve connecting caliper centers
@@ -831,7 +796,7 @@ void Draw::MeasureRects(QImage& image,
 }
 
 void Draw::Contour(QImage& image, const QContour& contour,
-                   const Color& color, int32_t thickness) {
+                   const Scalar& color, int32_t thickness) {
     auto points = contour.GetPoints();
     if (points.size() < 2) return;
 
@@ -846,14 +811,14 @@ void Draw::Contour(QImage& image, const QContour& contour,
 }
 
 void Draw::EdgePoints(QImage& image, const std::vector<Point2d>& points,
-                      const Color& color, int32_t markerSize) {
+                      const Scalar& color, int32_t markerSize) {
     for (const auto& pt : points) {
         Cross(image, pt, markerSize, color, 1);
     }
 }
 
 void Draw::MetrologyLine(QImage& image, const Measure::MetrologyLineResult& result,
-                         const Color& color, int32_t thickness) {
+                         const Scalar& color, int32_t thickness) {
     if (!result.IsValid()) return;
 
     // Draw the fitted line segment
@@ -863,7 +828,7 @@ void Draw::MetrologyLine(QImage& image, const Measure::MetrologyLineResult& resu
 }
 
 void Draw::MetrologyCircle(QImage& image, const Measure::MetrologyCircleResult& result,
-                           const Color& color, int32_t thickness) {
+                           const Scalar& color, int32_t thickness) {
     if (!result.IsValid()) return;
 
     // Draw the fitted circle
@@ -872,7 +837,7 @@ void Draw::MetrologyCircle(QImage& image, const Measure::MetrologyCircleResult& 
 }
 
 void Draw::MetrologyEllipse(QImage& image, const Measure::MetrologyEllipseResult& result,
-                            const Color& color, int32_t thickness) {
+                            const Scalar& color, int32_t thickness) {
     if (!result.IsValid()) return;
 
     // Draw the fitted ellipse (ra = semi-major, rb = semi-minor)
@@ -881,7 +846,7 @@ void Draw::MetrologyEllipse(QImage& image, const Measure::MetrologyEllipseResult
 }
 
 void Draw::MetrologyRectangle(QImage& image, const Measure::MetrologyRectangle2Result& result,
-                              const Color& color, int32_t thickness) {
+                              const Scalar& color, int32_t thickness) {
     if (!result.IsValid()) return;
 
     // Draw the fitted rectangle
@@ -907,18 +872,18 @@ void Draw::EdgePointsWeighted(QImage& image, const std::vector<Point2d>& points,
     for (size_t i = 0; i < points.size(); ++i) {
         double w = (i < weights.size()) ? weights[i] : 1.0;
 
-        Color color;
+        Scalar color;
         if (isBinary) {
             // Binary weights (RANSAC/Tukey): two colors
-            color = (w >= 0.5) ? Color::Green() : Color::Red();
+            color = (w >= 0.5) ? Scalar::Green() : Scalar::Red();
         } else {
             // Continuous weights (Huber): three colors
             if (w >= 0.8) {
-                color = Color::Green();   // Strong inlier
+                color = Scalar::Green();   // Strong inlier
             } else if (w >= 0.3) {
-                color = Color::Yellow();  // Moderate weight
+                color = Scalar::Yellow();  // Moderate weight
             } else {
-                color = Color::Red();     // Weak/outlier
+                color = Scalar::Red();     // Weak/outlier
             }
         }
 
@@ -927,9 +892,9 @@ void Draw::EdgePointsWeighted(QImage& image, const std::vector<Point2d>& points,
 }
 
 void Draw::MetrologyModelResult(QImage& image, const Measure::MetrologyModel& model,
-                                const Color& objectColor,
-                                const Color& resultColor,
-                                const Color& pointColor,
+                                const Scalar& objectColor,
+                                const Scalar& resultColor,
+                                const Scalar& pointColor,
                                 bool drawCalipers,
                                 bool drawPoints) {
     using namespace Measure;
@@ -990,8 +955,8 @@ void Draw::MetrologyModelResult(QImage& image, const Measure::MetrologyModel& mo
 void Draw::ShapeMatchingResults(QImage& image,
                                  const Matching::ShapeModel& model,
                                  const std::vector<Matching::MatchResult>& matches,
-                                 const Color& matchedColor,
-                                 const Color& unmatchedColor,
+                                 const Scalar& matchedColor,
+                                 const Scalar& unmatchedColor,
                                  int32_t thickness,
                                  double threshold)
 {
@@ -1003,7 +968,8 @@ void Draw::ShapeMatchingResults(QImage& image,
     }
 
     // Get model contours at level 1 (highest resolution)
-    QContourArray contours = Matching::GetShapeModelXLD(model, 1);
+    QContourArray contours;
+    Matching::GetShapeModelXLD(model, 1, contours);
 
     for (const auto& match : matches) {
         double cosA = std::cos(match.angle);
@@ -1035,8 +1001,8 @@ void Draw::ShapeMatchingResults(QImage& image,
 
 void Draw::MatchedContour(QImage& image,
                            const Matching::MatchedContour& contour,
-                           const Color& matchedColor,
-                           const Color& unmatchedColor,
+                           const Scalar& matchedColor,
+                           const Scalar& unmatchedColor,
                            int32_t thickness)
 {
     MatchedContourSegment(image, contour, matchedColor, unmatchedColor, thickness, true);
@@ -1044,8 +1010,8 @@ void Draw::MatchedContour(QImage& image,
 
 void Draw::MatchedContourSegment(QImage& image,
                                   const Matching::MatchedContour& contour,
-                                  const Color& matchedColor,
-                                  const Color& unmatchedColor,
+                                  const Scalar& matchedColor,
+                                  const Scalar& unmatchedColor,
                                   int32_t thickness,
                                   bool autoClose)
 {
@@ -1057,7 +1023,7 @@ void Draw::MatchedContourSegment(QImage& image,
 
         // Determine color based on quality
         double avgQuality = (p0.quality + p1.quality) * 0.5;
-        const Color& color = (avgQuality >= 0.5) ? matchedColor : unmatchedColor;
+        const Scalar& color = (avgQuality >= 0.5) ? matchedColor : unmatchedColor;
 
         Line(image,
              static_cast<int32_t>(p0.x), static_cast<int32_t>(p0.y),
@@ -1070,7 +1036,7 @@ void Draw::MatchedContourSegment(QImage& image,
         const auto& first = contour.points.front();
         const auto& last = contour.points.back();
         double avgQuality = (first.quality + last.quality) * 0.5;
-        const Color& color = (avgQuality >= 0.5) ? matchedColor : unmatchedColor;
+        const Scalar& color = (avgQuality >= 0.5) ? matchedColor : unmatchedColor;
 
         Line(image,
              static_cast<int32_t>(last.x), static_cast<int32_t>(last.y),

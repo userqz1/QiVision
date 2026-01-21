@@ -184,8 +184,9 @@ bool ShapeModel::IsValid() const {
 // Model Creation Functions
 // =============================================================================
 
-ShapeModel CreateShapeModel(
+void CreateShapeModel(
     const QImage& templateImage,
+    ShapeModel& model,
     int32_t numLevels,
     double angleStart,
     double angleExtent,
@@ -195,14 +196,15 @@ ShapeModel CreateShapeModel(
     const std::string& contrast,
     double minContrast)
 {
-    return CreateShapeModel(templateImage, Rect2i{}, numLevels,
-                            angleStart, angleExtent, angleStep,
-                            optimization, metric, contrast, minContrast);
+    CreateShapeModel(templateImage, Rect2i{}, model, numLevels,
+                     angleStart, angleExtent, angleStep,
+                     optimization, metric, contrast, minContrast);
 }
 
-ShapeModel CreateShapeModel(
+void CreateShapeModel(
     const QImage& templateImage,
     const Rect2i& roi,
+    ShapeModel& model,
     int32_t numLevels,
     double angleStart,
     double angleExtent,
@@ -212,7 +214,7 @@ ShapeModel CreateShapeModel(
     const std::string& contrast,
     double minContrast)
 {
-    ShapeModel model;
+    model = ShapeModel();
 
     // Set up parameters
     ModelParams params;
@@ -232,15 +234,14 @@ ShapeModel CreateShapeModel(
     // Create model
     Point2d origin{0, 0};
     if (!model.Impl()->CreateModel(templateImage, roi, origin)) {
-        return ShapeModel();  // Return invalid model
+        model = ShapeModel();  // Set to invalid model
     }
-
-    return model;
 }
 
-ShapeModel CreateShapeModel(
+void CreateShapeModel(
     const QImage& templateImage,
     const QRegion& region,
+    ShapeModel& model,
     int32_t numLevels,
     double angleStart,
     double angleExtent,
@@ -250,7 +251,7 @@ ShapeModel CreateShapeModel(
     const std::string& contrast,
     double minContrast)
 {
-    ShapeModel model;
+    model = ShapeModel();
 
     // Set up parameters
     ModelParams params;
@@ -270,14 +271,13 @@ ShapeModel CreateShapeModel(
     // Create model with QRegion
     Point2d origin{0, 0};
     if (!model.Impl()->CreateModel(templateImage, region, origin)) {
-        return ShapeModel();  // Return invalid model
+        model = ShapeModel();  // Set to invalid model
     }
-
-    return model;
 }
 
-ShapeModel CreateScaledShapeModel(
+void CreateScaledShapeModel(
     const QImage& templateImage,
+    ShapeModel& model,
     int32_t numLevels,
     double angleStart,
     double angleExtent,
@@ -290,7 +290,7 @@ ShapeModel CreateScaledShapeModel(
     const std::string& contrast,
     double minContrast)
 {
-    ShapeModel model;
+    model = ShapeModel();
 
     ModelParams params;
     params.numLevels = numLevels;
@@ -312,10 +312,8 @@ ShapeModel CreateScaledShapeModel(
 
     Point2d origin{0, 0};
     if (!model.Impl()->CreateModel(templateImage, Rect2i{}, origin)) {
-        return ShapeModel();
+        model = ShapeModel();
     }
-
-    return model;
 }
 
 // =============================================================================
@@ -474,19 +472,22 @@ void GetShapeModelContours(
     }
 }
 
-QContourArray GetShapeModelXLD(const ShapeModel& model, int32_t level)
+void GetShapeModelXLD(
+    const ShapeModel& model,
+    int32_t level,
+    QContourArray& contours)
 {
-    QContourArray result;
+    contours = QContourArray();
 
     if (!model.IsValid()) {
-        return result;
+        return;
     }
 
     auto* impl = model.Impl();
     int32_t actualLevel = (level >= 1) ? level - 1 : 0;
 
     if (actualLevel < 0 || actualLevel >= static_cast<int32_t>(impl->levels_.size())) {
-        return result;
+        return;
     }
 
     const auto& levelModel = impl->levels_[actualLevel];
@@ -495,7 +496,7 @@ QContourArray GetShapeModelXLD(const ShapeModel& model, int32_t level)
     const auto& contourClosed = levelModel.contourClosed;
 
     if (points.empty()) {
-        return result;
+        return;
     }
 
     // Use stored contour topology (from XLD tracing during model creation)
@@ -520,7 +521,7 @@ QContourArray GetShapeModelXLD(const ShapeModel& model, int32_t level)
             }
 
             if (contour.Size() > 0) {
-                result.Add(contour);
+                contours.Add(contour);
             }
         }
     } else {
@@ -530,11 +531,9 @@ QContourArray GetShapeModelXLD(const ShapeModel& model, int32_t level)
             contour.AddPoint(pt.x, pt.y);
         }
         if (contour.Size() > 0) {
-            result.Add(contour);
+            contours.Add(contour);
         }
     }
-
-    return result;
 }
 
 void GetShapeModelParams(
@@ -685,7 +684,9 @@ void WriteShapeModel(
     writer.Close();
 }
 
-ShapeModel ReadShapeModel(const std::string& filename)
+void ReadShapeModel(
+    const std::string& filename,
+    ShapeModel& model)
 {
     using Platform::BinaryReader;
     BinaryReader reader(filename);
@@ -704,7 +705,7 @@ ShapeModel ReadShapeModel(const std::string& filename)
         throw std::runtime_error("Unsupported shape model version");
     }
 
-    ShapeModel model;
+    model = ShapeModel();
     auto* impl = model.Impl();
 
     if (version >= 3) {
@@ -797,7 +798,6 @@ ShapeModel ReadShapeModel(const std::string& filename)
     }
 
     impl->valid_ = true;
-    return model;
 }
 
 void ClearShapeModel(ShapeModel& model)
