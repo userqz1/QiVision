@@ -10,7 +10,7 @@
  */
 
 #include <QiVision/Core/QImage.h>
-#include <QiVision/Core/Draw.h>
+#include <QiVision/Display/Draw.h>
 #include <QiVision/Color/ColorConvert.h>
 #include <QiVision/Matching/ShapeModel.h>
 #include <QiVision/Matching/MatchTypes.h>
@@ -216,10 +216,10 @@ int main(int argc, char* argv[]) {
         std::cout << "   [" << (i+1) << "/" << imageFiles.size() << "] "
                   << imageFiles[i];
         if (success) {
-            std::cout << " - Match: (" << std::fixed << std::setprecision(1)
+            std::cout << " - Match: (" << std::fixed << std::setprecision(3)
                       << cols[0] << "," << rows[0] << ") "
-                      << "Score=" << std::setprecision(3) << scores[0]
-                      << " Angle=" << std::setprecision(1) << DEG(angles[0]) << "deg";
+                      << "Score=" << std::setprecision(4) << scores[0]
+                      << " Angle=" << std::setprecision(3) << DEG(angles[0]) << "deg";
         } else {
             std::cout << " - NO MATCH";
         }
@@ -253,7 +253,7 @@ int main(int argc, char* argv[]) {
             std::ostringstream oss;
             oss << std::fixed << std::setprecision(2)
                 << " - Score=" << scores[0]
-                << " Angle=" << std::setprecision(1) << DEG(angles[0]) << "deg";
+                << " Angle=" << std::setprecision(3) << DEG(angles[0]) << "deg";
             title += oss.str();
         } else {
             title += " - NO MATCH";

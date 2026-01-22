@@ -41,12 +41,20 @@ enum class MatchMethod {
 
 /**
  * @brief Subpixel refinement method
+ *
+ * HALCON-compatible subpixel methods:
+ * - None: Pixel-level only
+ * - Parabolic ('interpolation'): Fast parabolic fitting for position AND angle (~0.05px)
+ * - LeastSquares: Levenberg-Marquardt optimization for (x, y, angle) (~0.02px)
+ * - LeastSquaresHigh: Higher precision LM with more iterations (~0.01px)
+ * - LeastSquaresVeryHigh: Highest precision (~0.005px)
  */
 enum class SubpixelMethod {
-    None,           ///< No subpixel refinement (integer positions only)
-    Parabolic,      ///< Parabolic fitting (fast, ~0.1px accuracy)
-    LeastSquares,   ///< Least squares optimization (slower, ~0.02px accuracy)
-    Gradient        ///< Gradient descent refinement
+    None,                   ///< No subpixel refinement (integer positions only)
+    Parabolic,              ///< Parabolic fitting for position + angle (fast, ~0.05px accuracy)
+    LeastSquares,           ///< Levenberg-Marquardt optimization (~0.02px accuracy)
+    LeastSquaresHigh,       ///< High precision LM optimization (~0.01px accuracy)
+    LeastSquaresVeryHigh    ///< Very high precision LM optimization (~0.005px accuracy)
 };
 
 /**
@@ -201,8 +209,13 @@ struct SearchParams {
     double scaleMax = 1.0;          ///< Maximum scale
     double scaleStep = 0.0;         ///< Scale step (0 = auto-compute)
 
-    // Search region
-    Rect2i searchROI;               ///< Region of interest (empty = full image)
+    // Search region (reference point search space)
+    // HALCON semantics: the domain defines where the reference point can be located
+    // A candidate is valid only if its reference point falls within the search domain
+    Rect2i searchROI;               ///< Rectangular ROI (empty = full image)
+    bool useSearchDomain = false;   ///< If true, use searchDomain instead of searchROI
+    // Note: QRegion searchDomain should be set via SetSearchDomain() method
+    //       The actual QRegion is stored in the search implementation
 
     // Refinement
     SubpixelMethod subpixelMethod = SubpixelMethod::LeastSquares;
@@ -361,6 +374,23 @@ struct ModelParams {
         return *this;
     }
 
+    /// Set contrast with min_size component filtering [low, high, min_size]
+    /// HALCON-style: min_size filters out small connected components
+    /// Note: min_size is scaled by 2 for each pyramid level
+    ModelParams& SetContrastWithMinSize(double low, double high, int32_t minSize) {
+        contrastMode = ContrastMode::Manual;
+        contrastHigh = high;
+        contrastLow = low;
+        minComponentSize = minSize;
+        return *this;
+    }
+
+    /// Set single threshold with min_size (no hysteresis)
+    /// HALCON-style: pass same value for low and high
+    ModelParams& SetContrastWithMinSize(double threshold, int32_t minSize) {
+        return SetContrastWithMinSize(threshold, threshold, minSize);
+    }
+
     /// Set auto contrast detection
     ModelParams& SetContrastAuto() {
         contrastMode = ContrastMode::Auto;
@@ -426,6 +456,71 @@ struct ModelParams {
     // Legacy compatibility
     MatchPolarity polarity = MatchPolarity::Same;
     ModelParams& SetPolarity(MatchPolarity p) { polarity = p; return *this; }
+
+    // =========================================================================
+    // Parameter Validation (HALCON-style hard checks)
+    // =========================================================================
+
+    /**
+     * @brief Validate and fix contrast parameters
+     *
+     * HALCON requirements:
+     * - contrastLow > 0 (if hysteresis mode)
+     * - contrastHigh >= contrastLow
+     * - minContrast < contrastHigh (if set)
+     *
+     * @return true if valid, false if parameters were invalid and fixed
+     */
+    bool ValidateAndFixContrast() {
+        bool wasValid = true;
+
+        // Ensure contrastHigh is positive
+        if (contrastHigh <= 0) {
+            contrastHigh = 10.0;  // Minimal default
+            wasValid = false;
+        }
+
+        // Ensure contrastLow > 0 when using hysteresis
+        if (contrastLow < 0) {
+            contrastLow = 0.0;  // Disable hysteresis
+            wasValid = false;
+        }
+
+        // Ensure high >= low (HALCON requirement)
+        if (contrastLow > 0 && contrastHigh < contrastLow) {
+            // Swap them
+            double tmp = contrastHigh;
+            contrastHigh = contrastLow;
+            contrastLow = tmp;
+            wasValid = false;
+        }
+
+        // Ensure minContrast < contrastHigh for valid search semantics
+        if (minContrast > 0 && minContrast >= contrastHigh) {
+            minContrast = contrastHigh * 0.5;
+            wasValid = false;
+        }
+
+        // Ensure minComponentSize is reasonable
+        if (minComponentSize < 1) {
+            minComponentSize = 1;
+            wasValid = false;
+        }
+
+        return wasValid;
+    }
+
+    /**
+     * @brief Check if parameters are valid without fixing
+     */
+    bool IsContrastValid() const {
+        if (contrastHigh <= 0) return false;
+        if (contrastLow < 0) return false;
+        if (contrastLow > 0 && contrastHigh < contrastLow) return false;
+        if (minContrast > 0 && minContrast >= contrastHigh) return false;
+        if (minComponentSize < 1) return false;
+        return true;
+    }
 };
 
 // =============================================================================
@@ -617,6 +712,10 @@ inline std::vector<MatchResult> FilterByScore(
 struct ShapeModelTimingParams {
     bool enableTiming = false;      ///< Enable timing measurements
     bool printTiming = false;       ///< Print timing info to stdout
+
+    /// Debug output for model creation (HALCON inspect_shape_model style)
+    /// Prints point counts at each stage: pre-hysteresis, post-hysteresis, post-minSize
+    bool debugCreateModel = false;
 };
 
 /**

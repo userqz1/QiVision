@@ -42,9 +42,11 @@ MetricMode ParseMetric(const std::string& str) {
 }
 
 SubpixelMethod ParseSubpixel(const std::string& str) {
-    if (str == "none") return SubpixelMethod::None;
-    if (str == "interpolation") return SubpixelMethod::Parabolic;
+    if (str == "none" || str == "false") return SubpixelMethod::None;
+    if (str == "interpolation" || str == "true") return SubpixelMethod::Parabolic;
     if (str == "least_squares") return SubpixelMethod::LeastSquares;
+    if (str == "least_squares_high") return SubpixelMethod::LeastSquaresHigh;
+    if (str == "least_squares_very_high") return SubpixelMethod::LeastSquaresVeryHigh;
     return SubpixelMethod::LeastSquares;  // default
 }
 

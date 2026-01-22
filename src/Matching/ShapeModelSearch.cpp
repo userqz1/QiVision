@@ -79,6 +79,19 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
     // Search grid at top level
     int32_t stepSize = 2;
 
+    // HALCON search domain constraint:
+    // The search ROI defines where the reference point can be located
+    // Scale ROI to pyramid level coordinates
+    double levelScale = targetPyramid.GetScale(startLevel);
+    Rect2i levelROI;
+    bool hasSearchROI = (params.searchROI.width > 0 && params.searchROI.height > 0);
+    if (hasSearchROI) {
+        levelROI.x = static_cast<int32_t>(params.searchROI.x * levelScale);
+        levelROI.y = static_cast<int32_t>(params.searchROI.y * levelScale);
+        levelROI.width = static_cast<int32_t>(params.searchROI.width * levelScale);
+        levelROI.height = static_cast<int32_t>(params.searchROI.height * levelScale);
+    }
+
     // Use pregenerated angle cache if available (Halcon pregeneration strategy)
     // This avoids computing cos/sin and bounds for each angle during search
     const bool usePregenCache = !searchAngleCache_.empty() &&
@@ -125,6 +138,15 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
                 int32_t searchXMax = std::min(targetWidth - 1, targetWidth - 1 - bounds.maxX);
                 int32_t searchYMin = std::max(0, -bounds.minY);
                 int32_t searchYMax = std::min(targetHeight - 1, targetHeight - 1 - bounds.maxY);
+
+                // HALCON search domain constraint: intersect with ROI
+                // The reference point must fall within the search domain
+                if (hasSearchROI) {
+                    searchXMin = std::max(searchXMin, levelROI.x);
+                    searchXMax = std::min(searchXMax, levelROI.x + levelROI.width - 1);
+                    searchYMin = std::max(searchYMin, levelROI.y);
+                    searchYMax = std::min(searchYMax, levelROI.y + levelROI.height - 1);
+                }
 
                 if (searchXMin > searchXMax || searchYMin > searchYMax) {
                     continue;
@@ -193,6 +215,14 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
                 searchYMin = std::max(0, searchYMin);
                 searchXMax = std::min(targetWidth - 1, searchXMax);
                 searchYMax = std::min(targetHeight - 1, searchYMax);
+
+                // HALCON search domain constraint: intersect with ROI
+                if (hasSearchROI) {
+                    searchXMin = std::max(searchXMin, levelROI.x);
+                    searchXMax = std::min(searchXMax, levelROI.x + levelROI.width - 1);
+                    searchYMin = std::max(searchYMin, levelROI.y);
+                    searchYMax = std::min(searchYMax, levelROI.y + levelROI.height - 1);
+                }
 
                 if (searchXMin > searchXMax || searchYMin > searchYMax) {
                     continue;

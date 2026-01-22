@@ -5,7 +5,7 @@
 
 #include <QiVision/Core/QImage.h>
 #include <QiVision/Core/QContour.h>
-#include <QiVision/Core/Draw.h>
+#include <QiVision/Display/Draw.h>
 #include <QiVision/Color/ColorConvert.h>
 #include <QiVision/Matching/ShapeModel.h>
 #include <QiVision/Platform/Timer.h>

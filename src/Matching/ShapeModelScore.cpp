@@ -658,79 +658,176 @@ void ShapeModelImpl::RefinePosition(
         return;
     }
 
-    int32_t level = 0;
+    constexpr int32_t level = 0;  // Always refine at finest level
 
     if (method == SubpixelMethod::Parabolic) {
-        double scores[3][3];
+        // =====================================================================
+        // HALCON 'interpolation' style: Parabolic fitting for position + angle
+        // Complexity: 13 Score evaluations, ~0.05px accuracy
+        // =====================================================================
 
+        constexpr double delta = 0.5;  // Position sampling step
+
+        // === Position refinement: 3x3 sampling grid ===
+        double scores[3][3];
         for (int32_t dy = -1; dy <= 1; ++dy) {
             for (int32_t dx = -1; dx <= 1; ++dx) {
                 scores[dy + 1][dx + 1] = ComputeScoreAtPosition(
-                    pyramid, level, match.x + dx * 0.5, match.y + dy * 0.5,
+                    pyramid, level, match.x + dx * delta, match.y + dy * delta,
                     match.angle, 1.0, 0.0);
             }
         }
 
-        double denom = 2.0 * (scores[1][0] - 2.0 * scores[1][1] + scores[1][2]);
-        if (std::abs(denom) > 1e-10) {
-            double dx = (scores[1][0] - scores[1][2]) / denom;
-            match.x += dx * 0.5;
+        // X-direction subpixel (use middle row)
+        double denom_x = 2.0 * (scores[1][0] - 2.0 * scores[1][1] + scores[1][2]);
+        if (std::abs(denom_x) > 1e-10) {
+            double dx = delta * (scores[1][0] - scores[1][2]) / denom_x;
+            dx = std::max(-delta, std::min(delta, dx));  // Clamp to prevent divergence
+            match.x += dx;
         }
 
-        denom = 2.0 * (scores[0][1] - 2.0 * scores[1][1] + scores[2][1]);
-        if (std::abs(denom) > 1e-10) {
-            double dy = (scores[0][1] - scores[2][1]) / denom;
-            match.y += dy * 0.5;
+        // Y-direction subpixel (use middle column)
+        double denom_y = 2.0 * (scores[0][1] - 2.0 * scores[1][1] + scores[2][1]);
+        if (std::abs(denom_y) > 1e-10) {
+            double dy = delta * (scores[0][1] - scores[2][1]) / denom_y;
+            dy = std::max(-delta, std::min(delta, dy));  // Clamp to prevent divergence
+            match.y += dy;
         }
 
+        // === Angle refinement: 3-point sampling ===
+        // Angle step based on model size (smaller model = larger angle effect)
+        double modelRadius = std::max(modelMaxX_ - modelMinX_, modelMaxY_ - modelMinY_) / 2.0;
+        double delta_angle = std::atan(0.25 / std::max(modelRadius, 10.0));  // ~0.5-2 degrees
+        delta_angle = std::max(0.005, std::min(0.05, delta_angle));  // Clamp to 0.3-3 degrees
+
+        double s_minus = ComputeScoreAtPosition(pyramid, level, match.x, match.y,
+                                                 match.angle - delta_angle, 1.0, 0.0);
+        double s_center = ComputeScoreAtPosition(pyramid, level, match.x, match.y,
+                                                  match.angle, 1.0, 0.0);
+        double s_plus = ComputeScoreAtPosition(pyramid, level, match.x, match.y,
+                                                match.angle + delta_angle, 1.0, 0.0);
+
+        double denom_a = 2.0 * (s_minus - 2.0 * s_center + s_plus);
+        if (std::abs(denom_a) > 1e-10) {
+            double da = delta_angle * (s_minus - s_plus) / denom_a;
+            da = std::max(-delta_angle, std::min(delta_angle, da));  // Clamp
+            match.angle += da;
+        }
+
+        // Final score at refined position
         match.score = ComputeScoreAtPosition(pyramid, level, match.x, match.y,
                                               match.angle, 1.0, 0.0);
     }
-    else if (method == SubpixelMethod::LeastSquares) {
-        const int32_t maxIter = 10;
-        const double stepSize = 0.1;
-        const double tolerance = 0.001;
+    else if (method == SubpixelMethod::LeastSquares ||
+             method == SubpixelMethod::LeastSquaresHigh ||
+             method == SubpixelMethod::LeastSquaresVeryHigh) {
+        // =====================================================================
+        // HALCON 'least_squares' style: Levenberg-Marquardt optimization
+        // Jointly optimizes (x, y, angle) using numerical gradient + Hessian
+        // =====================================================================
 
-        double bestScore = match.score;
-        double bestX = match.x;
-        double bestY = match.y;
-        double bestAngle = match.angle;
+        // Parameters based on accuracy level
+        int32_t maxIter;
+        double tolerance;
+        if (method == SubpixelMethod::LeastSquares) {
+            maxIter = 10; tolerance = 1e-4;
+        } else if (method == SubpixelMethod::LeastSquaresHigh) {
+            maxIter = 20; tolerance = 1e-5;
+        } else {  // LeastSquaresVeryHigh
+            maxIter = 50; tolerance = 1e-6;
+        }
+
+        // Numerical differentiation step sizes
+        constexpr double eps_pos = 0.1;      // Position step (pixels)
+        constexpr double eps_angle = 0.001;  // Angle step (~0.06 degrees)
+
+        // Current state
+        double x = match.x;
+        double y = match.y;
+        double theta = match.angle;
+        double score = match.score;
+
+        // Levenberg-Marquardt damping factor
+        double lambda = 0.001;
+
+        // Track best result (in case of oscillation)
+        double bestX = x, bestY = y, bestTheta = theta, bestScore = score;
 
         for (int32_t iter = 0; iter < maxIter; ++iter) {
-            double eps = 0.1;
-            double scoreX1 = ComputeScoreAtPosition(pyramid, level, match.x + eps, match.y,
-                                                     match.angle, 1.0, 0.0);
-            double scoreX0 = ComputeScoreAtPosition(pyramid, level, match.x - eps, match.y,
-                                                     match.angle, 1.0, 0.0);
-            double scoreY1 = ComputeScoreAtPosition(pyramid, level, match.x, match.y + eps,
-                                                     match.angle, 1.0, 0.0);
-            double scoreY0 = ComputeScoreAtPosition(pyramid, level, match.x, match.y - eps,
-                                                     match.angle, 1.0, 0.0);
+            // Compute current score
+            score = ComputeScoreAtPosition(pyramid, level, x, y, theta, 1.0, 0.0);
 
-            double gradX = (scoreX1 - scoreX0) / (2.0 * eps);
-            double gradY = (scoreY1 - scoreY0) / (2.0 * eps);
-
-            match.x += stepSize * gradX;
-            match.y += stepSize * gradY;
-
-            double newScore = ComputeScoreAtPosition(pyramid, level, match.x, match.y,
-                                                      match.angle, 1.0, 0.0);
-
-            if (newScore > bestScore) {
-                bestScore = newScore;
-                bestX = match.x;
-                bestY = match.y;
-                bestAngle = match.angle;
+            if (score > bestScore) {
+                bestX = x; bestY = y; bestTheta = theta; bestScore = score;
             }
 
-            if (std::abs(gradX) < tolerance && std::abs(gradY) < tolerance) {
-                break;
+            // Compute numerical gradient (6 Score evaluations)
+            double s_xp = ComputeScoreAtPosition(pyramid, level, x + eps_pos, y, theta, 1.0, 0.0);
+            double s_xm = ComputeScoreAtPosition(pyramid, level, x - eps_pos, y, theta, 1.0, 0.0);
+            double s_yp = ComputeScoreAtPosition(pyramid, level, x, y + eps_pos, theta, 1.0, 0.0);
+            double s_ym = ComputeScoreAtPosition(pyramid, level, x, y - eps_pos, theta, 1.0, 0.0);
+            double s_tp = ComputeScoreAtPosition(pyramid, level, x, y, theta + eps_angle, 1.0, 0.0);
+            double s_tm = ComputeScoreAtPosition(pyramid, level, x, y, theta - eps_angle, 1.0, 0.0);
+
+            double grad_x = (s_xp - s_xm) / (2.0 * eps_pos);
+            double grad_y = (s_yp - s_ym) / (2.0 * eps_pos);
+            double grad_theta = (s_tp - s_tm) / (2.0 * eps_angle);
+
+            // Compute diagonal Hessian elements (reuse samples from gradient)
+            double H_xx = (s_xp - 2.0 * score + s_xm) / (eps_pos * eps_pos);
+            double H_yy = (s_yp - 2.0 * score + s_ym) / (eps_pos * eps_pos);
+            double H_tt = (s_tp - 2.0 * score + s_tm) / (eps_angle * eps_angle);
+
+            // Check convergence (gradient norm)
+            // Scale angle gradient by 1000 to make it comparable to position
+            double grad_norm = std::sqrt(grad_x * grad_x + grad_y * grad_y +
+                                          (grad_theta * grad_theta) * 1e6);
+            if (grad_norm < tolerance) {
+                break;  // Converged
+            }
+
+            // Levenberg-Marquardt update: delta = g / (|H| + lambda)
+            // For maximization, we follow the positive gradient direction
+            double delta_x = grad_x / (std::abs(H_xx) + lambda + 1e-10);
+            double delta_y = grad_y / (std::abs(H_yy) + lambda + 1e-10);
+            double delta_theta = grad_theta / (std::abs(H_tt) + lambda + 1e-10);
+
+            // Clamp step size to prevent divergence
+            delta_x = std::max(-1.0, std::min(1.0, delta_x));
+            delta_y = std::max(-1.0, std::min(1.0, delta_y));
+            delta_theta = std::max(-0.05, std::min(0.05, delta_theta));  // ~3 degrees max
+
+            // Try update
+            double x_new = x + delta_x;
+            double y_new = y + delta_y;
+            double theta_new = theta + delta_theta;
+
+            double score_new = ComputeScoreAtPosition(pyramid, level, x_new, y_new,
+                                                       theta_new, 1.0, 0.0);
+
+            if (score_new > score) {
+                // Accept update, decrease damping
+                x = x_new;
+                y = y_new;
+                theta = theta_new;
+                lambda *= 0.1;
+                lambda = std::max(lambda, 1e-7);
+            } else {
+                // Reject update, increase damping
+                lambda *= 10.0;
+                lambda = std::min(lambda, 1e7);
+
+                // If damping too high, we've converged
+                if (lambda > 1e6) {
+                    break;
+                }
             }
         }
 
+        // Use best result found
         match.x = bestX;
         match.y = bestY;
-        match.angle = bestAngle;
+        match.angle = bestTheta;
         match.score = bestScore;
     }
 

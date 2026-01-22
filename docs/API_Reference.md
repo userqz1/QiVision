@@ -2612,7 +2612,7 @@ void MetrologyModelResult(
 
 **示例**:
 ```cpp
-#include <QiVision/Core/Draw.h>
+#include <QiVision/Display/Draw.h>
 #include <QiVision/Measure/Metrology.h>
 
 // 创建测量模型

@@ -84,6 +84,106 @@ inline double InterpolateAngleXLD(double a1, double a2, double t) {
 }
 
 /**
+ * @brief Filter edge points by connected component size (8-connectivity)
+ *
+ * HALCON-style min_size filtering: removes small isolated edge groups.
+ * The minSize parameter is scaled per pyramid level (divided by 2 each level).
+ *
+ * @param edgePoints Edge points to filter (post-hysteresis)
+ * @param width Image width at this level
+ * @param height Image height at this level
+ * @param minSize Minimum component size (point count)
+ * @return Filtered edge points
+ */
+std::vector<Qi::Vision::Internal::EdgePoint> FilterByComponentSize(
+    const std::vector<Qi::Vision::Internal::EdgePoint>& edgePoints,
+    int32_t width, int32_t height,
+    int32_t minSize)
+{
+    if (edgePoints.empty() || minSize <= 1) {
+        return edgePoints;
+    }
+
+    // Build spatial hash for fast neighbor lookup
+    std::unordered_map<int64_t, std::vector<size_t>> pixelMap;
+    auto toKey = [width](int32_t x, int32_t y) -> int64_t {
+        return static_cast<int64_t>(y) * width + x;
+    };
+
+    for (size_t i = 0; i < edgePoints.size(); ++i) {
+        int32_t px = static_cast<int32_t>(std::round(edgePoints[i].x));
+        int32_t py = static_cast<int32_t>(std::round(edgePoints[i].y));
+        if (px >= 0 && px < width && py >= 0 && py < height) {
+            pixelMap[toKey(px, py)].push_back(i);
+        }
+    }
+
+    // Union-Find for connected components
+    std::vector<int32_t> parent(edgePoints.size());
+    std::vector<int32_t> rank(edgePoints.size(), 0);
+    for (size_t i = 0; i < edgePoints.size(); ++i) {
+        parent[i] = static_cast<int32_t>(i);
+    }
+
+    std::function<int32_t(int32_t)> find = [&](int32_t x) -> int32_t {
+        if (parent[x] != x) {
+            parent[x] = find(parent[x]);
+        }
+        return parent[x];
+    };
+
+    auto unite = [&](int32_t x, int32_t y) {
+        int32_t px = find(x);
+        int32_t py = find(y);
+        if (px == py) return;
+        if (rank[px] < rank[py]) std::swap(px, py);
+        parent[py] = px;
+        if (rank[px] == rank[py]) rank[px]++;
+    };
+
+    // 8-neighbor offsets
+    static const int32_t dx8[8] = {1, 1, 0, -1, -1, -1, 0, 1};
+    static const int32_t dy8[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+
+    // Connect 8-neighbors
+    for (size_t i = 0; i < edgePoints.size(); ++i) {
+        int32_t px = static_cast<int32_t>(std::round(edgePoints[i].x));
+        int32_t py = static_cast<int32_t>(std::round(edgePoints[i].y));
+
+        for (int32_t d = 0; d < 8; ++d) {
+            int32_t nx = px + dx8[d];
+            int32_t ny = py + dy8[d];
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+
+            auto it = pixelMap.find(toKey(nx, ny));
+            if (it != pixelMap.end()) {
+                for (size_t j : it->second) {
+                    unite(static_cast<int32_t>(i), static_cast<int32_t>(j));
+                }
+            }
+        }
+    }
+
+    // Count component sizes
+    std::unordered_map<int32_t, int32_t> componentSize;
+    for (size_t i = 0; i < edgePoints.size(); ++i) {
+        componentSize[find(static_cast<int32_t>(i))]++;
+    }
+
+    // Filter by size
+    std::vector<Qi::Vision::Internal::EdgePoint> result;
+    result.reserve(edgePoints.size());
+    for (size_t i = 0; i < edgePoints.size(); ++i) {
+        int32_t root = find(static_cast<int32_t>(i));
+        if (componentSize[root] >= minSize) {
+            result.push_back(edgePoints[i]);
+        }
+    }
+
+    return result;
+}
+
+/**
  * @brief Trace edge points into ordered contour segments using 8-neighbor connectivity
  *
  * Halcon-style contour tracing: follows edge direction (perpendicular to gradient)
@@ -417,6 +517,16 @@ void LevelModel::BuildSoAForPoints(const std::vector<ModelPoint>& pts,
 // =============================================================================
 
 bool ShapeModelImpl::CreateModel(const QImage& image, const Rect2i& roi, const Point2d& origin) {
+    // Validate and fix contrast parameters (HALCON-style hard checks)
+    if (!params_.ValidateAndFixContrast()) {
+        if (timingParams_.debugCreateModel) {
+            std::printf("[CreateModel] Warning: Contrast parameters were invalid and auto-fixed.\n");
+            std::printf("  contrastLow=%.1f, contrastHigh=%.1f, minContrast=%.1f, minComponentSize=%d\n",
+                        params_.contrastLow, params_.contrastHigh,
+                        params_.minContrast, params_.minComponentSize);
+        }
+    }
+
     // Reset timing
     createTiming_ = ShapeModelCreateTiming();
     auto tTotal = std::chrono::high_resolution_clock::now();
@@ -616,7 +726,8 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const Rect2i& roi, const P
         createTiming_.contrastAutoMs = elapsedMs(tStep);
     }
 
-    // Set origin
+    // Set origin - HALCON uses domain centroid as default reference point
+    // For rectangular ROI, centroid equals bbox center
     origin_ = origin;
     if (origin_.x == 0 && origin_.y == 0) {
         origin_.x = templateSize_.width / 2.0;
@@ -709,6 +820,16 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const QRegion& region, con
         return CreateModel(image, Rect2i{}, origin);
     }
 
+    // Validate and fix contrast parameters (HALCON-style hard checks)
+    if (!params_.ValidateAndFixContrast()) {
+        if (timingParams_.debugCreateModel) {
+            std::printf("[CreateModel] Warning: Contrast parameters were invalid and auto-fixed.\n");
+            std::printf("  contrastLow=%.1f, contrastHigh=%.1f, minContrast=%.1f, minComponentSize=%d\n",
+                        params_.contrastLow, params_.contrastHigh,
+                        params_.minContrast, params_.minComponentSize);
+        }
+    }
+
     // Reset timing
     createTiming_ = ShapeModelCreateTiming();
     auto tTotal = std::chrono::high_resolution_clock::now();
@@ -780,17 +901,20 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const QRegion& region, con
     // Store actual levels used
     params_.numLevels = pyramid.NumLevels();
 
-    // Set origin
+    // Translate region to template-local coordinates (must be done before origin calculation)
+    QRegion localRegion = region.Translate(-bbox.x, -bbox.y);
+
+    // Set origin - HALCON uses domain centroid as default reference point
     origin_ = origin;
     if (origin_.x == 0 && origin_.y == 0) {
-        // Default to center of bounding box
-        origin_.x = templateSize_.width / 2.0;
-        origin_.y = templateSize_.height / 2.0;
+        // Default to domain centroid (center of gravity), not bbox center
+        // This matches HALCON's create_shape_model behavior
+        Point2d centroid = localRegion.Centroid();
+        origin_.x = centroid.x;
+        origin_.y = centroid.y;
     }
 
     // Extract model points using QRegion mask
-    // Translate region to template-local coordinates
-    QRegion localRegion = region.Translate(-bbox.x, -bbox.y);
 
     tStep = std::chrono::high_resolution_clock::now();
     ExtractModelPointsXLDWithRegion(templateImg, pyramid, localRegion);
@@ -902,12 +1026,27 @@ void ShapeModelImpl::ExtractModelPointsXLD(const QImage& templateImg, const Angl
         double levelOriginX = origin_.x * levelData.scale;
         double levelOriginY = origin_.y * levelData.scale;
 
-        // Scale contrast thresholds with pyramid level
-        double levelContrastHigh = std::max(2.0, contrastHigh * levelData.scale);
-        double levelContrastLow = std::max(1.0, contrastLow * levelData.scale);
+        const auto& edgePoints = pyramid.GetEdgePoints(level);
+
+        // Compute level thresholds with fixed floors (HALCON-compatible)
+        constexpr double FLOOR_LOW = 1.0;
+        constexpr double FLOOR_HIGH = 2.0;
+        double levelContrastHigh = std::max(FLOOR_HIGH, contrastHigh * levelData.scale);
+        double levelContrastLow = std::max(FLOOR_LOW, contrastLow * levelData.scale);
         double levelContrastMax = contrastMax * levelData.scale;
 
-        const auto& edgePoints = pyramid.GetEdgePoints(level);
+        // Ensure High >= Low (HALCON requirement)
+        if (levelContrastHigh < levelContrastLow) {
+            levelContrastHigh = levelContrastLow;
+        }
+
+        // Debug: pre-hysteresis point count
+        size_t preHysteresisCount = 0;
+        for (const auto& ep : edgePoints) {
+            if (ep.magnitude >= levelContrastLow && ep.magnitude <= levelContrastMax) {
+                preHysteresisCount++;
+            }
+        }
 
         // Step 1: Filter edge points using hysteresis thresholding
         std::vector<Qi::Vision::Internal::EdgePoint> filteredPoints;
@@ -998,6 +1137,32 @@ void ShapeModelImpl::ExtractModelPointsXLD(const QImage& templateImg, const Angl
                     filteredPoints.push_back(ep);
                 }
             }
+        }
+
+        // Debug: post-hysteresis point count
+        size_t postHysteresisCount = filteredPoints.size();
+
+        // Step 1.5: Component size filtering (HALCON min_size)
+        // minSize is scaled per level: minSizeLevel = ceil(minSize * scale)
+        if (params_.minComponentSize > 1) {
+            int32_t levelMinSize = static_cast<int32_t>(std::ceil(
+                static_cast<double>(params_.minComponentSize) * levelData.scale));
+            levelMinSize = std::max(1, levelMinSize);
+
+            filteredPoints = FilterByComponentSize(
+                filteredPoints, levelData.width, levelData.height, levelMinSize);
+        }
+
+        // Debug: post-minSize point count
+        size_t postMinSizeCount = filteredPoints.size();
+
+        // Debug output (HALCON inspect_shape_model style)
+        if (timingParams_.debugCreateModel) {
+            std::printf("[CreateModel] Level %d (scale=%.3f): ", level, levelData.scale);
+            std::printf("thresholds=[%.1f, %.1f], ",
+                        levelContrastLow, levelContrastHigh);
+            std::printf("points: pre-hyst=%zu -> post-hyst=%zu -> post-minSize=%zu\n",
+                        preHysteresisCount, postHysteresisCount, postMinSizeCount);
         }
 
         // Step 2: Trace into ordered contours
@@ -1099,15 +1264,41 @@ void ShapeModelImpl::ExtractModelPointsXLDWithRegion(const QImage& templateImg, 
         double levelOriginX = origin_.x * levelData.scale;
         double levelOriginY = origin_.y * levelData.scale;
 
-        double levelContrastHigh = std::max(2.0, contrastHigh * levelData.scale);
-        double levelContrastLow = std::max(1.0, contrastLow * levelData.scale);
-        double levelContrastMax = contrastMax * levelData.scale;
-
         // Scale region for this pyramid level
         QRegion scaledRegion = region.Scale(levelData.scale, levelData.scale);
 
-        // Extract edge points within the region mask
-        auto edgePoints = pyramid.ExtractEdgePoints(level, scaledRegion, levelContrastLow);
+        // Extract all edge points with minimal threshold for noise estimation
+        constexpr double MINIMAL_THRESHOLD = 0.5;
+        auto allEdgePoints = pyramid.ExtractEdgePoints(level, scaledRegion, MINIMAL_THRESHOLD);
+
+        // Compute level thresholds with fixed floors (HALCON-compatible)
+        constexpr double FLOOR_LOW = 1.0;
+        constexpr double FLOOR_HIGH = 2.0;
+        double levelContrastHigh = std::max(FLOOR_HIGH, contrastHigh * levelData.scale);
+        double levelContrastLow = std::max(FLOOR_LOW, contrastLow * levelData.scale);
+        double levelContrastMax = contrastMax * levelData.scale;
+
+        // Ensure High >= Low (HALCON requirement)
+        if (levelContrastHigh < levelContrastLow) {
+            levelContrastHigh = levelContrastLow;
+        }
+
+        // Filter edge points by low threshold
+        std::vector<Qi::Vision::Internal::EdgePoint> edgePoints;
+        edgePoints.reserve(allEdgePoints.size());
+        for (const auto& ep : allEdgePoints) {
+            if (ep.magnitude >= levelContrastLow) {
+                edgePoints.push_back(ep);
+            }
+        }
+
+        // Debug: pre-hysteresis point count
+        size_t preHysteresisCount = 0;
+        for (const auto& ep : edgePoints) {
+            if (ep.magnitude >= levelContrastLow && ep.magnitude <= levelContrastMax) {
+                preHysteresisCount++;
+            }
+        }
 
         // Step 1: Filter edge points using hysteresis thresholding
         std::vector<Qi::Vision::Internal::EdgePoint> filteredPoints;
@@ -1194,6 +1385,32 @@ void ShapeModelImpl::ExtractModelPointsXLDWithRegion(const QImage& templateImg, 
                     filteredPoints.push_back(ep);
                 }
             }
+        }
+
+        // Debug: post-hysteresis point count
+        size_t postHysteresisCount = filteredPoints.size();
+
+        // Step 1.5: Component size filtering (HALCON min_size)
+        // minSize is scaled per level: minSizeLevel = ceil(minSize * scale)
+        if (params_.minComponentSize > 1) {
+            int32_t levelMinSize = static_cast<int32_t>(std::ceil(
+                static_cast<double>(params_.minComponentSize) * levelData.scale));
+            levelMinSize = std::max(1, levelMinSize);
+
+            filteredPoints = FilterByComponentSize(
+                filteredPoints, levelData.width, levelData.height, levelMinSize);
+        }
+
+        // Debug: post-minSize point count
+        size_t postMinSizeCount = filteredPoints.size();
+
+        // Debug output (HALCON inspect_shape_model style)
+        if (timingParams_.debugCreateModel) {
+            std::printf("[CreateModel] Level %d (scale=%.3f): ", level, levelData.scale);
+            std::printf("thresholds=[%.1f, %.1f], ",
+                        levelContrastLow, levelContrastHigh);
+            std::printf("points: pre-hyst=%zu -> post-hyst=%zu -> post-minSize=%zu\n",
+                        preHysteresisCount, postHysteresisCount, postMinSizeCount);
         }
 
         // Step 2: Trace into ordered contours
