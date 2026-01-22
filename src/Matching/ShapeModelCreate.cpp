@@ -867,7 +867,7 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const QRegion& region, con
         pyramidParams.numLevels = std::min(params_.numLevels, maxValidLevels);
     }
     pyramidParams.smoothSigma = 0.5;
-    pyramidParams.useNMS = true;  // Single-pixel edges for accurate contour tracing
+    pyramidParams.useNMS = true;
 
     // Contrast handling
     bool needAutoContrast = (params_.contrastMode == ContrastMode::Auto ||

@@ -601,14 +601,14 @@ struct MetrologyMeasureParams {
 class MetrologyModel {
 public:
     // 添加测量对象
-    int32_t AddLineMeasure(double row1, double col1, double row2, double col2,
+    int32_t AddLineMeasure(double x1, double y1, double x2, double y2,
                            const MetrologyMeasureParams& params = {});
-    int32_t AddCircleMeasure(double row, double col, double radius,
+    int32_t AddCircleMeasure(double x, double y, double radius,
                              const MetrologyMeasureParams& params = {});
-    int32_t AddArcMeasure(double row, double col, double radius,
+    int32_t AddArcMeasure(double x, double y, double radius,
                           double angleStart, double angleEnd,
                           const MetrologyMeasureParams& params = {});
-    int32_t AddEllipseMeasure(double row, double col, double phi,
+    int32_t AddEllipseMeasure(double x, double y, double phi,
                               double ra, double rb,
                               const MetrologyMeasureParams& params = {});
 
@@ -625,7 +625,7 @@ public:
     std::vector<double> GetPointWeights(int32_t index) const;
 
     // 对齐
-    void Align(double rowOffset, double colOffset, double phi);
+    void Align(double dx, double dy, double phi);
     void ResetAlignment();
 };
 ```
@@ -642,17 +642,42 @@ params.SetMeasureLength(30.0, 10.0)
       .SetThreshold("auto");  // 自动阈值模式
 
 MetrologyModel model;
-int idx = model.AddCircleMeasure(500.0, 650.0, 220.0, params);
+int idx = model.AddCircleMeasure(500.0, 650.0, 220.0, params);  // x, y, radius
 
 if (model.Apply(image)) {
     auto result = model.GetCircleResult(idx);
     if (result.IsValid()) {
-        std::cout << "Center: (" << result.column << ", " << result.row << ")\n";
+        std::cout << "Center: (" << result.x << ", " << result.y << ")\n";
         std::cout << "Radius: " << result.radius << "\n";
         std::cout << "RMS Error: " << result.rmsError << "\n";
     }
 }
 ```
+
+#### 2.7.4 MetrologyObject 基类
+
+测量对象的统一接口，用于访问卡尺工具的几何信息。
+
+```cpp
+class MetrologyObject {
+public:
+    MetrologyObjectType Type() const;       // 对象类型（Line, Circle, Ellipse, Rectangle2）
+
+    // 卡尺工具接口
+    std::vector<MeasureRectangle2> GetCalipers() const;  // 获取所有卡尺矩形
+    QContour GetContour() const;            // 获取初始几何轮廓
+
+    // 几何中心接口（圆、椭圆、矩形有中心；直线没有）
+    bool HasCenter() const;                 // 是否有几何中心
+    Point2d GetCenter() const;              // 获取几何中心（仅 HasCenter()=true 时有效）
+};
+```
+
+**说明**：
+- `GetCalipers()`: 获取沿几何轮廓分布的卡尺测量矩形
+- `GetContour()`: 获取初始几何形状的轮廓（圆周、直线端点等）
+- `HasCenter()`: 圆、椭圆、矩形返回 `true`；直线返回 `false`
+- `GetCenter()`: 返回几何中心点 `(x, y)`，用于绘制卡尺工具的中心十字
 
 ---
 
@@ -2654,7 +2679,7 @@ MetrologyModel model;
 MetrologyMeasureParams params;
 params.SetFitMethod("ransac");  // RANSAC: 二值权重，绿/红两色
 
-int circleIdx = model.AddCircleMeasure(500, 650, 220, params);
+int circleIdx = model.AddCircleMeasure(500, 650, 220, params);  // x, y, radius
 model.Apply(image);
 
 // 绘制
