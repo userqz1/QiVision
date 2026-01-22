@@ -241,6 +241,10 @@ public:
     std::vector<MatchResult> SearchPyramid(const AnglePyramid& targetPyramid,
                                             const SearchParams& params) const;
 
+    std::vector<MatchResult> SearchPyramidScaled(const AnglePyramid& targetPyramid,
+                                                  const SearchParams& params,
+                                                  double scale) const;
+
     std::vector<MatchResult> SearchLevel(const AnglePyramid& targetPyramid,
                                           int32_t level,
                                           const std::vector<MatchResult>& candidates,

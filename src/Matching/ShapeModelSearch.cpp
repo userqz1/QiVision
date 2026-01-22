@@ -133,11 +133,18 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
                 // Use precomputed rotated bounds (no ComputeRotatedBounds call!)
                 const auto& bounds = angleData.levelBounds[startLevel];
 
+                // Scale bounds by search scale factor
+                const double scaleFactor = params.scaleMin;  // For scaled search
+                int32_t scaledMinX = static_cast<int32_t>(bounds.minX * scaleFactor);
+                int32_t scaledMaxX = static_cast<int32_t>(bounds.maxX * scaleFactor);
+                int32_t scaledMinY = static_cast<int32_t>(bounds.minY * scaleFactor);
+                int32_t scaledMaxY = static_cast<int32_t>(bounds.maxY * scaleFactor);
+
                 // Valid search region (direct lookup instead of computation)
-                int32_t searchXMin = std::max(0, -bounds.minX);
-                int32_t searchXMax = std::min(targetWidth - 1, targetWidth - 1 - bounds.maxX);
-                int32_t searchYMin = std::max(0, -bounds.minY);
-                int32_t searchYMax = std::min(targetHeight - 1, targetHeight - 1 - bounds.maxY);
+                int32_t searchXMin = std::max(0, -scaledMinX);
+                int32_t searchXMax = std::min(targetWidth - 1, targetWidth - 1 - scaledMaxX);
+                int32_t searchYMin = std::max(0, -scaledMinY);
+                int32_t searchYMax = std::min(targetHeight - 1, targetHeight - 1 - scaledMaxY);
 
                 // HALCON search domain constraint: intersect with ROI
                 // The reference point must fall within the search domain
@@ -157,7 +164,7 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
                         double coverage = 0.0;
                         // Bilinear interpolation for accurate scoring
                         double score = ComputeScoreWithSinCos(targetPyramid, startLevel,
-                                                               x, y, cosR, sinR, 1.0, params.greediness, &coverage,
+                                                               x, y, cosR, sinR, params.scaleMin, params.greediness, &coverage,
                                                                false);
 
                         if (score >= params.minScore * 0.7 && coverage >= minCoverage_) {
@@ -205,6 +212,13 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
                 double rMinX, rMaxX, rMinY, rMaxY;
                 ComputeRotatedBounds(topLevel.points, angle, rMinX, rMaxX, rMinY, rMaxY);
 
+                // Scale bounds by search scale factor
+                const double scaleFactor = params.scaleMin;
+                rMinX *= scaleFactor;
+                rMaxX *= scaleFactor;
+                rMinY *= scaleFactor;
+                rMaxY *= scaleFactor;
+
                 // Valid search region
                 int32_t searchXMin = static_cast<int32_t>(std::ceil(-rMinX));
                 int32_t searchXMax = static_cast<int32_t>(std::floor(targetWidth - 1 - rMaxX));
@@ -233,7 +247,7 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
                         double coverage = 0.0;
                         // Bilinear interpolation for accurate scoring
                         double score = ComputeScoreWithSinCos(targetPyramid, startLevel,
-                                                               x, y, cosR, sinR, 1.0, params.greediness, &coverage,
+                                                               x, y, cosR, sinR, params.scaleMin, params.greediness, &coverage,
                                                                false);
 
                         if (score >= params.minScore * 0.7 && coverage >= minCoverage_) {
@@ -319,7 +333,7 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
         // Recompute score with coverage at level 0
         double coverage = 0.0;
         double similarity = ComputeScoreAtPosition(targetPyramid, 0,
-                                                    match.x, match.y, match.angle, 1.0,
+                                                    match.x, match.y, match.angle, params.scaleMin,
                                                     0.0, &coverage, false);
 
         // Apply coverage penalty: score = similarity * coverage^0.75
@@ -357,6 +371,25 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramid(
     }
 
     return results;
+}
+
+// =============================================================================
+// ShapeModelImpl::SearchPyramidScaled
+// =============================================================================
+
+std::vector<MatchResult> ShapeModelImpl::SearchPyramidScaled(
+    const AnglePyramid& targetPyramid,
+    const SearchParams& params,
+    double scale) const
+{
+    // Create a copy of params with the specified scale
+    SearchParams scaledParams = params;
+    scaledParams.scaleMode = ScaleSearchMode::Uniform;
+    scaledParams.scaleMin = scale;
+    scaledParams.scaleMax = scale;
+
+    // Use the standard SearchPyramid with scaled parameters
+    return SearchPyramid(targetPyramid, scaledParams);
 }
 
 // =============================================================================
@@ -422,7 +455,7 @@ std::vector<MatchResult> ShapeModelImpl::SearchLevel(
 
                     double coverage = 0.0;
                     double score = ComputeScoreAtPosition(targetPyramid, level,
-                                                           x, y, angle, 1.0, params.greediness, &coverage,
+                                                           x, y, angle, params.scaleMin, params.greediness, &coverage,
                                                            false);
 
                     if (coverage >= minCoverage_ && score > bestMatch.score) {

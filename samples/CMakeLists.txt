@@ -15,9 +15,11 @@ endfunction()
 # Matching - Shape matching
 add_sample(matching_shape_match matching/shape_match.cpp)
 add_sample(matching_test_create_model matching/test_create_model.cpp)
+add_sample(matching_test_scaled_match matching/test_scaled_match.cpp)
 
 # Build all samples
 add_custom_target(samples DEPENDS
     matching_shape_match
     matching_test_create_model
+    matching_test_scaled_match
 )

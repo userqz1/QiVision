@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-21 (架构审查与修复)
+> 最后更新: 2026-01-22 (缩放匹配功能)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -246,6 +246,22 @@ Tests    █████████████████░░░ 87%
 ---
 
 ## 变更日志
+
+### 2026-01-22 (缩放匹配功能)
+
+- **FindScaledShapeModel 实现** ✅
+  - 支持 [scaleMin, scaleMax] 范围搜索
+  - 自动计算 scale step（约 10 个等级）
+  - 跨 scale 进行 NMS 抑制重复匹配
+  - 返回最佳匹配的 scale 值
+
+- **SearchPyramid 优化**
+  - 支持 params.scaleMin 参数传递（默认 1.0，向后兼容）
+  - 添加 SearchPyramidScaled 包装函数
+
+- **测试程序**
+  - 新增 test_scaled_match.cpp 验证缩放匹配功能
+  - 测试结果: scale=1.0 时与 FindShapeModel 结果一致
 
 ### 2026-01-21 (架构审查与修复)
 

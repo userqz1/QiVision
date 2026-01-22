@@ -18,6 +18,10 @@
 
 namespace Qi::Vision::Matching {
 
+// Import Internal types for pyramid operations
+using Qi::Vision::Internal::AnglePyramid;
+using Qi::Vision::Internal::AnglePyramidParams;
+
 // =============================================================================
 // String to Enum Conversion Helpers
 // =============================================================================
@@ -428,16 +432,142 @@ void FindScaledShapeModel(
     std::vector<double>& scales,
     std::vector<double>& scores)
 {
-    // For now, call FindShapeModel (scale search not fully implemented)
-    (void)scaleMin;
-    (void)scaleMax;
+    // Clear outputs
+    rows.clear();
+    cols.clear();
+    angles.clear();
+    scales.clear();
+    scores.clear();
 
-    FindShapeModel(image, model, angleStart, angleExtent, minScore,
-                   numMatches, maxOverlap, subPixel, numLevels, greediness,
-                   rows, cols, angles, scores);
+    if (!model.IsValid()) {
+        return;
+    }
 
-    // Fill scales with 1.0
-    scales.resize(scores.size(), 1.0);
+    // Validate scale range
+    if (scaleMin <= 0 || scaleMax <= 0 || scaleMin > scaleMax) {
+        return;
+    }
+
+    // If scale range is essentially 1.0, use regular FindShapeModel
+    constexpr double SCALE_TOLERANCE = 1e-6;
+    if (std::abs(scaleMin - 1.0) < SCALE_TOLERANCE &&
+        std::abs(scaleMax - 1.0) < SCALE_TOLERANCE) {
+        FindShapeModel(image, model, angleStart, angleExtent, minScore,
+                       numMatches, maxOverlap, subPixel, numLevels, greediness,
+                       rows, cols, angles, scores);
+        scales.resize(scores.size(), 1.0);
+        return;
+    }
+
+    // Auto-compute scale step if not specified
+    // Rule: step = (max - min) / 10 for reasonable coverage, but at least 0.01
+    // For typical range [0.9, 1.1], this gives step = 0.02 (10 scales)
+    double scaleStep = 0.02;
+    if (scaleMax > scaleMin) {
+        scaleStep = std::max(0.01, (scaleMax - scaleMin) / 10.0);
+    }
+
+    // Get model implementation
+    auto* impl = model.Impl();
+
+    // Build pyramid for search image (reused for all scales)
+    AnglePyramidParams pyramidParams;
+    pyramidParams.numLevels = (numLevels > 0) ? numLevels : impl->params_.numLevels;
+    pyramidParams.smoothSigma = 0.5;
+    pyramidParams.minContrast = impl->params_.minContrast;
+    pyramidParams.useNMS = false;
+
+    AnglePyramid targetPyramid;
+    if (!targetPyramid.Build(image, pyramidParams)) {
+        return;  // Failed to build pyramid
+    }
+
+    // Collect all matches from different scales
+    struct ScaledMatch {
+        double row = 0.0;
+        double col = 0.0;
+        double angle = 0.0;
+        double scale = 1.0;
+        double score = 0.0;
+    };
+    std::vector<ScaledMatch> allMatches;
+
+    // Search at each scale level
+    for (double scale = scaleMin; scale <= scaleMax + SCALE_TOLERANCE; scale += scaleStep) {
+        SearchParams params;
+        params.angleStart = angleStart;
+        params.angleExtent = angleExtent;
+        params.minScore = minScore;
+        params.maxMatches = (numMatches == 0) ? 1000 : numMatches;
+        params.maxOverlap = maxOverlap;
+        params.subpixelMethod = ParseSubpixel(subPixel);
+        params.numLevels = numLevels;
+        params.greediness = greediness;
+
+        // Set scale for this iteration
+        params.scaleMode = ScaleSearchMode::Uniform;
+        params.scaleMin = scale;
+        params.scaleMax = scale;
+
+        // Search with this scale
+        auto results = impl->SearchPyramidScaled(targetPyramid, params, scale);
+
+        // Collect results
+        for (const auto& r : results) {
+            ScaledMatch m;
+            m.row = r.y;
+            m.col = r.x;
+            m.angle = r.angle;
+            m.scale = scale;
+            m.score = r.score;
+            allMatches.push_back(m);
+        }
+    }
+
+    // Sort by score descending
+    std::sort(allMatches.begin(), allMatches.end(),
+              [](const ScaledMatch& a, const ScaledMatch& b) { return a.score > b.score; });
+
+    // Apply NMS across all scales
+    // Use model bounds for overlap calculation
+    double modelRadius = std::max(impl->templateSize_.width, impl->templateSize_.height) / 2.0;
+
+    std::vector<bool> suppressed(allMatches.size(), false);
+    for (size_t i = 0; i < allMatches.size(); ++i) {
+        if (suppressed[i]) continue;
+
+        // Suppress nearby matches with lower score
+        for (size_t j = i + 1; j < allMatches.size(); ++j) {
+            if (suppressed[j]) continue;
+
+            double dx = allMatches[i].col - allMatches[j].col;
+            double dy = allMatches[i].row - allMatches[j].row;
+            double dist = std::sqrt(dx * dx + dy * dy);
+
+            // Consider scale difference in overlap
+            double avgScale = (allMatches[i].scale + allMatches[j].scale) / 2.0;
+            double overlapThreshold = modelRadius * avgScale * (1.0 - maxOverlap);
+
+            if (dist < overlapThreshold) {
+                suppressed[j] = true;
+            }
+        }
+    }
+
+    // Collect final results
+    int32_t matchCount = 0;
+    int32_t maxMatchesToReturn = (numMatches == 0) ? static_cast<int32_t>(allMatches.size()) : numMatches;
+
+    for (size_t i = 0; i < allMatches.size() && matchCount < maxMatchesToReturn; ++i) {
+        if (!suppressed[i]) {
+            rows.push_back(allMatches[i].row);
+            cols.push_back(allMatches[i].col);
+            angles.push_back(allMatches[i].angle);
+            scales.push_back(allMatches[i].scale);
+            scores.push_back(allMatches[i].score);
+            ++matchCount;
+        }
+    }
 }
 
 // =============================================================================
