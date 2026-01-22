@@ -43,21 +43,21 @@ namespace {
 // MetrologyObjectLine Implementation
 // =============================================================================
 
-MetrologyObjectLine::MetrologyObjectLine(double x1, double y1,
-                                          double x2, double y2,
+MetrologyObjectLine::MetrologyObjectLine(double row1, double col1,
+                                          double row2, double col2,
                                           const MetrologyMeasureParams& params)
-    : x1_(x1), y1_(y1), x2_(x2), y2_(y2) {
+    : row1_(row1), col1_(col1), row2_(row2), col2_(col2) {
     params_ = params;
 }
 
 double MetrologyObjectLine::Length() const {
-    double dx = x2_ - x1_;
-    double dy = y2_ - y1_;
+    double dx = col2_ - col1_;
+    double dy = row2_ - row1_;
     return std::sqrt(dx * dx + dy * dy);
 }
 
 double MetrologyObjectLine::Angle() const {
-    return std::atan2(y2_ - y1_, x2_ - x1_);
+    return std::atan2(row2_ - row1_, col2_ - col1_);
 }
 
 std::vector<MeasureRectangle2> MetrologyObjectLine::GetCalipers() const {
@@ -76,11 +76,10 @@ std::vector<MeasureRectangle2> MetrologyObjectLine::GetCalipers() const {
     // Distribute calipers evenly along the line
     for (int32_t i = 0; i < numMeasures; ++i) {
         double t = (numMeasures == 1) ? 0.5 : static_cast<double>(i) / (numMeasures - 1);
-        double x = x1_ + t * (x2_ - x1_);
-        double y = y1_ + t * (y2_ - y1_);
+        double row = row1_ + t * (row2_ - row1_);
+        double col = col1_ + t * (col2_ - col1_);
 
-        // MeasureRectangle2 uses (row, col) internally = (y, x)
-        MeasureRectangle2 caliper(y, x, profilePhi,
+        MeasureRectangle2 caliper(row, col, profilePhi,
                                    params_.measureLength1, params_.measureLength2);
         calipers.push_back(caliper);
     }
@@ -90,47 +89,47 @@ std::vector<MeasureRectangle2> MetrologyObjectLine::GetCalipers() const {
 
 QContour MetrologyObjectLine::GetContour() const {
     QContour contour;
-    contour.AddPoint(Point2d{x1_, y1_});
-    contour.AddPoint(Point2d{x2_, y2_});
+    contour.AddPoint(Point2d{col1_, row1_});
+    contour.AddPoint(Point2d{col2_, row2_});
     return contour;
 }
 
-void MetrologyObjectLine::Transform(double dx, double dy, double phi) {
+void MetrologyObjectLine::Transform(double rowOffset, double colOffset, double phi) {
     if (std::abs(phi) > 1e-9) {
         // Rotate around the line center
-        double centerX = (x1_ + x2_) * 0.5;
-        double centerY = (y1_ + y2_) * 0.5;
+        double centerRow = (row1_ + row2_) * 0.5;
+        double centerCol = (col1_ + col2_) * 0.5;
 
-        Point2d p1 = RotatePoint({x1_, y1_}, phi, {centerX, centerY});
-        Point2d p2 = RotatePoint({x2_, y2_}, phi, {centerX, centerY});
+        Point2d p1 = RotatePoint({col1_, row1_}, phi, {centerCol, centerRow});
+        Point2d p2 = RotatePoint({col2_, row2_}, phi, {centerCol, centerRow});
 
-        x1_ = p1.x;
-        y1_ = p1.y;
-        x2_ = p2.x;
-        y2_ = p2.y;
+        row1_ = p1.y;
+        col1_ = p1.x;
+        row2_ = p2.y;
+        col2_ = p2.x;
     }
 
-    x1_ += dx;
-    y1_ += dy;
-    x2_ += dx;
-    y2_ += dy;
+    row1_ += rowOffset;
+    col1_ += colOffset;
+    row2_ += rowOffset;
+    col2_ += colOffset;
 }
 
 // =============================================================================
 // MetrologyObjectCircle Implementation
 // =============================================================================
 
-MetrologyObjectCircle::MetrologyObjectCircle(double x, double y, double radius,
+MetrologyObjectCircle::MetrologyObjectCircle(double row, double column, double radius,
                                               const MetrologyMeasureParams& params)
-    : x_(x), y_(y), radius_(radius),
+    : row_(row), column_(column), radius_(radius),
       angleStart_(0.0), angleEnd_(TWO_PI) {
     params_ = params;
 }
 
-MetrologyObjectCircle::MetrologyObjectCircle(double x, double y, double radius,
+MetrologyObjectCircle::MetrologyObjectCircle(double row, double column, double radius,
                                               double angleStart, double angleEnd,
                                               const MetrologyMeasureParams& params)
-    : x_(x), y_(y), radius_(radius),
+    : row_(row), column_(column), radius_(radius),
       angleStart_(angleStart), angleEnd_(angleEnd) {
     params_ = params;
 }
@@ -158,16 +157,15 @@ std::vector<MeasureRectangle2> MetrologyObjectCircle::GetCalipers() const {
 
         double angle = angleStart_ + t * angleExtent;
 
-        // Position on circle (x, y coordinates)
-        double px = x_ + radius_ * std::cos(angle);
-        double py = y_ + radius_ * std::sin(angle);
+        // Position on circle
+        double row = row_ + radius_ * std::sin(angle);
+        double col = column_ + radius_ * std::cos(angle);
 
         // MeasureRectangle2::ProfileAngle() returns phi + PI/2
         // To get radial search direction, we need phi = angle - PI/2
         double profilePhi = angle - PI / 2.0;  // Radial direction after ProfileAngle transform
 
-        // MeasureRectangle2 uses (row, col) internally = (y, x)
-        MeasureRectangle2 caliper(py, px, profilePhi,
+        MeasureRectangle2 caliper(row, col, profilePhi,
                                    params_.measureLength1, params_.measureLength2);
         calipers.push_back(caliper);
     }
@@ -183,33 +181,33 @@ QContour MetrologyObjectCircle::GetContour() const {
     for (int32_t i = 0; i <= numPoints; ++i) {
         double t = static_cast<double>(i) / numPoints;
         double angle = angleStart_ + t * angleExtent;
-        double px = x_ + radius_ * std::cos(angle);
-        double py = y_ + radius_ * std::sin(angle);
-        contour.AddPoint(Point2d{px, py});
+        double x = column_ + radius_ * std::cos(angle);
+        double y = row_ + radius_ * std::sin(angle);
+        contour.AddPoint(Point2d{x, y});
     }
 
     return contour;
 }
 
-void MetrologyObjectCircle::Transform(double dx, double dy, double phi) {
+void MetrologyObjectCircle::Transform(double rowOffset, double colOffset, double phi) {
     if (std::abs(phi) > 1e-9) {
         // Rotate angles
         angleStart_ += phi;
         angleEnd_ += phi;
     }
 
-    x_ += dx;
-    y_ += dy;
+    row_ += rowOffset;
+    column_ += colOffset;
 }
 
 // =============================================================================
 // MetrologyObjectEllipse Implementation
 // =============================================================================
 
-MetrologyObjectEllipse::MetrologyObjectEllipse(double x, double y, double phi,
+MetrologyObjectEllipse::MetrologyObjectEllipse(double row, double column, double phi,
                                                 double ra, double rb,
                                                 const MetrologyMeasureParams& params)
-    : x_(x), y_(y), phi_(phi), ra_(ra), rb_(rb) {
+    : row_(row), column_(column), phi_(phi), ra_(ra), rb_(rb) {
     params_ = params;
 }
 
@@ -230,8 +228,8 @@ std::vector<MeasureRectangle2> MetrologyObjectEllipse::GetCalipers() const {
         double localY = rb_ * std::sin(angle);
 
         // Rotate by phi and translate
-        double px = x_ + localX * cosPhi - localY * sinPhi;
-        double py = y_ + localX * sinPhi + localY * cosPhi;
+        double col = column_ + localX * cosPhi - localY * sinPhi;
+        double row = row_ + localX * sinPhi + localY * cosPhi;
 
         // Normal direction at this point (gradient of ellipse equation)
         // For ellipse: (x/ra)^2 + (y/rb)^2 = 1
@@ -244,8 +242,7 @@ std::vector<MeasureRectangle2> MetrologyObjectEllipse::GetCalipers() const {
         double normalY = gradX * sinPhi + gradY * cosPhi;
         double profilePhi = std::atan2(normalY, normalX);
 
-        // MeasureRectangle2 uses (row, col) internally = (y, x)
-        MeasureRectangle2 caliper(py, px, profilePhi,
+        MeasureRectangle2 caliper(row, col, profilePhi,
                                    params_.measureLength1, params_.measureLength2);
         calipers.push_back(caliper);
     }
@@ -267,31 +264,31 @@ QContour MetrologyObjectEllipse::GetContour() const {
         double localX = ra_ * std::cos(angle);
         double localY = rb_ * std::sin(angle);
 
-        double px = x_ + localX * cosPhi - localY * sinPhi;
-        double py = y_ + localX * sinPhi + localY * cosPhi;
-        contour.AddPoint(Point2d{px, py});
+        double x = column_ + localX * cosPhi - localY * sinPhi;
+        double y = row_ + localX * sinPhi + localY * cosPhi;
+        contour.AddPoint(Point2d{x, y});
     }
 
     return contour;
 }
 
-void MetrologyObjectEllipse::Transform(double dx, double dy, double phi) {
+void MetrologyObjectEllipse::Transform(double rowOffset, double colOffset, double phi) {
     if (std::abs(phi) > 1e-9) {
         phi_ += phi;
     }
 
-    x_ += dx;
-    y_ += dy;
+    row_ += rowOffset;
+    column_ += colOffset;
 }
 
 // =============================================================================
 // MetrologyObjectRectangle2 Implementation
 // =============================================================================
 
-MetrologyObjectRectangle2::MetrologyObjectRectangle2(double x, double y, double phi,
+MetrologyObjectRectangle2::MetrologyObjectRectangle2(double row, double column, double phi,
                                                        double length1, double length2,
                                                        const MetrologyMeasureParams& params)
-    : x_(x), y_(y), phi_(phi), length1_(length1), length2_(length2) {
+    : row_(row), column_(column), phi_(phi), length1_(length1), length2_(length2) {
     params_ = params;
 }
 
@@ -337,11 +334,10 @@ std::vector<MeasureRectangle2> MetrologyObjectRectangle2::GetCalipers() const {
             double localY = s.first.y + t * (s.second.y - s.first.y);
 
             // Transform to image coordinates
-            double px = x_ + localX * cosPhi - localY * sinPhi;
-            double py = y_ + localX * sinPhi + localY * cosPhi;
+            double col = column_ + localX * cosPhi - localY * sinPhi;
+            double row = row_ + localX * sinPhi + localY * cosPhi;
 
-            // MeasureRectangle2 uses (row, col) internally = (y, x)
-            MeasureRectangle2 caliper(py, px, normals[side],
+            MeasureRectangle2 caliper(row, col, normals[side],
                                        params_.measureLength1, params_.measureLength2);
             calipers.push_back(caliper);
         }
@@ -366,21 +362,21 @@ QContour MetrologyObjectRectangle2::GetContour() const {
     };
 
     for (auto& c : corners) {
-        double px = x_ + c.first * cosPhi - c.second * sinPhi;
-        double py = y_ + c.first * sinPhi + c.second * cosPhi;
-        contour.AddPoint(Point2d{px, py});
+        double x = column_ + c.first * cosPhi - c.second * sinPhi;
+        double y = row_ + c.first * sinPhi + c.second * cosPhi;
+        contour.AddPoint(Point2d{x, y});
     }
 
     return contour;
 }
 
-void MetrologyObjectRectangle2::Transform(double dx, double dy, double phi) {
+void MetrologyObjectRectangle2::Transform(double rowOffset, double colOffset, double phi) {
     if (std::abs(phi) > 1e-9) {
         phi_ += phi;
     }
 
-    x_ += dx;
-    y_ += dy;
+    row_ += rowOffset;
+    column_ += colOffset;
 }
 
 // =============================================================================
@@ -404,8 +400,8 @@ struct MetrologyModel::Impl {
     std::unordered_map<int32_t, std::vector<double>> pointWeights;
 
     // Alignment state
-    double alignX = 0.0;
-    double alignY = 0.0;
+    double alignRow = 0.0;
+    double alignCol = 0.0;
     double alignPhi = 0.0;
 
     void ClearResults() {
@@ -425,29 +421,29 @@ MetrologyModel::~MetrologyModel() = default;
 MetrologyModel::MetrologyModel(MetrologyModel&&) noexcept = default;
 MetrologyModel& MetrologyModel::operator=(MetrologyModel&&) noexcept = default;
 
-int32_t MetrologyModel::AddLineMeasure(double x1, double y1,
-                                         double x2, double y2,
+int32_t MetrologyModel::AddLineMeasure(double row1, double col1,
+                                         double row2, double col2,
                                          const MetrologyMeasureParams& params) {
-    auto obj = std::make_unique<MetrologyObjectLine>(x1, y1, x2, y2, params);
+    auto obj = std::make_unique<MetrologyObjectLine>(row1, col1, row2, col2, params);
     int32_t idx = static_cast<int32_t>(impl_->objects.size());
     obj->index_ = idx;
     impl_->objects.push_back(std::move(obj));
     return idx;
 }
 
-int32_t MetrologyModel::AddCircleMeasure(double x, double y, double radius,
+int32_t MetrologyModel::AddCircleMeasure(double row, double column, double radius,
                                           const MetrologyMeasureParams& params) {
-    auto obj = std::make_unique<MetrologyObjectCircle>(x, y, radius, params);
+    auto obj = std::make_unique<MetrologyObjectCircle>(row, column, radius, params);
     int32_t idx = static_cast<int32_t>(impl_->objects.size());
     obj->index_ = idx;
     impl_->objects.push_back(std::move(obj));
     return idx;
 }
 
-int32_t MetrologyModel::AddArcMeasure(double x, double y, double radius,
+int32_t MetrologyModel::AddArcMeasure(double row, double column, double radius,
                                         double angleStart, double angleEnd,
                                         const MetrologyMeasureParams& params) {
-    auto obj = std::make_unique<MetrologyObjectCircle>(x, y, radius,
+    auto obj = std::make_unique<MetrologyObjectCircle>(row, column, radius,
                                                          angleStart, angleEnd, params);
     int32_t idx = static_cast<int32_t>(impl_->objects.size());
     obj->index_ = idx;
@@ -455,20 +451,20 @@ int32_t MetrologyModel::AddArcMeasure(double x, double y, double radius,
     return idx;
 }
 
-int32_t MetrologyModel::AddEllipseMeasure(double x, double y, double phi,
+int32_t MetrologyModel::AddEllipseMeasure(double row, double column, double phi,
                                            double ra, double rb,
                                            const MetrologyMeasureParams& params) {
-    auto obj = std::make_unique<MetrologyObjectEllipse>(x, y, phi, ra, rb, params);
+    auto obj = std::make_unique<MetrologyObjectEllipse>(row, column, phi, ra, rb, params);
     int32_t idx = static_cast<int32_t>(impl_->objects.size());
     obj->index_ = idx;
     impl_->objects.push_back(std::move(obj));
     return idx;
 }
 
-int32_t MetrologyModel::AddRectangle2Measure(double x, double y, double phi,
+int32_t MetrologyModel::AddRectangle2Measure(double row, double column, double phi,
                                                double length1, double length2,
                                                const MetrologyMeasureParams& params) {
-    auto obj = std::make_unique<MetrologyObjectRectangle2>(x, y, phi, length1, length2, params);
+    auto obj = std::make_unique<MetrologyObjectRectangle2>(row, column, phi, length1, length2, params);
     int32_t idx = static_cast<int32_t>(impl_->objects.size());
     obj->index_ = idx;
     impl_->objects.push_back(std::move(obj));
@@ -668,8 +664,8 @@ bool MetrologyModel::Apply(const QImage& image) {
 
                         // Project original endpoints onto fitted line
                         auto* lineObj = static_cast<MetrologyObjectLine*>(&obj);
-                        Point2d p1 = {lineObj->X1(), lineObj->Y1()};
-                        Point2d p2 = {lineObj->X2(), lineObj->Y2()};
+                        Point2d p1 = {lineObj->Col1(), lineObj->Row1()};
+                        Point2d p2 = {lineObj->Col2(), lineObj->Row2()};
 
                         // Project points onto line
                         auto project = [&line](const Point2d& p) -> Point2d {
@@ -680,12 +676,12 @@ bool MetrologyModel::Apply(const QImage& image) {
                         Point2d proj1 = project(p1);
                         Point2d proj2 = project(p2);
 
-                        result.x1 = proj1.x;
-                        result.y1 = proj1.y;
-                        result.x2 = proj2.x;
-                        result.y2 = proj2.y;
-                        result.nx = line.a;  // Normal x component
-                        result.ny = line.b;  // Normal y component
+                        result.row1 = proj1.y;
+                        result.col1 = proj1.x;
+                        result.row2 = proj2.y;
+                        result.col2 = proj2.x;
+                        result.nr = line.b;  // Normal row component
+                        result.nc = line.a;  // Normal column component
                         result.dist = -line.c;  // Distance from origin
                         result.numUsed = fitResult.numInliers > 0 ? fitResult.numInliers : static_cast<int>(edgePoints.size());
                         result.rmsError = fitResult.residualRMS;
@@ -720,8 +716,8 @@ bool MetrologyModel::Apply(const QImage& image) {
                     }
 
                     if (fitResult.success) {
-                        result.x = fitResult.circle.center.x;
-                        result.y = fitResult.circle.center.y;
+                        result.row = fitResult.circle.center.y;
+                        result.column = fitResult.circle.center.x;
                         result.radius = fitResult.circle.radius;
                         result.numUsed = fitResult.numInliers;
                         result.rmsError = fitResult.residualRMS;
@@ -768,8 +764,8 @@ bool MetrologyModel::Apply(const QImage& image) {
                     }
 
                     if (fitResult.success) {
-                        result.x = fitResult.ellipse.center.x;
-                        result.y = fitResult.ellipse.center.y;
+                        result.row = fitResult.ellipse.center.y;
+                        result.column = fitResult.ellipse.center.x;
                         result.phi = fitResult.ellipse.angle;
                         result.ra = fitResult.ellipse.a;
                         result.rb = fitResult.ellipse.b;
@@ -800,7 +796,7 @@ bool MetrologyModel::Apply(const QImage& image) {
 
                     // Create initial rectangle estimate from object parameters
                     RotatedRect2d initialRect;
-                    initialRect.center = {rectObj->X(), rectObj->Y()};
+                    initialRect.center = {rectObj->Column(), rectObj->Row()};
                     initialRect.width = rectObj->Length1() * 2.0;   // full width
                     initialRect.height = rectObj->Length2() * 2.0;  // full height
                     initialRect.angle = rectObj->Phi();
@@ -886,8 +882,8 @@ bool MetrologyModel::Apply(const QImage& image) {
                     }
 
                     if (fitResult.success) {
-                        result.x = fitResult.rect.center.x;
-                        result.y = fitResult.rect.center.y;
+                        result.row = fitResult.rect.center.y;
+                        result.column = fitResult.rect.center.x;
                         result.phi = fitResult.rect.angle;
                         result.length1 = fitResult.rect.width / 2.0;   // half-length
                         result.length2 = fitResult.rect.height / 2.0;  // half-length
@@ -896,8 +892,8 @@ bool MetrologyModel::Apply(const QImage& image) {
                         result.score = result.numUsed > 0 ? 1.0 / (1.0 + result.rmsError) : 0.0;
                     } else {
                         // Fallback to original parameters
-                        result.x = rectObj->X();
-                        result.y = rectObj->Y();
+                        result.row = rectObj->Row();
+                        result.column = rectObj->Column();
                         result.phi = rectObj->Phi();
                         result.length1 = rectObj->Length1();
                         result.length2 = rectObj->Length2();
@@ -907,8 +903,8 @@ bool MetrologyModel::Apply(const QImage& image) {
                 } else if (edgePoints.size() >= 4) {
                     // Not enough points for robust fitting, use original
                     auto* rectObj = static_cast<MetrologyObjectRectangle2*>(&obj);
-                    result.x = rectObj->X();
-                    result.y = rectObj->Y();
+                    result.row = rectObj->Row();
+                    result.column = rectObj->Column();
                     result.phi = rectObj->Phi();
                     result.length1 = rectObj->Length1();
                     result.length2 = rectObj->Length2();
@@ -965,8 +961,8 @@ QContour MetrologyModel::GetResultContour(int32_t index, int32_t instanceIndex) 
             auto result = GetLineResult(index, instanceIndex);
             if (result.IsValid()) {
                 QContour contour;
-                contour.AddPoint(Point2d{result.x1, result.y1});
-                contour.AddPoint(Point2d{result.x2, result.y2});
+                contour.AddPoint(Point2d{result.col1, result.row1});
+                contour.AddPoint(Point2d{result.col2, result.row2});
                 return contour;
             }
             break;
@@ -981,9 +977,9 @@ QContour MetrologyModel::GetResultContour(int32_t index, int32_t instanceIndex) 
                 for (int32_t i = 0; i <= numPoints; ++i) {
                     double t = static_cast<double>(i) / numPoints;
                     double angle = result.startAngle + t * angleExtent;
-                    double px = result.x + result.radius * std::cos(angle);
-                    double py = result.y + result.radius * std::sin(angle);
-                    contour.AddPoint(Point2d{px, py});
+                    double x = result.column + result.radius * std::cos(angle);
+                    double y = result.row + result.radius * std::sin(angle);
+                    contour.AddPoint(Point2d{x, y});
                 }
                 return contour;
             }
@@ -1002,9 +998,9 @@ QContour MetrologyModel::GetResultContour(int32_t index, int32_t instanceIndex) 
                     double angle = t * TWO_PI;
                     double localX = result.ra * std::cos(angle);
                     double localY = result.rb * std::sin(angle);
-                    double px = result.x + localX * cosPhi - localY * sinPhi;
-                    double py = result.y + localX * sinPhi + localY * cosPhi;
-                    contour.AddPoint(Point2d{px, py});
+                    double x = result.column + localX * cosPhi - localY * sinPhi;
+                    double y = result.row + localX * sinPhi + localY * cosPhi;
+                    contour.AddPoint(Point2d{x, y});
                 }
                 return contour;
             }
@@ -1025,9 +1021,9 @@ QContour MetrologyModel::GetResultContour(int32_t index, int32_t instanceIndex) 
                     {-result.length1, -result.length2}
                 };
                 for (auto& c : corners) {
-                    double px = result.x + c.first * cosPhi - c.second * sinPhi;
-                    double py = result.y + c.first * sinPhi + c.second * cosPhi;
-                    contour.AddPoint(Point2d{px, py});
+                    double x = result.column + c.first * cosPhi - c.second * sinPhi;
+                    double y = result.row + c.first * sinPhi + c.second * cosPhi;
+                    contour.AddPoint(Point2d{x, y});
                 }
                 return contour;
             }
@@ -1054,19 +1050,19 @@ std::vector<double> MetrologyModel::GetPointWeights(int32_t index) const {
     return {};
 }
 
-void MetrologyModel::Align(double dx, double dy, double phi) {
-    double deltaX = dx - impl_->alignX;
-    double deltaY = dy - impl_->alignY;
+void MetrologyModel::Align(double row, double column, double phi) {
+    double deltaRow = row - impl_->alignRow;
+    double deltaCol = column - impl_->alignCol;
     double deltaPhi = phi - impl_->alignPhi;
 
     for (auto& obj : impl_->objects) {
         if (obj) {
-            obj->Transform(deltaX, deltaY, deltaPhi);
+            obj->Transform(deltaRow, deltaCol, deltaPhi);
         }
     }
 
-    impl_->alignX = dx;
-    impl_->alignY = dy;
+    impl_->alignRow = row;
+    impl_->alignCol = column;
     impl_->alignPhi = phi;
 }
 

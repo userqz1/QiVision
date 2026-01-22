@@ -150,15 +150,15 @@ struct MetrologyMeasureParams {
  * @brief Result for a line measurement
  */
 struct MetrologyLineResult {
-    // Fitted line endpoints
-    double x1 = 0.0;            ///< Start point x
-    double y1 = 0.0;            ///< Start point y
-    double x2 = 0.0;            ///< End point x
-    double y2 = 0.0;            ///< End point y
+    // Fitted line parameters (Hesse normal form: row*nr + col*nc = d)
+    double row1 = 0.0;          ///< Start point row
+    double col1 = 0.0;          ///< Start point column
+    double row2 = 0.0;          ///< End point row
+    double col2 = 0.0;          ///< End point column
 
-    // Line equation (Hesse normal form: x*nx + y*ny = d)
-    double nx = 0.0;            ///< Normal x component
-    double ny = 0.0;            ///< Normal y component
+    // Line equation
+    double nr = 0.0;            ///< Normal row component
+    double nc = 0.0;            ///< Normal column component
     double dist = 0.0;          ///< Distance from origin
 
     // Quality metrics
@@ -173,8 +173,8 @@ struct MetrologyLineResult {
  * @brief Result for a circle measurement
  */
 struct MetrologyCircleResult {
-    double x = 0.0;             ///< Center x
-    double y = 0.0;             ///< Center y
+    double row = 0.0;           ///< Center row
+    double column = 0.0;        ///< Center column
     double radius = 0.0;        ///< Radius
 
     // Arc parameters (for partial circles)
@@ -187,15 +187,15 @@ struct MetrologyCircleResult {
     double rmsError = 0.0;      ///< RMS fitting error
 
     bool IsValid() const { return numUsed >= 3 && radius > 0 && score > 0; }
-    Point2d Center() const { return {x, y}; }
+    Point2d Center() const { return {column, row}; }
 };
 
 /**
  * @brief Result for an ellipse measurement
  */
 struct MetrologyEllipseResult {
-    double x = 0.0;             ///< Center x
-    double y = 0.0;             ///< Center y
+    double row = 0.0;           ///< Center row
+    double column = 0.0;        ///< Center column
     double phi = 0.0;           ///< Orientation angle (radians)
     double ra = 0.0;            ///< Semi-major axis
     double rb = 0.0;            ///< Semi-minor axis
@@ -206,15 +206,14 @@ struct MetrologyEllipseResult {
     double rmsError = 0.0;
 
     bool IsValid() const { return numUsed >= 5 && ra > 0 && rb > 0 && score > 0; }
-    Point2d Center() const { return {x, y}; }
 };
 
 /**
  * @brief Result for a rectangle measurement
  */
 struct MetrologyRectangle2Result {
-    double x = 0.0;             ///< Center x
-    double y = 0.0;             ///< Center y
+    double row = 0.0;           ///< Center row
+    double column = 0.0;        ///< Center column
     double phi = 0.0;           ///< Orientation angle (radians)
     double length1 = 0.0;       ///< Half-length along phi
     double length2 = 0.0;       ///< Half-length perpendicular to phi
@@ -225,7 +224,6 @@ struct MetrologyRectangle2Result {
     double rmsError = 0.0;
 
     bool IsValid() const { return numUsed >= 4 && length1 > 0 && length2 > 0 && score > 0; }
-    Point2d Center() const { return {x, y}; }
 };
 
 // =============================================================================
@@ -262,14 +260,8 @@ public:
     /// Get the reference geometry contour
     virtual QContour GetContour() const = 0;
 
-    /// Check if the object has a geometric center (circle, ellipse, rectangle have center; line does not)
-    virtual bool HasCenter() const = 0;
-
-    /// Get the geometric center point (only valid if HasCenter() returns true)
-    virtual Point2d GetCenter() const = 0;
-
     /// Apply transformation (for alignment)
-    virtual void Transform(double dx, double dy, double phi = 0.0) = 0;
+    virtual void Transform(double rowOffset, double colOffset, double phi = 0.0) = 0;
 
 protected:
     int32_t index_ = -1;
@@ -289,32 +281,30 @@ class MetrologyObjectLine : public MetrologyObject {
 public:
     /**
      * @brief Construct line measurement object
-     * @param x1 Start x
-     * @param y1 Start y
-     * @param x2 End x
-     * @param y2 End y
+     * @param row1 Start row
+     * @param col1 Start column
+     * @param row2 End row
+     * @param col2 End column
      * @param params Measurement parameters
      */
-    MetrologyObjectLine(double x1, double y1, double x2, double y2,
+    MetrologyObjectLine(double row1, double col1, double row2, double col2,
                         const MetrologyMeasureParams& params = MetrologyMeasureParams());
 
     MetrologyObjectType Type() const override { return MetrologyObjectType::Line; }
     std::vector<MeasureRectangle2> GetCalipers() const override;
     QContour GetContour() const override;
-    bool HasCenter() const override { return false; }  ///< Line has no geometric center
-    Point2d GetCenter() const override { return Point2d{0, 0}; }  ///< Not applicable for line
-    void Transform(double dx, double dy, double phi = 0.0) override;
+    void Transform(double rowOffset, double colOffset, double phi = 0.0) override;
 
     // Line-specific accessors
-    double X1() const { return x1_; }
-    double Y1() const { return y1_; }
-    double X2() const { return x2_; }
-    double Y2() const { return y2_; }
+    double Row1() const { return row1_; }
+    double Col1() const { return col1_; }
+    double Row2() const { return row2_; }
+    double Col2() const { return col2_; }
     double Length() const;
     double Angle() const;
 
 private:
-    double x1_, y1_, x2_, y2_;
+    double row1_, col1_, row2_, col2_;
 };
 
 /**
@@ -324,44 +314,42 @@ class MetrologyObjectCircle : public MetrologyObject {
 public:
     /**
      * @brief Construct circle measurement object
-     * @param x Center x
-     * @param y Center y
+     * @param row Center row
+     * @param column Center column
      * @param radius Radius
      * @param params Measurement parameters
      */
-    MetrologyObjectCircle(double x, double y, double radius,
+    MetrologyObjectCircle(double row, double column, double radius,
                           const MetrologyMeasureParams& params = MetrologyMeasureParams());
 
     /**
      * @brief Construct arc measurement object
-     * @param x Center x
-     * @param y Center y
+     * @param row Center row
+     * @param column Center column
      * @param radius Radius
      * @param angleStart Start angle (radians)
      * @param angleEnd End angle (radians)
      * @param params Measurement parameters
      */
-    MetrologyObjectCircle(double x, double y, double radius,
+    MetrologyObjectCircle(double row, double column, double radius,
                           double angleStart, double angleEnd,
                           const MetrologyMeasureParams& params = MetrologyMeasureParams());
 
     MetrologyObjectType Type() const override { return MetrologyObjectType::Circle; }
     std::vector<MeasureRectangle2> GetCalipers() const override;
     QContour GetContour() const override;
-    bool HasCenter() const override { return true; }
-    Point2d GetCenter() const override { return Point2d{x_, y_}; }
-    void Transform(double dx, double dy, double phi = 0.0) override;
+    void Transform(double rowOffset, double colOffset, double phi = 0.0) override;
 
     // Circle-specific accessors
-    double X() const { return x_; }
-    double Y() const { return y_; }
+    double Row() const { return row_; }
+    double Column() const { return column_; }
     double Radius() const { return radius_; }
     double AngleStart() const { return angleStart_; }
     double AngleEnd() const { return angleEnd_; }
     bool IsFullCircle() const;
 
 private:
-    double x_, y_, radius_;
+    double row_, column_, radius_;
     double angleStart_ = 0.0;
     double angleEnd_ = 6.283185307;  // 2*PI
 };
@@ -373,33 +361,31 @@ class MetrologyObjectEllipse : public MetrologyObject {
 public:
     /**
      * @brief Construct ellipse measurement object
-     * @param x Center x
-     * @param y Center y
+     * @param row Center row
+     * @param column Center column
      * @param phi Orientation angle (radians)
      * @param ra Semi-major axis
      * @param rb Semi-minor axis
      * @param params Measurement parameters
      */
-    MetrologyObjectEllipse(double x, double y, double phi,
+    MetrologyObjectEllipse(double row, double column, double phi,
                             double ra, double rb,
                             const MetrologyMeasureParams& params = MetrologyMeasureParams());
 
     MetrologyObjectType Type() const override { return MetrologyObjectType::Ellipse; }
     std::vector<MeasureRectangle2> GetCalipers() const override;
     QContour GetContour() const override;
-    bool HasCenter() const override { return true; }
-    Point2d GetCenter() const override { return Point2d{x_, y_}; }
-    void Transform(double dx, double dy, double phi = 0.0) override;
+    void Transform(double rowOffset, double colOffset, double phi = 0.0) override;
 
     // Ellipse-specific accessors
-    double X() const { return x_; }
-    double Y() const { return y_; }
+    double Row() const { return row_; }
+    double Column() const { return column_; }
     double Phi() const { return phi_; }
     double Ra() const { return ra_; }
     double Rb() const { return rb_; }
 
 private:
-    double x_, y_, phi_, ra_, rb_;
+    double row_, column_, phi_, ra_, rb_;
 };
 
 /**
@@ -409,33 +395,31 @@ class MetrologyObjectRectangle2 : public MetrologyObject {
 public:
     /**
      * @brief Construct rectangle measurement object
-     * @param x Center x
-     * @param y Center y
+     * @param row Center row
+     * @param column Center column
      * @param phi Orientation angle (radians)
      * @param length1 Half-length along phi
      * @param length2 Half-length perpendicular to phi
      * @param params Measurement parameters
      */
-    MetrologyObjectRectangle2(double x, double y, double phi,
+    MetrologyObjectRectangle2(double row, double column, double phi,
                                double length1, double length2,
                                const MetrologyMeasureParams& params = MetrologyMeasureParams());
 
     MetrologyObjectType Type() const override { return MetrologyObjectType::Rectangle2; }
     std::vector<MeasureRectangle2> GetCalipers() const override;
     QContour GetContour() const override;
-    bool HasCenter() const override { return true; }
-    Point2d GetCenter() const override { return Point2d{x_, y_}; }
-    void Transform(double dx, double dy, double phi = 0.0) override;
+    void Transform(double rowOffset, double colOffset, double phi = 0.0) override;
 
     // Rectangle-specific accessors
-    double X() const { return x_; }
-    double Y() const { return y_; }
+    double Row() const { return row_; }
+    double Column() const { return column_; }
     double Phi() const { return phi_; }
     double Length1() const { return length1_; }
     double Length2() const { return length2_; }
 
 private:
-    double x_, y_, phi_, length1_, length2_;
+    double row_, column_, phi_, length1_, length2_;
 };
 
 // =============================================================================
@@ -482,66 +466,66 @@ public:
 
     /**
      * @brief Add a line measurement object (Halcon: add_metrology_object_line_measure)
-     * @param x1 Start x
-     * @param y1 Start y
-     * @param x2 End x
-     * @param y2 End y
+     * @param row1 Start row
+     * @param col1 Start column
+     * @param row2 End row
+     * @param col2 End column
      * @param params Measurement parameters
      * @return Object index
      */
-    int32_t AddLineMeasure(double x1, double y1, double x2, double y2,
+    int32_t AddLineMeasure(double row1, double col1, double row2, double col2,
                            const MetrologyMeasureParams& params = MetrologyMeasureParams());
 
     /**
      * @brief Add a circle measurement object (Halcon: add_metrology_object_circle_measure)
-     * @param x Center x
-     * @param y Center y
+     * @param row Center row
+     * @param column Center column
      * @param radius Radius
      * @param params Measurement parameters
      * @return Object index
      */
-    int32_t AddCircleMeasure(double x, double y, double radius,
+    int32_t AddCircleMeasure(double row, double column, double radius,
                               const MetrologyMeasureParams& params = MetrologyMeasureParams());
 
     /**
      * @brief Add an arc measurement object
-     * @param x Center x
-     * @param y Center y
+     * @param row Center row
+     * @param column Center column
      * @param radius Radius
      * @param angleStart Start angle (radians)
      * @param angleEnd End angle (radians)
      * @param params Measurement parameters
      * @return Object index
      */
-    int32_t AddArcMeasure(double x, double y, double radius,
+    int32_t AddArcMeasure(double row, double column, double radius,
                            double angleStart, double angleEnd,
                            const MetrologyMeasureParams& params = MetrologyMeasureParams());
 
     /**
      * @brief Add an ellipse measurement object (Halcon: add_metrology_object_ellipse_measure)
-     * @param x Center x
-     * @param y Center y
+     * @param row Center row
+     * @param column Center column
      * @param phi Orientation angle (radians)
      * @param ra Semi-major axis
      * @param rb Semi-minor axis
      * @param params Measurement parameters
      * @return Object index
      */
-    int32_t AddEllipseMeasure(double x, double y, double phi,
+    int32_t AddEllipseMeasure(double row, double column, double phi,
                                double ra, double rb,
                                const MetrologyMeasureParams& params = MetrologyMeasureParams());
 
     /**
      * @brief Add a rectangle measurement object (Halcon: add_metrology_object_rectangle2_measure)
-     * @param x Center x
-     * @param y Center y
+     * @param row Center row
+     * @param column Center column
      * @param phi Orientation angle (radians)
      * @param length1 Half-length along phi
      * @param length2 Half-length perpendicular to phi
      * @param params Measurement parameters
      * @return Object index
      */
-    int32_t AddRectangle2Measure(double x, double y, double phi,
+    int32_t AddRectangle2Measure(double row, double column, double phi,
                                   double length1, double length2,
                                   const MetrologyMeasureParams& params = MetrologyMeasureParams());
 
@@ -629,11 +613,11 @@ public:
 
     /**
      * @brief Align model to new position (Halcon: align_metrology_model)
-     * @param dx X offset
-     * @param dy Y offset
+     * @param row Row offset
+     * @param column Column offset
      * @param phi Rotation angle (radians)
      */
-    void Align(double dx, double dy, double phi = 0.0);
+    void Align(double row, double column, double phi = 0.0);
 
     /**
      * @brief Reset to original position

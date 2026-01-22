@@ -822,8 +822,8 @@ void Draw::MetrologyLine(QImage& image, const Measure::MetrologyLineResult& resu
     if (!result.IsValid()) return;
 
     // Draw the fitted line segment
-    Point2d p1{result.x1, result.y1};
-    Point2d p2{result.x2, result.y2};
+    Point2d p1{result.col1, result.row1};
+    Point2d p2{result.col2, result.row2};
     Line(image, p1, p2, color, thickness);
 }
 
@@ -832,11 +832,8 @@ void Draw::MetrologyCircle(QImage& image, const Measure::MetrologyCircleResult& 
     if (!result.IsValid()) return;
 
     // Draw the fitted circle
-    Point2d center{result.x, result.y};
+    Point2d center{result.column, result.row};
     Circle(image, center, result.radius, color, thickness);
-
-    // Draw center cross
-    Cross(image, center, 15, 0, color, thickness);
 }
 
 void Draw::MetrologyEllipse(QImage& image, const Measure::MetrologyEllipseResult& result,
@@ -844,11 +841,8 @@ void Draw::MetrologyEllipse(QImage& image, const Measure::MetrologyEllipseResult
     if (!result.IsValid()) return;
 
     // Draw the fitted ellipse (ra = semi-major, rb = semi-minor)
-    Point2d center{result.x, result.y};
+    Point2d center{result.column, result.row};
     Ellipse(image, center, result.ra, result.rb, result.phi, color, thickness);
-
-    // Draw center cross
-    Cross(image, center, 15, result.phi, color, thickness);
 }
 
 void Draw::MetrologyRectangle(QImage& image, const Measure::MetrologyRectangle2Result& result,
@@ -856,13 +850,10 @@ void Draw::MetrologyRectangle(QImage& image, const Measure::MetrologyRectangle2R
     if (!result.IsValid()) return;
 
     // Draw the fitted rectangle
-    Point2d center{result.x, result.y};
+    Point2d center{result.column, result.row};
     double width = 2.0 * result.length1;
     double height = 2.0 * result.length2;
     RotatedRectangle(image, center, width, height, result.phi, color, thickness);
-
-    // Draw center cross
-    Cross(image, center, 15, result.phi, color, thickness);
 }
 
 void Draw::EdgePointsWeighted(QImage& image, const std::vector<Point2d>& points,
@@ -914,15 +905,10 @@ void Draw::MetrologyModelResult(QImage& image, const Measure::MetrologyModel& mo
         const MetrologyObject* obj = model.GetObject(idx);
         if (!obj) continue;
 
-        // Draw calipers (rectangles) and initial geometric center
+        // Draw calipers (rectangles + connecting curve)
         if (drawCalipers) {
             auto calipers = obj->GetCalipers();
             MeasureRects(image, calipers, objectColor, 1);
-
-            // Draw initial center cross (part of caliper tool, if object has center)
-            if (obj->HasCenter()) {
-                Cross(image, obj->GetCenter(), 15, 0, objectColor, 2);
-            }
         }
 
         // Draw edge points with weight-based coloring
@@ -945,31 +931,17 @@ void Draw::MetrologyModelResult(QImage& image, const Measure::MetrologyModel& mo
             }
             case MetrologyObjectType::Circle: {
                 auto result = model.GetCircleResult(idx);
-                if (result.IsValid()) {
-                    Point2d center{result.x, result.y};
-                    Circle(image, center, result.radius, resultColor, 2);
-                    Cross(image, center, 15, 0, resultColor, 2);
-                }
+                MetrologyCircle(image, result, resultColor, 2);
                 break;
             }
             case MetrologyObjectType::Ellipse: {
                 auto result = model.GetEllipseResult(idx);
-                if (result.IsValid()) {
-                    Point2d center{result.x, result.y};
-                    Ellipse(image, center, result.ra, result.rb, result.phi, resultColor, 2);
-                    Cross(image, center, 15, result.phi, resultColor, 2);
-                }
+                MetrologyEllipse(image, result, resultColor, 2);
                 break;
             }
             case MetrologyObjectType::Rectangle2: {
                 auto result = model.GetRectangle2Result(idx);
-                if (result.IsValid()) {
-                    Point2d center{result.x, result.y};
-                    double width = 2.0 * result.length1;
-                    double height = 2.0 * result.length2;
-                    RotatedRectangle(image, center, width, height, result.phi, resultColor, 2);
-                    Cross(image, center, 15, result.phi, resultColor, 2);
-                }
+                MetrologyRectangle(image, result, resultColor, 2);
                 break;
             }
         }

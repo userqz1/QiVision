@@ -24,10 +24,7 @@ int main() {
 
     // 预设要测量的圆 (cx, cy, radius)
     std::vector<std::tuple<double, double, double>> circles = {
-        {210, 420, 60},
-        {500, 420, 60},
-        {790, 420, 60},
-        {1077, 420, 110},
+        {200, 420, 70},    // 用户指定的圆
     };
 
     QImage image = QImage::FromFile(imagePath);
@@ -43,17 +40,16 @@ int main() {
 
     // 测量参数
     MetrologyMeasureParams params;
-    params.numMeasures = 20;
+    params.numMeasures = 36;
     params.measureLength1 = 20.0;
-    params.measureLength2 = 5.0;
+    params.measureLength2 = 3.0;
     params.thresholdMode = ThresholdMode::Auto;
     params.fitMethod = MetrologyFitMethod::RANSAC;
 
     // 创建模型，添加所有圆
-    // AddCircleMeasure(x, y, radius)
     MetrologyModel model;
     for (const auto& [cx, cy, r] : circles) {
-        model.AddCircleMeasure(cx, cy, r, params);  // x, y, radius
+        model.AddCircleMeasure(cy, cx, r, params);
     }
 
     // 测量
@@ -69,14 +65,10 @@ int main() {
         auto result = model.GetCircleResult(i);
         auto points = model.GetMeasuredPoints(i);
 
-        // 使用新的统一接口获取卡尺工具信息
-        const auto* obj = model.GetObject(i);
-        auto center = obj->GetCenter();  // 获取初始几何中心
-
         std::cout << "\nCircle " << (i+1) << ":" << std::endl;
-        std::cout << "  Initial center: (" << center.x << ", " << center.y << ") r=" << r << std::endl;
-        std::cout << "  Fitted center:  (" << std::fixed << std::setprecision(2)
-                  << result.x << ", " << result.y << ") r=" << result.radius << std::endl;
+        std::cout << "  Input:  (" << cx << ", " << cy << ") r=" << r << std::endl;
+        std::cout << "  Fitted: (" << std::fixed << std::setprecision(2)
+                  << result.column << ", " << result.row << ") r=" << result.radius << std::endl;
         std::cout << "  Points: " << result.numUsed << "/" << points.size()
                   << "  RMS: " << std::setprecision(3) << result.rmsError << " px" << std::endl;
     }
