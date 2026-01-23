@@ -23,6 +23,22 @@
 namespace Qi::Vision::IO {
 
 // =============================================================================
+// Image Write Flags (OpenCV-style vector<int> params)
+// =============================================================================
+
+/**
+ * @brief Image write parameter flags (OpenCV imwrite style)
+ *
+ * Usage: WriteImage(img, "file.jpg", ImageFormat::Auto,
+ *                   {QIWRITE_JPEG_QUALITY, 85, QIWRITE_PNG_COMPRESSION, 6});
+ */
+enum ImageWriteFlag {
+    QIWRITE_JPEG_QUALITY = 1,        ///< JPEG quality [0-100], default 95
+    QIWRITE_PNG_COMPRESSION = 2,     ///< PNG compression level [0-9], default 6
+    QIWRITE_TIFF_COMPRESSION = 3     ///< TIFF LZW compression: 0=off, 1=on (default)
+};
+
+// =============================================================================
 // Image Format Enumeration
 // =============================================================================
 
@@ -125,13 +141,32 @@ void ReadImage(const std::string& filename, QImage& image);
 void ReadImage(const std::string& filename, QImage& image, ImageFormat format);
 
 /**
- * @brief Read raw binary image data
+ * @brief Read raw binary image data (struct version)
  *
  * @param filename Input file path
  * @param[out] image Loaded image
  * @param params Raw read parameters (width, height, type required)
  */
 void ReadImageRaw(const std::string& filename, QImage& image, const RawReadParams& params);
+
+/**
+ * @brief Read raw binary image data (direct params - Halcon/OpenCV style)
+ *
+ * @param filename Input file path
+ * @param[out] image Loaded image
+ * @param width Image width (required)
+ * @param height Image height (required)
+ * @param pixelType Pixel type (default: UInt8)
+ * @param channelType Channel type (default: Gray)
+ * @param headerBytes Bytes to skip at file start (default: 0)
+ * @param bigEndian Byte order for >8-bit data (default: false)
+ */
+void ReadImageRaw(const std::string& filename, QImage& image,
+                  int32_t width, int32_t height,
+                  PixelType pixelType = PixelType::UInt8,
+                  ChannelType channelType = ChannelType::Gray,
+                  int32_t headerBytes = 0,
+                  bool bigEndian = false);
 
 /**
  * @brief Read image metadata without loading full image
@@ -182,7 +217,7 @@ void ReadImageGray(const std::string& filename, QImage& image);
 bool WriteImage(const QImage& image, const std::string& filename);
 
 /**
- * @brief Write image with format and compression parameters
+ * @brief Write image with format and compression parameters (struct version)
  *
  * @param image Image to write
  * @param filename Output file path
@@ -191,7 +226,24 @@ bool WriteImage(const QImage& image, const std::string& filename);
  * @return true if successful
  */
 bool WriteImage(const QImage& image, const std::string& filename,
-                ImageFormat format, const CompressionParams& params = CompressionParams());
+                ImageFormat format, const CompressionParams& params);
+
+/**
+ * @brief Write image with format and parameters (OpenCV imwrite style)
+ *
+ * @param image Image to write
+ * @param filename Output file path
+ * @param format Output format (Auto = detect from extension)
+ * @param params Key-value pairs: {QIWRITE_JPEG_QUALITY, 85, ...}
+ * @return true if successful
+ *
+ * @code
+ * WriteImage(img, "out.jpg", ImageFormat::Auto, {QIWRITE_JPEG_QUALITY, 85});
+ * WriteImage(img, "out.png", ImageFormat::PNG, {QIWRITE_PNG_COMPRESSION, 9});
+ * @endcode
+ */
+bool WriteImage(const QImage& image, const std::string& filename,
+                ImageFormat format, const std::vector<int>& params);
 
 /**
  * @brief Write image as raw binary data

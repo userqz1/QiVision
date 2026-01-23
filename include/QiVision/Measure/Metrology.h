@@ -38,6 +38,32 @@
 namespace Qi::Vision::Measure {
 
 // =============================================================================
+// Metrology Parameter Flags (OpenCV-style vector<int> params)
+// =============================================================================
+
+/**
+ * @brief Metrology measurement parameter flags
+ *
+ * Usage with Add*Measure functions:
+ *   model.AddCircleMeasure(200, 200, 50, 20, 5, "all", "all",
+ *       {METROLOGY_NUM_MEASURES, 20, METROLOGY_MIN_SCORE, 70});  // 70 = 0.7 * 100
+ *
+ * Note: Double values must be scaled to integers (e.g., minScore 0.7 -> 70)
+ */
+enum MetrologyParamFlag {
+    METROLOGY_NUM_INSTANCES = 1,      ///< Number of instances to find (int)
+    METROLOGY_MEASURE_SIGMA = 2,      ///< Gaussian sigma * 100 (e.g., 150 = 1.5)
+    METROLOGY_MEASURE_THRESHOLD = 3,  ///< Edge threshold (int)
+    METROLOGY_NUM_MEASURES = 4,       ///< Number of calipers (int)
+    METROLOGY_MIN_SCORE = 5,          ///< Min score * 100 (e.g., 70 = 0.7)
+    METROLOGY_FIT_METHOD = 6,         ///< 0=RANSAC, 1=Huber, 2=Tukey
+    METROLOGY_DISTANCE_THRESHOLD = 7, ///< Outlier threshold * 100 (e.g., 350 = 3.5)
+    METROLOGY_MAX_ITERATIONS = 8,     ///< Max RANSAC iterations (-1 = unlimited)
+    METROLOGY_RAND_SEED = 9,          ///< Random seed for RANSAC
+    METROLOGY_THRESHOLD_MODE = 10     ///< 0=Manual, 1=Auto
+};
+
+// =============================================================================
 // Metrology Types
 // =============================================================================
 
@@ -479,7 +505,7 @@ public:
     // =========================================================================
 
     /**
-     * @brief Add a line measurement object (Halcon: add_metrology_object_line_measure)
+     * @brief Add a line measurement object (struct params)
      * @param row1 Start row
      * @param col1 Start column
      * @param row2 End row
@@ -488,10 +514,30 @@ public:
      * @return Object index
      */
     int32_t AddLineMeasure(double row1, double col1, double row2, double col2,
-                           const MetrologyMeasureParams& params = MetrologyMeasureParams());
+                           const MetrologyMeasureParams& params);
 
     /**
-     * @brief Add a circle measurement object (Halcon: add_metrology_object_circle_measure)
+     * @brief Add a line measurement object (Halcon-style direct params)
+     *
+     * @param row1 Start row
+     * @param col1 Start column
+     * @param row2 End row
+     * @param col2 End column
+     * @param measureLength1 Half-length of caliper along profile
+     * @param measureLength2 Half-width of caliper perpendicular
+     * @param transition "positive", "negative", "all"
+     * @param select "first", "last", "all"
+     * @param params Optional key-value pairs: {METROLOGY_NUM_MEASURES, 10, ...}
+     * @return Object index
+     */
+    int32_t AddLineMeasure(double row1, double col1, double row2, double col2,
+                           double measureLength1, double measureLength2,
+                           const std::string& transition = "all",
+                           const std::string& select = "all",
+                           const std::vector<int>& params = {});
+
+    /**
+     * @brief Add a circle measurement object (struct params)
      * @param row Center row
      * @param column Center column
      * @param radius Radius
@@ -499,10 +545,29 @@ public:
      * @return Object index
      */
     int32_t AddCircleMeasure(double row, double column, double radius,
-                              const MetrologyMeasureParams& params = MetrologyMeasureParams());
+                              const MetrologyMeasureParams& params);
 
     /**
-     * @brief Add an arc measurement object
+     * @brief Add a circle measurement object (Halcon-style direct params)
+     *
+     * @param row Center row
+     * @param column Center column
+     * @param radius Radius
+     * @param measureLength1 Half-length of caliper along profile
+     * @param measureLength2 Half-width of caliper perpendicular
+     * @param transition "positive", "negative", "all"
+     * @param select "first", "last", "all"
+     * @param params Optional key-value pairs
+     * @return Object index
+     */
+    int32_t AddCircleMeasure(double row, double column, double radius,
+                              double measureLength1, double measureLength2,
+                              const std::string& transition = "all",
+                              const std::string& select = "all",
+                              const std::vector<int>& params = {});
+
+    /**
+     * @brief Add an arc measurement object (struct params)
      * @param row Center row
      * @param column Center column
      * @param radius Radius
@@ -513,10 +578,32 @@ public:
      */
     int32_t AddArcMeasure(double row, double column, double radius,
                            double angleStart, double angleEnd,
-                           const MetrologyMeasureParams& params = MetrologyMeasureParams());
+                           const MetrologyMeasureParams& params);
 
     /**
-     * @brief Add an ellipse measurement object (Halcon: add_metrology_object_ellipse_measure)
+     * @brief Add an arc measurement object (Halcon-style direct params)
+     *
+     * @param row Center row
+     * @param column Center column
+     * @param radius Radius
+     * @param angleStart Start angle (radians)
+     * @param angleEnd End angle (radians)
+     * @param measureLength1 Half-length of caliper along profile
+     * @param measureLength2 Half-width of caliper perpendicular
+     * @param transition "positive", "negative", "all"
+     * @param select "first", "last", "all"
+     * @param params Optional key-value pairs
+     * @return Object index
+     */
+    int32_t AddArcMeasure(double row, double column, double radius,
+                           double angleStart, double angleEnd,
+                           double measureLength1, double measureLength2,
+                           const std::string& transition = "all",
+                           const std::string& select = "all",
+                           const std::vector<int>& params = {});
+
+    /**
+     * @brief Add an ellipse measurement object (struct params)
      * @param row Center row
      * @param column Center column
      * @param phi Orientation angle (radians)
@@ -527,10 +614,32 @@ public:
      */
     int32_t AddEllipseMeasure(double row, double column, double phi,
                                double ra, double rb,
-                               const MetrologyMeasureParams& params = MetrologyMeasureParams());
+                               const MetrologyMeasureParams& params);
 
     /**
-     * @brief Add a rectangle measurement object (Halcon: add_metrology_object_rectangle2_measure)
+     * @brief Add an ellipse measurement object (Halcon-style direct params)
+     *
+     * @param row Center row
+     * @param column Center column
+     * @param phi Orientation angle (radians)
+     * @param ra Semi-major axis
+     * @param rb Semi-minor axis
+     * @param measureLength1 Half-length of caliper along profile
+     * @param measureLength2 Half-width of caliper perpendicular
+     * @param transition "positive", "negative", "all"
+     * @param select "first", "last", "all"
+     * @param params Optional key-value pairs
+     * @return Object index
+     */
+    int32_t AddEllipseMeasure(double row, double column, double phi,
+                               double ra, double rb,
+                               double measureLength1, double measureLength2,
+                               const std::string& transition = "all",
+                               const std::string& select = "all",
+                               const std::vector<int>& params = {});
+
+    /**
+     * @brief Add a rectangle measurement object (struct params)
      * @param row Center row
      * @param column Center column
      * @param phi Orientation angle (radians)
@@ -541,7 +650,29 @@ public:
      */
     int32_t AddRectangle2Measure(double row, double column, double phi,
                                   double length1, double length2,
-                                  const MetrologyMeasureParams& params = MetrologyMeasureParams());
+                                  const MetrologyMeasureParams& params);
+
+    /**
+     * @brief Add a rectangle measurement object (Halcon-style direct params)
+     *
+     * @param row Center row
+     * @param column Center column
+     * @param phi Orientation angle (radians)
+     * @param length1 Half-length along phi
+     * @param length2 Half-length perpendicular to phi
+     * @param measureLength1 Half-length of caliper along profile
+     * @param measureLength2 Half-width of caliper perpendicular
+     * @param transition "positive", "negative", "all"
+     * @param select "first", "last", "all"
+     * @param params Optional key-value pairs
+     * @return Object index
+     */
+    int32_t AddRectangle2Measure(double row, double column, double phi,
+                                  double length1, double length2,
+                                  double measureLength1, double measureLength2,
+                                  const std::string& transition = "all",
+                                  const std::string& select = "all",
+                                  const std::vector<int>& params = {});
 
     /**
      * @brief Clear a specific object

@@ -1,6 +1,6 @@
 /**
  * @file Caliper.cpp
- * @brief Implementation of caliper measurement functions
+ * @brief Implementation of caliper measurement functions (Halcon compatible API)
  */
 
 #include <QiVision/Measure/Caliper.h>
@@ -57,82 +57,101 @@ namespace {
         // Linear interpolation between fuzzyLow and fuzzyHigh
         return (ratio - fuzzyLow) / (fuzzyHigh - fuzzyLow);
     }
+
+    // Extract profile implementation
+    std::vector<double> ExtractProfileImpl(const QImage& image,
+                                            const MeasureRectangle2& handle,
+                                            ProfileInterpolation interp) {
+        if (image.Empty() || !handle.IsValid()) {
+            return {};
+        }
+
+        // Build RectProfileParams
+        Internal::RectProfileParams params;
+        params.centerX = handle.Column();
+        params.centerY = handle.Row();
+        params.length = handle.ProfileLength();  // 2 * Length1
+        params.width = 2.0 * handle.Length2();   // Full width
+        params.angle = handle.ProfileAngle();
+        params.numLines = handle.NumLines();
+        params.samplesPerPixel = handle.SamplesPerPixel();
+        params.interp = ToInternalInterp(interp);
+        params.method = Internal::ProfileMethod::Average;
+
+        // Extract profile using Profiler
+        auto profile = Internal::ExtractRectProfile(image, params);
+        return profile.data;
+    }
+
+    std::vector<double> ExtractProfileImpl(const QImage& image,
+                                            const MeasureArc& handle,
+                                            ProfileInterpolation interp) {
+        if (image.Empty() || !handle.IsValid()) {
+            return {};
+        }
+
+        // Build ArcProfileParams
+        Internal::ArcProfileParams params;
+        params.centerX = handle.CenterCol();
+        params.centerY = handle.CenterRow();
+        params.radius = handle.Radius();
+        params.startAngle = handle.AngleStart();
+        params.endAngle = handle.AngleEnd();
+        params.width = handle.AnnulusRadius() * 2.0;  // Full width
+        params.numLines = handle.NumLines();
+        params.samplesPerPixel = handle.SamplesPerPixel();
+        params.interp = ToInternalInterp(interp);
+        params.method = Internal::ProfileMethod::Average;
+
+        auto profile = Internal::ExtractArcProfile(image, params);
+        return profile.data;
+    }
+
+    std::vector<double> ExtractProfileImpl(const QImage& image,
+                                            const MeasureConcentricCircles& handle,
+                                            ProfileInterpolation interp) {
+        if (image.Empty() || !handle.IsValid()) {
+            return {};
+        }
+
+        // Build AnnularProfileParams
+        Internal::AnnularProfileParams params;
+        params.centerX = handle.CenterCol();
+        params.centerY = handle.CenterRow();
+        params.innerRadius = handle.InnerRadius();
+        params.outerRadius = handle.OuterRadius();
+        params.angle = handle.Angle();
+        params.angularWidth = handle.AngularWidth();
+        params.numLines = handle.NumLines();
+        params.samplesPerPixel = handle.SamplesPerPixel();
+        params.interp = ToInternalInterp(interp);
+        params.method = Internal::ProfileMethod::Average;
+
+        auto profile = Internal::ExtractAnnularProfile(image, params);
+        return profile.data;
+    }
 }
 
 // =============================================================================
-// Profile Extraction Helpers
+// Profile Extraction (Public API)
 // =============================================================================
 
 std::vector<double> ExtractMeasureProfile(const QImage& image,
                                            const MeasureRectangle2& handle,
-                                           ProfileInterpolation interp) {
-    if (image.Empty() || !handle.IsValid()) {
-        return {};
-    }
-
-    // Build RectProfileParams
-    Internal::RectProfileParams params;
-    params.centerX = handle.Column();
-    params.centerY = handle.Row();
-    params.length = handle.ProfileLength();  // 2 * Length1
-    params.width = 2.0 * handle.Length2();   // Full width
-    params.angle = handle.ProfileAngle();
-    params.numLines = handle.NumLines();
-    params.samplesPerPixel = handle.SamplesPerPixel();
-    params.interp = ToInternalInterp(interp);
-    params.method = Internal::ProfileMethod::Average;
-
-    // Extract profile using Profiler
-    auto profile = Internal::ExtractRectProfile(image, params);
-    return profile.data;
+                                           const std::string& interp) {
+    return ExtractProfileImpl(image, handle, ParseInterpolation(interp));
 }
 
 std::vector<double> ExtractMeasureProfile(const QImage& image,
                                            const MeasureArc& handle,
-                                           ProfileInterpolation interp) {
-    if (image.Empty() || !handle.IsValid()) {
-        return {};
-    }
-
-    // Build ArcProfileParams
-    Internal::ArcProfileParams params;
-    params.centerX = handle.CenterCol();
-    params.centerY = handle.CenterRow();
-    params.radius = handle.Radius();
-    params.startAngle = handle.AngleStart();
-    params.endAngle = handle.AngleEnd();
-    params.width = handle.AnnulusRadius() * 2.0;  // Full width
-    params.numLines = handle.NumLines();
-    params.samplesPerPixel = handle.SamplesPerPixel();
-    params.interp = ToInternalInterp(interp);
-    params.method = Internal::ProfileMethod::Average;
-
-    auto profile = Internal::ExtractArcProfile(image, params);
-    return profile.data;
+                                           const std::string& interp) {
+    return ExtractProfileImpl(image, handle, ParseInterpolation(interp));
 }
 
 std::vector<double> ExtractMeasureProfile(const QImage& image,
                                            const MeasureConcentricCircles& handle,
-                                           ProfileInterpolation interp) {
-    if (image.Empty() || !handle.IsValid()) {
-        return {};
-    }
-
-    // Build AnnularProfileParams
-    Internal::AnnularProfileParams params;
-    params.centerX = handle.CenterCol();
-    params.centerY = handle.CenterRow();
-    params.innerRadius = handle.InnerRadius();
-    params.outerRadius = handle.OuterRadius();
-    params.angle = handle.Angle();
-    params.angularWidth = handle.AngularWidth();
-    params.numLines = handle.NumLines();
-    params.samplesPerPixel = handle.SamplesPerPixel();
-    params.interp = ToInternalInterp(interp);
-    params.method = Internal::ProfileMethod::Average;
-
-    auto profile = Internal::ExtractAnnularProfile(image, params);
-    return profile.data;
+                                           const std::string& interp) {
+    return ExtractProfileImpl(image, handle, ParseInterpolation(interp));
 }
 
 // =============================================================================
@@ -196,7 +215,10 @@ namespace {
     template<typename HandleT>
     std::vector<EdgeResult> MeasurePosImpl(const QImage& image,
                                             const HandleT& handle,
-                                            const MeasureParams& params) {
+                                            double sigma,
+                                            double threshold,
+                                            EdgeTransition transition,
+                                            EdgeSelectMode selectMode) {
         std::vector<EdgeResult> results;
 
         if (image.Empty() || !handle.IsValid()) {
@@ -204,7 +226,7 @@ namespace {
         }
 
         // Extract profile
-        auto profile = ExtractMeasureProfile(image, handle, params.interp);
+        auto profile = ExtractProfileImpl(image, handle, ProfileInterpolation::Bilinear);
         if (profile.size() < 3) {
             return results;
         }
@@ -213,9 +235,9 @@ namespace {
         auto edges1D = Internal::DetectEdges1D(
             profile.data(),
             profile.size(),
-            params.minAmplitude,
-            ToEdgePolarity(params.transition),
-            params.sigma
+            threshold,
+            ToEdgePolarity(transition),
+            sigma
         );
 
         if (edges1D.empty()) {
@@ -252,7 +274,7 @@ namespace {
         }
 
         // Apply selection mode
-        results = SelectEdges(results, params.selectMode, params.maxEdges);
+        results = SelectEdges(results, selectMode, MAX_EDGES);
 
         return results;
     }
@@ -261,7 +283,11 @@ namespace {
     template<typename HandleT>
     std::vector<PairResult> MeasurePairsImpl(const QImage& image,
                                               const HandleT& handle,
-                                              const PairParams& params) {
+                                              double sigma,
+                                              double threshold,
+                                              EdgeTransition firstTransition,
+                                              EdgeTransition secondTransition,
+                                              PairSelectMode selectMode) {
         std::vector<PairResult> results;
 
         if (image.Empty() || !handle.IsValid()) {
@@ -269,7 +295,7 @@ namespace {
         }
 
         // Extract profile
-        auto profile = ExtractMeasureProfile(image, handle, params.interp);
+        auto profile = ExtractProfileImpl(image, handle, ProfileInterpolation::Bilinear);
         if (profile.size() < 3) {
             return results;
         }
@@ -278,9 +304,9 @@ namespace {
         auto allEdges = Internal::DetectEdges1D(
             profile.data(),
             profile.size(),
-            params.minAmplitude,
+            threshold,
             Internal::EdgePolarity::Both,
-            params.sigma
+            sigma
         );
 
         if (allEdges.size() < 2) {
@@ -293,10 +319,10 @@ namespace {
         for (const auto& edge : allEdges) {
             EdgeTransition trans = ToEdgeTransition(edge.polarity);
 
-            bool matchFirst = (params.firstTransition == EdgeTransition::All) ||
-                              (params.firstTransition == trans);
-            bool matchSecond = (params.secondTransition == EdgeTransition::All) ||
-                               (params.secondTransition == trans);
+            bool matchFirst = (firstTransition == EdgeTransition::All) ||
+                              (firstTransition == trans);
+            bool matchSecond = (secondTransition == EdgeTransition::All) ||
+                               (secondTransition == trans);
 
             if (matchFirst) firstEdges.push_back(edge);
             if (matchSecond) secondEdges.push_back(edge);
@@ -312,9 +338,6 @@ namespace {
                 if (second.position <= first.position) continue;
 
                 double width = (second.position - first.position) * stepSize;
-
-                // Check width constraints
-                if (width < params.minWidth || width > params.maxWidth) continue;
 
                 PairResult pair;
 
@@ -357,7 +380,7 @@ namespace {
         }
 
         // Apply selection mode
-        results = SelectPairs(results, params.pairSelectMode, params.maxPairs);
+        results = SelectPairs(results, selectMode, MAX_EDGES);
 
         return results;
     }
@@ -366,7 +389,11 @@ namespace {
     template<typename HandleT>
     std::vector<EdgeResult> FuzzyMeasurePosImpl(const QImage& image,
                                                  const HandleT& handle,
-                                                 const FuzzyParams& params,
+                                                 double sigma,
+                                                 double threshold,
+                                                 EdgeTransition transition,
+                                                 EdgeSelectMode selectMode,
+                                                 double fuzzyThresh,
                                                  MeasureStats* stats) {
         std::vector<EdgeResult> results;
 
@@ -376,7 +403,7 @@ namespace {
         }
 
         // Extract profile
-        auto profile = ExtractMeasureProfile(image, handle, params.interp);
+        auto profile = ExtractProfileImpl(image, handle, ProfileInterpolation::Bilinear);
         if (profile.size() < 3) {
             if (stats) *stats = MeasureStats{};
             return results;
@@ -387,19 +414,17 @@ namespace {
         double profileMax = *std::max_element(profile.begin(), profile.end());
         double contrast = profileMax - profileMin;
 
-        // Detect edges with lower threshold (fuzzyLow) for more candidates
-        double effectiveThreshold = params.minAmplitude;
-        if (params.useAdaptiveThreshold && contrast > 0) {
-            effectiveThreshold = std::max(params.minAmplitude * params.fuzzyThresholdLow,
-                                          contrast * params.fuzzyThresholdLow);
-        }
+        // Detect edges with lower threshold for more candidates
+        constexpr double FUZZY_LOW = 0.3;
+        constexpr double FUZZY_HIGH = 0.8;
+        double effectiveThreshold = std::max(threshold * FUZZY_LOW, contrast * FUZZY_LOW);
 
         auto edges1D = Internal::DetectEdges1D(
             profile.data(),
             profile.size(),
             effectiveThreshold,
-            ToEdgePolarity(params.transition),
-            params.sigma
+            ToEdgePolarity(transition),
+            sigma
         );
 
         if (edges1D.empty()) {
@@ -423,10 +448,10 @@ namespace {
 
         for (const auto& edge : edges1D) {
             double score = ComputeFuzzyScore(std::abs(edge.amplitude), maxAmplitude,
-                                             params.fuzzyThresholdLow, params.fuzzyThresholdHigh);
+                                             FUZZY_LOW, FUZZY_HIGH);
 
             // Filter by minimum score
-            if (score < params.minScore) continue;
+            if (score < fuzzyThresh) continue;
 
             EdgeResult result;
 
@@ -469,7 +494,7 @@ namespace {
         }
 
         // Apply selection mode
-        results = SelectEdges(results, params.selectMode, params.maxEdges);
+        results = SelectEdges(results, selectMode, MAX_EDGES);
 
         return results;
     }
@@ -478,11 +503,17 @@ namespace {
     template<typename HandleT>
     std::vector<PairResult> FuzzyMeasurePairsImpl(const QImage& image,
                                                    const HandleT& handle,
-                                                   const FuzzyParams& params,
+                                                   double sigma,
+                                                   double threshold,
+                                                   EdgeTransition transition,
+                                                   EdgeSelectMode selectMode,
+                                                   double fuzzyThresh,
                                                    MeasureStats* stats) {
         // First get fuzzy edges
         MeasureStats localStats;
-        auto edges = FuzzyMeasurePosImpl(image, handle, params, &localStats);
+        auto edges = FuzzyMeasurePosImpl(image, handle, sigma, threshold,
+                                          EdgeTransition::All, EdgeSelectMode::All,
+                                          fuzzyThresh, &localStats);
 
         if (stats) *stats = localStats;
 
@@ -491,10 +522,19 @@ namespace {
             return results;
         }
 
+        // Determine first/second transition based on transition parameter
+        EdgeTransition firstTrans = EdgeTransition::Positive;
+        EdgeTransition secondTrans = EdgeTransition::Negative;
+        if (transition == EdgeTransition::Negative) {
+            firstTrans = EdgeTransition::Negative;
+            secondTrans = EdgeTransition::Positive;
+        } else if (transition == EdgeTransition::All) {
+            firstTrans = EdgeTransition::All;
+            secondTrans = EdgeTransition::All;
+        }
+
         // Separate by transition type
         std::vector<EdgeResult> firstEdges, secondEdges;
-        EdgeTransition firstTrans = EdgeTransition::Positive;  // Default
-        EdgeTransition secondTrans = EdgeTransition::Negative;
 
         for (const auto& edge : edges) {
             bool matchFirst = (firstTrans == EdgeTransition::All) ||
@@ -538,6 +578,11 @@ namespace {
                       return a.score > b.score;
                   });
 
+        // Apply selection mode
+        results = SelectPairs(results, ParsePairSelect(
+            selectMode == EdgeSelectMode::First ? "first" :
+            selectMode == EdgeSelectMode::Last ? "last" : "all"), MAX_EDGES);
+
         return results;
     }
 }
@@ -548,20 +593,32 @@ namespace {
 
 std::vector<EdgeResult> MeasurePos(const QImage& image,
                                     const MeasureRectangle2& handle,
-                                    const MeasureParams& params) {
-    return MeasurePosImpl(image, handle, params);
+                                    double sigma,
+                                    double threshold,
+                                    const std::string& transition,
+                                    const std::string& select) {
+    return MeasurePosImpl(image, handle, sigma, threshold,
+                          ParseTransition(transition), ParseEdgeSelect(select));
 }
 
 std::vector<EdgeResult> MeasurePos(const QImage& image,
                                     const MeasureArc& handle,
-                                    const MeasureParams& params) {
-    return MeasurePosImpl(image, handle, params);
+                                    double sigma,
+                                    double threshold,
+                                    const std::string& transition,
+                                    const std::string& select) {
+    return MeasurePosImpl(image, handle, sigma, threshold,
+                          ParseTransition(transition), ParseEdgeSelect(select));
 }
 
 std::vector<EdgeResult> MeasurePos(const QImage& image,
                                     const MeasureConcentricCircles& handle,
-                                    const MeasureParams& params) {
-    return MeasurePosImpl(image, handle, params);
+                                    double sigma,
+                                    double threshold,
+                                    const std::string& transition,
+                                    const std::string& select) {
+    return MeasurePosImpl(image, handle, sigma, threshold,
+                          ParseTransition(transition), ParseEdgeSelect(select));
 }
 
 // =============================================================================
@@ -570,20 +627,75 @@ std::vector<EdgeResult> MeasurePos(const QImage& image,
 
 std::vector<PairResult> MeasurePairs(const QImage& image,
                                       const MeasureRectangle2& handle,
-                                      const PairParams& params) {
-    return MeasurePairsImpl(image, handle, params);
+                                      double sigma,
+                                      double threshold,
+                                      const std::string& transition,
+                                      const std::string& select) {
+    // Parse transition for pair: interpret as first/second transition
+    EdgeTransition trans = ParseTransition(transition);
+    EdgeTransition firstTrans, secondTrans;
+
+    if (trans == EdgeTransition::All) {
+        firstTrans = EdgeTransition::Positive;
+        secondTrans = EdgeTransition::Negative;
+    } else if (trans == EdgeTransition::Positive) {
+        firstTrans = EdgeTransition::Positive;
+        secondTrans = EdgeTransition::Negative;
+    } else {
+        firstTrans = EdgeTransition::Negative;
+        secondTrans = EdgeTransition::Positive;
+    }
+
+    return MeasurePairsImpl(image, handle, sigma, threshold,
+                            firstTrans, secondTrans, ParsePairSelect(select));
 }
 
 std::vector<PairResult> MeasurePairs(const QImage& image,
                                       const MeasureArc& handle,
-                                      const PairParams& params) {
-    return MeasurePairsImpl(image, handle, params);
+                                      double sigma,
+                                      double threshold,
+                                      const std::string& transition,
+                                      const std::string& select) {
+    EdgeTransition trans = ParseTransition(transition);
+    EdgeTransition firstTrans, secondTrans;
+
+    if (trans == EdgeTransition::All) {
+        firstTrans = EdgeTransition::Positive;
+        secondTrans = EdgeTransition::Negative;
+    } else if (trans == EdgeTransition::Positive) {
+        firstTrans = EdgeTransition::Positive;
+        secondTrans = EdgeTransition::Negative;
+    } else {
+        firstTrans = EdgeTransition::Negative;
+        secondTrans = EdgeTransition::Positive;
+    }
+
+    return MeasurePairsImpl(image, handle, sigma, threshold,
+                            firstTrans, secondTrans, ParsePairSelect(select));
 }
 
 std::vector<PairResult> MeasurePairs(const QImage& image,
                                       const MeasureConcentricCircles& handle,
-                                      const PairParams& params) {
-    return MeasurePairsImpl(image, handle, params);
+                                      double sigma,
+                                      double threshold,
+                                      const std::string& transition,
+                                      const std::string& select) {
+    EdgeTransition trans = ParseTransition(transition);
+    EdgeTransition firstTrans, secondTrans;
+
+    if (trans == EdgeTransition::All) {
+        firstTrans = EdgeTransition::Positive;
+        secondTrans = EdgeTransition::Negative;
+    } else if (trans == EdgeTransition::Positive) {
+        firstTrans = EdgeTransition::Positive;
+        secondTrans = EdgeTransition::Negative;
+    } else {
+        firstTrans = EdgeTransition::Negative;
+        secondTrans = EdgeTransition::Positive;
+    }
+
+    return MeasurePairsImpl(image, handle, sigma, threshold,
+                            firstTrans, secondTrans, ParsePairSelect(select));
 }
 
 // =============================================================================
@@ -592,23 +704,41 @@ std::vector<PairResult> MeasurePairs(const QImage& image,
 
 std::vector<EdgeResult> FuzzyMeasurePos(const QImage& image,
                                          const MeasureRectangle2& handle,
-                                         const FuzzyParams& params,
+                                         double sigma,
+                                         double threshold,
+                                         const std::string& transition,
+                                         const std::string& select,
+                                         double fuzzyThresh,
                                          MeasureStats* stats) {
-    return FuzzyMeasurePosImpl(image, handle, params, stats);
+    return FuzzyMeasurePosImpl(image, handle, sigma, threshold,
+                                ParseTransition(transition), ParseEdgeSelect(select),
+                                fuzzyThresh, stats);
 }
 
 std::vector<EdgeResult> FuzzyMeasurePos(const QImage& image,
                                          const MeasureArc& handle,
-                                         const FuzzyParams& params,
+                                         double sigma,
+                                         double threshold,
+                                         const std::string& transition,
+                                         const std::string& select,
+                                         double fuzzyThresh,
                                          MeasureStats* stats) {
-    return FuzzyMeasurePosImpl(image, handle, params, stats);
+    return FuzzyMeasurePosImpl(image, handle, sigma, threshold,
+                                ParseTransition(transition), ParseEdgeSelect(select),
+                                fuzzyThresh, stats);
 }
 
 std::vector<EdgeResult> FuzzyMeasurePos(const QImage& image,
                                          const MeasureConcentricCircles& handle,
-                                         const FuzzyParams& params,
+                                         double sigma,
+                                         double threshold,
+                                         const std::string& transition,
+                                         const std::string& select,
+                                         double fuzzyThresh,
                                          MeasureStats* stats) {
-    return FuzzyMeasurePosImpl(image, handle, params, stats);
+    return FuzzyMeasurePosImpl(image, handle, sigma, threshold,
+                                ParseTransition(transition), ParseEdgeSelect(select),
+                                fuzzyThresh, stats);
 }
 
 // =============================================================================
@@ -617,23 +747,41 @@ std::vector<EdgeResult> FuzzyMeasurePos(const QImage& image,
 
 std::vector<PairResult> FuzzyMeasurePairs(const QImage& image,
                                            const MeasureRectangle2& handle,
-                                           const FuzzyParams& params,
+                                           double sigma,
+                                           double threshold,
+                                           const std::string& transition,
+                                           const std::string& select,
+                                           double fuzzyThresh,
                                            MeasureStats* stats) {
-    return FuzzyMeasurePairsImpl(image, handle, params, stats);
+    return FuzzyMeasurePairsImpl(image, handle, sigma, threshold,
+                                  ParseTransition(transition), ParseEdgeSelect(select),
+                                  fuzzyThresh, stats);
 }
 
 std::vector<PairResult> FuzzyMeasurePairs(const QImage& image,
                                            const MeasureArc& handle,
-                                           const FuzzyParams& params,
+                                           double sigma,
+                                           double threshold,
+                                           const std::string& transition,
+                                           const std::string& select,
+                                           double fuzzyThresh,
                                            MeasureStats* stats) {
-    return FuzzyMeasurePairsImpl(image, handle, params, stats);
+    return FuzzyMeasurePairsImpl(image, handle, sigma, threshold,
+                                  ParseTransition(transition), ParseEdgeSelect(select),
+                                  fuzzyThresh, stats);
 }
 
 std::vector<PairResult> FuzzyMeasurePairs(const QImage& image,
                                            const MeasureConcentricCircles& handle,
-                                           const FuzzyParams& params,
+                                           double sigma,
+                                           double threshold,
+                                           const std::string& transition,
+                                           const std::string& select,
+                                           double fuzzyThresh,
                                            MeasureStats* stats) {
-    return FuzzyMeasurePairsImpl(image, handle, params, stats);
+    return FuzzyMeasurePairsImpl(image, handle, sigma, threshold,
+                                  ParseTransition(transition), ParseEdgeSelect(select),
+                                  fuzzyThresh, stats);
 }
 
 // =============================================================================
@@ -879,91 +1027,6 @@ std::string EdgeSelectToString(EdgeSelectMode m) {
         case EdgeSelectMode::Weakest:   return "weakest";
     }
     return "all";
-}
-
-// =============================================================================
-// Halcon Compatible String Parameter Overloads
-// =============================================================================
-
-std::vector<EdgeResult> MeasurePos(const QImage& image,
-                                    const MeasureRectangle2& handle,
-                                    double sigma,
-                                    double threshold,
-                                    const std::string& transition,
-                                    const std::string& select) {
-    MeasureParams params;
-    params.sigma = sigma;
-    params.minAmplitude = threshold;
-    params.transition = ParseTransition(transition);
-    params.selectMode = ParseEdgeSelect(select);
-    return MeasurePos(image, handle, params);
-}
-
-std::vector<EdgeResult> MeasurePos(const QImage& image,
-                                    const MeasureArc& handle,
-                                    double sigma,
-                                    double threshold,
-                                    const std::string& transition,
-                                    const std::string& select) {
-    MeasureParams params;
-    params.sigma = sigma;
-    params.minAmplitude = threshold;
-    params.transition = ParseTransition(transition);
-    params.selectMode = ParseEdgeSelect(select);
-    return MeasurePos(image, handle, params);
-}
-
-std::vector<PairResult> MeasurePairs(const QImage& image,
-                                      const MeasureRectangle2& handle,
-                                      double sigma,
-                                      double threshold,
-                                      const std::string& transition,
-                                      const std::string& select) {
-    PairParams params;
-    params.sigma = sigma;
-    params.minAmplitude = threshold;
-
-    // Parse transition for pair: interpret as first/second transition
-    EdgeTransition trans = ParseTransition(transition);
-    if (trans == EdgeTransition::All) {
-        params.firstTransition = EdgeTransition::Positive;
-        params.secondTransition = EdgeTransition::Negative;
-    } else if (trans == EdgeTransition::Positive) {
-        params.firstTransition = EdgeTransition::Positive;
-        params.secondTransition = EdgeTransition::Negative;
-    } else {
-        params.firstTransition = EdgeTransition::Negative;
-        params.secondTransition = EdgeTransition::Positive;
-    }
-
-    params.pairSelectMode = ParsePairSelect(select);
-    return MeasurePairs(image, handle, params);
-}
-
-std::vector<PairResult> MeasurePairs(const QImage& image,
-                                      const MeasureArc& handle,
-                                      double sigma,
-                                      double threshold,
-                                      const std::string& transition,
-                                      const std::string& select) {
-    PairParams params;
-    params.sigma = sigma;
-    params.minAmplitude = threshold;
-
-    EdgeTransition trans = ParseTransition(transition);
-    if (trans == EdgeTransition::All) {
-        params.firstTransition = EdgeTransition::Positive;
-        params.secondTransition = EdgeTransition::Negative;
-    } else if (trans == EdgeTransition::Positive) {
-        params.firstTransition = EdgeTransition::Positive;
-        params.secondTransition = EdgeTransition::Negative;
-    } else {
-        params.firstTransition = EdgeTransition::Negative;
-        params.secondTransition = EdgeTransition::Positive;
-    }
-
-    params.pairSelectMode = ParsePairSelect(select);
-    return MeasurePairs(image, handle, params);
 }
 
 } // namespace Qi::Vision::Measure

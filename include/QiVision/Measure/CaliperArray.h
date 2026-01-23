@@ -239,7 +239,7 @@ struct CaliperArrayStats {
  *     CaliperArrayParams().SetCaliperCount(20).SetProfileLength(30));
  *
  * // Measure edges
- * auto result = array.MeasurePos(image, MeasureParams().SetSigma(1.5));
+ * auto result = array.MeasurePos(image, 1.5, 30.0, "all", "first");
  *
  * // Fit line to measured points
  * if (result.CanFitLine()) {
@@ -261,38 +261,108 @@ public:
     // =========================================================================
 
     /**
-     * @brief Create caliper array along a line segment
+     * @brief Create caliper array along a line segment (struct params)
      */
     bool CreateAlongLine(const Point2d& p1, const Point2d& p2,
-                         const CaliperArrayParams& params = CaliperArrayParams());
-
-    bool CreateAlongLine(const Segment2d& segment,
-                         const CaliperArrayParams& params = CaliperArrayParams());
+                         const CaliperArrayParams& params);
 
     /**
-     * @brief Create caliper array along an arc
+     * @brief Create caliper array along a line segment (direct params - Halcon style)
+     *
+     * @param p1 Start point
+     * @param p2 End point
+     * @param caliperCount Number of calipers along the line
+     * @param profileLength Profile length per caliper (pixels)
+     * @param handleWidth Handle width for averaging (pixels)
+     */
+    bool CreateAlongLine(const Point2d& p1, const Point2d& p2,
+                         int32_t caliperCount,
+                         double profileLength = 50.0,
+                         double handleWidth = 10.0);
+
+    bool CreateAlongLine(const Segment2d& segment,
+                         const CaliperArrayParams& params);
+
+    bool CreateAlongLine(const Segment2d& segment,
+                         int32_t caliperCount,
+                         double profileLength = 50.0,
+                         double handleWidth = 10.0);
+
+    /**
+     * @brief Create caliper array along an arc (struct params)
      */
     bool CreateAlongArc(const Point2d& center, double radius,
                         double startAngle, double sweepAngle,
-                        const CaliperArrayParams& params = CaliperArrayParams());
+                        const CaliperArrayParams& params);
+
+    /**
+     * @brief Create caliper array along an arc (direct params - Halcon style)
+     *
+     * @param center Arc center
+     * @param radius Arc radius
+     * @param startAngle Start angle (radians)
+     * @param sweepAngle Sweep angle (radians)
+     * @param caliperCount Number of calipers
+     * @param profileLength Profile length per caliper
+     * @param handleWidth Handle width
+     */
+    bool CreateAlongArc(const Point2d& center, double radius,
+                        double startAngle, double sweepAngle,
+                        int32_t caliperCount,
+                        double profileLength = 50.0,
+                        double handleWidth = 10.0);
+
+    bool CreateAlongArc(const Arc2d& arc, const CaliperArrayParams& params);
 
     bool CreateAlongArc(const Arc2d& arc,
-                        const CaliperArrayParams& params = CaliperArrayParams());
+                        int32_t caliperCount,
+                        double profileLength = 50.0,
+                        double handleWidth = 10.0);
 
     /**
-     * @brief Create caliper array along a full circle
+     * @brief Create caliper array along a full circle (struct params)
      */
     bool CreateAlongCircle(const Point2d& center, double radius,
-                           const CaliperArrayParams& params = CaliperArrayParams());
-
-    bool CreateAlongCircle(const Circle2d& circle,
-                           const CaliperArrayParams& params = CaliperArrayParams());
+                           const CaliperArrayParams& params);
 
     /**
-     * @brief Create caliper array along a contour
+     * @brief Create caliper array along a full circle (direct params - Halcon style)
+     *
+     * @param center Circle center
+     * @param radius Circle radius
+     * @param caliperCount Number of calipers
+     * @param profileLength Profile length per caliper
+     * @param handleWidth Handle width
+     */
+    bool CreateAlongCircle(const Point2d& center, double radius,
+                           int32_t caliperCount,
+                           double profileLength = 50.0,
+                           double handleWidth = 10.0);
+
+    bool CreateAlongCircle(const Circle2d& circle, const CaliperArrayParams& params);
+
+    bool CreateAlongCircle(const Circle2d& circle,
+                           int32_t caliperCount,
+                           double profileLength = 50.0,
+                           double handleWidth = 10.0);
+
+    /**
+     * @brief Create caliper array along a contour (struct params)
+     */
+    bool CreateAlongContour(const QContour& contour, const CaliperArrayParams& params);
+
+    /**
+     * @brief Create caliper array along a contour (direct params - Halcon style)
+     *
+     * @param contour XLD contour
+     * @param caliperCount Number of calipers (0 = auto from spacing)
+     * @param profileLength Profile length per caliper
+     * @param handleWidth Handle width
      */
     bool CreateAlongContour(const QContour& contour,
-                            const CaliperArrayParams& params = CaliperArrayParams());
+                            int32_t caliperCount,
+                            double profileLength = 50.0,
+                            double handleWidth = 10.0);
 
     /**
      * @brief Clear the array
@@ -315,39 +385,67 @@ public:
     Point2d GetPathPoint(int32_t index) const;
 
     // =========================================================================
-    // Edge Position Measurement
+    // Edge Position Measurement (Halcon compatible API)
     // =========================================================================
 
     /**
      * @brief Measure edge positions in all calipers
+     *
+     * @param image Input image (grayscale)
+     * @param sigma Gaussian smoothing sigma
+     * @param threshold Edge amplitude threshold
+     * @param transition "positive", "negative", "all"
+     * @param select "first", "last", "all"
+     * @param stats Optional output statistics
      */
     CaliperArrayResult MeasurePos(const QImage& image,
-                                   const MeasureParams& params = MeasureParams(),
+                                   double sigma,
+                                   double threshold,
+                                   const std::string& transition,
+                                   const std::string& select,
                                    CaliperArrayStats* stats = nullptr) const;
 
     /**
      * @brief Measure edge positions with fuzzy scoring
      */
     CaliperArrayResult FuzzyMeasurePos(const QImage& image,
-                                        const FuzzyParams& params = FuzzyParams(),
+                                        double sigma,
+                                        double threshold,
+                                        const std::string& transition,
+                                        const std::string& select,
+                                        double fuzzyThresh = 0.5,
                                         CaliperArrayStats* stats = nullptr) const;
 
     // =========================================================================
-    // Edge Pair (Width) Measurement
+    // Edge Pair (Width) Measurement (Halcon compatible API)
     // =========================================================================
 
     /**
      * @brief Measure edge pairs (widths) in all calipers
+     *
+     * @param image Input image (grayscale)
+     * @param sigma Gaussian smoothing sigma
+     * @param threshold Edge amplitude threshold
+     * @param transition "positive", "negative", "all"
+     * @param select "first", "last", "all"
+     * @param stats Optional output statistics
      */
     CaliperArrayResult MeasurePairs(const QImage& image,
-                                     const PairParams& params = PairParams(),
+                                     double sigma,
+                                     double threshold,
+                                     const std::string& transition,
+                                     const std::string& select,
                                      CaliperArrayStats* stats = nullptr) const;
 
     /**
      * @brief Measure edge pairs with fuzzy scoring
      */
     CaliperArrayResult FuzzyMeasurePairs(const QImage& image,
-                                          const FuzzyParams& params = FuzzyParams(),
+                                          double sigma,
+                                          double threshold,
+                                          const std::string& transition,
+                                          const std::string& select,
+                                          double fuzzyThresh = 0.5,
                                           CaliperArrayStats* stats = nullptr) const;
 
     // =========================================================================
@@ -358,19 +456,28 @@ public:
      * @brief Measure and return first edge points only
      */
     std::vector<Point2d> MeasureFirstEdges(const QImage& image,
-                                            const MeasureParams& params = MeasureParams()) const;
+                                            double sigma,
+                                            double threshold,
+                                            const std::string& transition,
+                                            const std::string& select) const;
 
     /**
      * @brief Measure and return pair center points only
      */
     std::vector<Point2d> MeasurePairCenters(const QImage& image,
-                                             const PairParams& params = PairParams()) const;
+                                             double sigma,
+                                             double threshold,
+                                             const std::string& transition,
+                                             const std::string& select) const;
 
     /**
      * @brief Measure widths and return statistics
      */
     std::vector<double> MeasureWidths(const QImage& image,
-                                       const PairParams& params,
+                                       double sigma,
+                                       double threshold,
+                                       const std::string& transition,
+                                       const std::string& select,
                                        double& meanWidth,
                                        double& stdWidth) const;
 
@@ -437,7 +544,10 @@ CaliperArray CreateCaliperArrayContour(const QContour& contour,
 std::optional<Line2d> MeasureAndFitLine(const QImage& image,
                                          const Point2d& p1, const Point2d& p2,
                                          int32_t caliperCount = 10,
-                                         const MeasureParams& measureParams = MeasureParams(),
+                                         double sigma = 1.0,
+                                         double threshold = 20.0,
+                                         const std::string& transition = "all",
+                                         const std::string& select = "first",
                                          std::vector<Point2d>* measuredPoints = nullptr);
 
 /**
@@ -447,7 +557,10 @@ std::optional<Circle2d> MeasureAndFitCircle(const QImage& image,
                                              const Point2d& approxCenter,
                                              double approxRadius,
                                              int32_t caliperCount = 24,
-                                             const MeasureParams& measureParams = MeasureParams(),
+                                             double sigma = 1.0,
+                                             double threshold = 20.0,
+                                             const std::string& transition = "all",
+                                             const std::string& select = "first",
                                              std::vector<Point2d>* measuredPoints = nullptr);
 
 // =============================================================================
@@ -460,7 +573,10 @@ std::optional<Circle2d> MeasureAndFitCircle(const QImage& image,
 bool MeasureWidthsAlongLine(const QImage& image,
                              const Point2d& p1, const Point2d& p2,
                              int32_t caliperCount,
-                             const PairParams& pairParams,
+                             double sigma,
+                             double threshold,
+                             const std::string& transition,
+                             const std::string& select,
                              double& meanWidth,
                              double& stdWidth,
                              std::vector<double>* widths = nullptr);
@@ -471,7 +587,10 @@ bool MeasureWidthsAlongLine(const QImage& image,
 bool MeasureWidthsAlongArc(const QImage& image,
                             const Arc2d& arc,
                             int32_t caliperCount,
-                            const PairParams& pairParams,
+                            double sigma,
+                            double threshold,
+                            const std::string& transition,
+                            const std::string& select,
                             double& meanWidth,
                             double& stdWidth,
                             std::vector<double>* widths = nullptr);

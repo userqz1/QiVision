@@ -23,6 +23,8 @@ namespace Qi::Vision {
 // Forward declarations for Metrology
 namespace Measure {
     class MeasureRectangle2;
+    class MeasureArc;
+    class MeasureConcentricCircles;
     class MetrologyModel;
     class MetrologyObject;
     struct MetrologyLineResult;
@@ -290,6 +292,26 @@ public:
     static void MeasureRects(QImage& image,
                              const std::vector<Measure::MeasureRectangle2>& handles,
                              const Scalar& color, int32_t thickness = 1);
+
+    /**
+     * @brief Draw a MeasureArc (arc caliper handle)
+     * @param image Target image
+     * @param handle MeasureArc to draw
+     * @param color Drawing color
+     * @param thickness Line thickness
+     */
+    static void MeasureArc(QImage& image, const Measure::MeasureArc& handle,
+                           const Scalar& color, int32_t thickness = 1);
+
+    /**
+     * @brief Draw a MeasureConcentricCircles (radial caliper handle)
+     * @param image Target image
+     * @param handle MeasureConcentricCircles to draw
+     * @param color Drawing color
+     * @param thickness Line thickness
+     */
+    static void MeasureConcentric(QImage& image, const Measure::MeasureConcentricCircles& handle,
+                                  const Scalar& color, int32_t thickness = 1);
 
     /**
      * @brief Draw a QContour

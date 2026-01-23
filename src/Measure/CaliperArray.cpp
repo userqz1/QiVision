@@ -437,9 +437,27 @@ bool CaliperArray::CreateAlongLine(const Point2d& p1, const Point2d& p2,
     return impl_->GenerateLineHandles(p1, p2, params);
 }
 
+bool CaliperArray::CreateAlongLine(const Point2d& p1, const Point2d& p2,
+                                    int32_t caliperCount,
+                                    double profileLength,
+                                    double handleWidth) {
+    CaliperArrayParams params;
+    params.caliperCount = caliperCount;
+    params.profileLength = profileLength;
+    params.handleWidth = handleWidth;
+    return CreateAlongLine(p1, p2, params);
+}
+
 bool CaliperArray::CreateAlongLine(const Segment2d& segment,
                                     const CaliperArrayParams& params) {
     return CreateAlongLine(segment.p1, segment.p2, params);
+}
+
+bool CaliperArray::CreateAlongLine(const Segment2d& segment,
+                                    int32_t caliperCount,
+                                    double profileLength,
+                                    double handleWidth) {
+    return CreateAlongLine(segment.p1, segment.p2, caliperCount, profileLength, handleWidth);
 }
 
 bool CaliperArray::CreateAlongArc(const Point2d& center, double radius,
@@ -448,9 +466,29 @@ bool CaliperArray::CreateAlongArc(const Point2d& center, double radius,
     return impl_->GenerateArcHandles(center, radius, startAngle, sweepAngle, params);
 }
 
+bool CaliperArray::CreateAlongArc(const Point2d& center, double radius,
+                                   double startAngle, double sweepAngle,
+                                   int32_t caliperCount,
+                                   double profileLength,
+                                   double handleWidth) {
+    CaliperArrayParams params;
+    params.caliperCount = caliperCount;
+    params.profileLength = profileLength;
+    params.handleWidth = handleWidth;
+    return CreateAlongArc(center, radius, startAngle, sweepAngle, params);
+}
+
 bool CaliperArray::CreateAlongArc(const Arc2d& arc,
                                    const CaliperArrayParams& params) {
     return CreateAlongArc(arc.center, arc.radius, arc.startAngle, arc.sweepAngle, params);
+}
+
+bool CaliperArray::CreateAlongArc(const Arc2d& arc,
+                                   int32_t caliperCount,
+                                   double profileLength,
+                                   double handleWidth) {
+    return CreateAlongArc(arc.center, arc.radius, arc.startAngle, arc.sweepAngle,
+                          caliperCount, profileLength, handleWidth);
 }
 
 bool CaliperArray::CreateAlongCircle(const Point2d& center, double radius,
@@ -458,14 +496,43 @@ bool CaliperArray::CreateAlongCircle(const Point2d& center, double radius,
     return impl_->GenerateArcHandles(center, radius, 0.0, 2.0 * PI, params);
 }
 
+bool CaliperArray::CreateAlongCircle(const Point2d& center, double radius,
+                                      int32_t caliperCount,
+                                      double profileLength,
+                                      double handleWidth) {
+    CaliperArrayParams params;
+    params.caliperCount = caliperCount;
+    params.profileLength = profileLength;
+    params.handleWidth = handleWidth;
+    return CreateAlongCircle(center, radius, params);
+}
+
 bool CaliperArray::CreateAlongCircle(const Circle2d& circle,
                                       const CaliperArrayParams& params) {
     return CreateAlongCircle(circle.center, circle.radius, params);
 }
 
+bool CaliperArray::CreateAlongCircle(const Circle2d& circle,
+                                      int32_t caliperCount,
+                                      double profileLength,
+                                      double handleWidth) {
+    return CreateAlongCircle(circle.center, circle.radius, caliperCount, profileLength, handleWidth);
+}
+
 bool CaliperArray::CreateAlongContour(const QContour& contour,
                                        const CaliperArrayParams& params) {
     return impl_->GenerateContourHandles(contour.GetPoints(), params);
+}
+
+bool CaliperArray::CreateAlongContour(const QContour& contour,
+                                       int32_t caliperCount,
+                                       double profileLength,
+                                       double handleWidth) {
+    CaliperArrayParams params;
+    params.caliperCount = caliperCount;
+    params.profileLength = profileLength;
+    params.handleWidth = handleWidth;
+    return CreateAlongContour(contour, params);
 }
 
 void CaliperArray::Clear() {
@@ -530,7 +597,10 @@ Point2d CaliperArray::GetPathPoint(int32_t index) const {
 }
 
 CaliperArrayResult CaliperArray::MeasurePos(const QImage& image,
-                                             const MeasureParams& params,
+                                             double sigma,
+                                             double threshold,
+                                             const std::string& transition,
+                                             const std::string& select,
                                              CaliperArrayStats* stats) const {
     CaliperArrayResult result;
     result.numCalipers = Size();
@@ -555,8 +625,9 @@ CaliperArrayResult CaliperArray::MeasurePos(const QImage& image,
         cr.pathPoint = impl_->pathPoints_[i];
         cr.pathAngle = impl_->pathAngles_[i];
 
-        // Measure
-        cr.edges = Measure::MeasurePos(image, impl_->handles_[i], params);
+        // Measure using new API
+        cr.edges = Measure::MeasurePos(image, impl_->handles_[i],
+                                        sigma, threshold, transition, select);
 
         if (!cr.edges.empty()) {
             cr.hasResult = true;
@@ -610,7 +681,11 @@ CaliperArrayResult CaliperArray::MeasurePos(const QImage& image,
 }
 
 CaliperArrayResult CaliperArray::FuzzyMeasurePos(const QImage& image,
-                                                  const FuzzyParams& params,
+                                                  double sigma,
+                                                  double threshold,
+                                                  const std::string& transition,
+                                                  const std::string& select,
+                                                  double fuzzyThresh,
                                                   CaliperArrayStats* stats) const {
     CaliperArrayResult result;
     result.numCalipers = Size();
@@ -630,7 +705,9 @@ CaliperArrayResult CaliperArray::FuzzyMeasurePos(const QImage& image,
         cr.pathPoint = impl_->pathPoints_[i];
         cr.pathAngle = impl_->pathAngles_[i];
 
-        cr.edges = Measure::FuzzyMeasurePos(image, impl_->handles_[i], params);
+        cr.edges = Measure::FuzzyMeasurePos(image, impl_->handles_[i],
+                                             sigma, threshold, transition, select,
+                                             fuzzyThresh);
 
         if (!cr.edges.empty()) {
             cr.hasResult = true;
@@ -674,7 +751,10 @@ CaliperArrayResult CaliperArray::FuzzyMeasurePos(const QImage& image,
 }
 
 CaliperArrayResult CaliperArray::MeasurePairs(const QImage& image,
-                                               const PairParams& params,
+                                               double sigma,
+                                               double threshold,
+                                               const std::string& transition,
+                                               const std::string& select,
                                                CaliperArrayStats* stats) const {
     CaliperArrayResult result;
     result.numCalipers = Size();
@@ -697,7 +777,8 @@ CaliperArrayResult CaliperArray::MeasurePairs(const QImage& image,
         cr.pathPoint = impl_->pathPoints_[i];
         cr.pathAngle = impl_->pathAngles_[i];
 
-        cr.pairs = Measure::MeasurePairs(image, impl_->handles_[i], params);
+        cr.pairs = Measure::MeasurePairs(image, impl_->handles_[i],
+                                          sigma, threshold, transition, select);
 
         if (!cr.pairs.empty()) {
             cr.hasResult = true;
@@ -761,7 +842,11 @@ CaliperArrayResult CaliperArray::MeasurePairs(const QImage& image,
 }
 
 CaliperArrayResult CaliperArray::FuzzyMeasurePairs(const QImage& image,
-                                                    const FuzzyParams& params,
+                                                    double sigma,
+                                                    double threshold,
+                                                    const std::string& transition,
+                                                    const std::string& select,
+                                                    double fuzzyThresh,
                                                     CaliperArrayStats* stats) const {
     CaliperArrayResult result;
     result.numCalipers = Size();
@@ -784,7 +869,9 @@ CaliperArrayResult CaliperArray::FuzzyMeasurePairs(const QImage& image,
         cr.pathPoint = impl_->pathPoints_[i];
         cr.pathAngle = impl_->pathAngles_[i];
 
-        cr.pairs = Measure::FuzzyMeasurePairs(image, impl_->handles_[i], params);
+        cr.pairs = Measure::FuzzyMeasurePairs(image, impl_->handles_[i],
+                                               sigma, threshold, transition, select,
+                                               fuzzyThresh);
 
         if (!cr.pairs.empty()) {
             cr.hasResult = true;
@@ -847,22 +934,31 @@ CaliperArrayResult CaliperArray::FuzzyMeasurePairs(const QImage& image,
 }
 
 std::vector<Point2d> CaliperArray::MeasureFirstEdges(const QImage& image,
-                                                      const MeasureParams& params) const {
-    auto result = MeasurePos(image, params);
+                                                      double sigma,
+                                                      double threshold,
+                                                      const std::string& transition,
+                                                      const std::string& select) const {
+    auto result = MeasurePos(image, sigma, threshold, transition, select);
     return result.firstEdgePoints;
 }
 
 std::vector<Point2d> CaliperArray::MeasurePairCenters(const QImage& image,
-                                                       const PairParams& params) const {
-    auto result = MeasurePairs(image, params);
+                                                       double sigma,
+                                                       double threshold,
+                                                       const std::string& transition,
+                                                       const std::string& select) const {
+    auto result = MeasurePairs(image, sigma, threshold, transition, select);
     return result.centerPoints;
 }
 
 std::vector<double> CaliperArray::MeasureWidths(const QImage& image,
-                                                 const PairParams& params,
+                                                 double sigma,
+                                                 double threshold,
+                                                 const std::string& transition,
+                                                 const std::string& select,
                                                  double& meanWidth,
                                                  double& stdWidth) const {
-    auto result = MeasurePairs(image, params);
+    auto result = MeasurePairs(image, sigma, threshold, transition, select);
     meanWidth = result.meanWidth;
     stdWidth = result.stdWidth;
     return result.widths;
@@ -1005,10 +1101,13 @@ CaliperArray CreateCaliperArrayContour(const QContour& contour,
 std::optional<Line2d> MeasureAndFitLine(const QImage& image,
                                          const Point2d& p1, const Point2d& p2,
                                          int32_t caliperCount,
-                                         const MeasureParams& measureParams,
+                                         double sigma,
+                                         double threshold,
+                                         const std::string& transition,
+                                         const std::string& select,
                                          std::vector<Point2d>* measuredPoints) {
     CaliperArray array = CreateCaliperArrayLine(p1, p2, caliperCount);
-    auto result = array.MeasurePos(image, measureParams);
+    auto result = array.MeasurePos(image, sigma, threshold, transition, select);
 
     if (measuredPoints) {
         *measuredPoints = result.firstEdgePoints;
@@ -1030,10 +1129,13 @@ std::optional<Circle2d> MeasureAndFitCircle(const QImage& image,
                                              const Point2d& approxCenter,
                                              double approxRadius,
                                              int32_t caliperCount,
-                                             const MeasureParams& measureParams,
+                                             double sigma,
+                                             double threshold,
+                                             const std::string& transition,
+                                             const std::string& select,
                                              std::vector<Point2d>* measuredPoints) {
     CaliperArray array = CreateCaliperArrayCircle(approxCenter, approxRadius, caliperCount);
-    auto result = array.MeasurePos(image, measureParams);
+    auto result = array.MeasurePos(image, sigma, threshold, transition, select);
 
     if (measuredPoints) {
         *measuredPoints = result.firstEdgePoints;
@@ -1054,12 +1156,15 @@ std::optional<Circle2d> MeasureAndFitCircle(const QImage& image,
 bool MeasureWidthsAlongLine(const QImage& image,
                              const Point2d& p1, const Point2d& p2,
                              int32_t caliperCount,
-                             const PairParams& pairParams,
+                             double sigma,
+                             double threshold,
+                             const std::string& transition,
+                             const std::string& select,
                              double& meanWidth,
                              double& stdWidth,
                              std::vector<double>* widths) {
     CaliperArray array = CreateCaliperArrayLine(p1, p2, caliperCount);
-    auto result = array.MeasurePairs(image, pairParams);
+    auto result = array.MeasurePairs(image, sigma, threshold, transition, select);
 
     meanWidth = result.meanWidth;
     stdWidth = result.stdWidth;
@@ -1074,12 +1179,15 @@ bool MeasureWidthsAlongLine(const QImage& image,
 bool MeasureWidthsAlongArc(const QImage& image,
                             const Arc2d& arc,
                             int32_t caliperCount,
-                            const PairParams& pairParams,
+                            double sigma,
+                            double threshold,
+                            const std::string& transition,
+                            const std::string& select,
                             double& meanWidth,
                             double& stdWidth,
                             std::vector<double>* widths) {
     CaliperArray array = CreateCaliperArrayArc(arc, caliperCount);
-    auto result = array.MeasurePairs(image, pairParams);
+    auto result = array.MeasurePairs(image, sigma, threshold, transition, select);
 
     meanWidth = result.meanWidth;
     stdWidth = result.stdWidth;

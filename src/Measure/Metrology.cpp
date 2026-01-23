@@ -19,6 +19,82 @@ namespace {
     constexpr double PI = 3.14159265358979323846;
     constexpr double TWO_PI = 2.0 * PI;
 
+    // Helper: Parse vector<int> params into MetrologyMeasureParams
+    MetrologyMeasureParams ParseVectorParams(
+        double measureLength1, double measureLength2,
+        const std::string& transition, const std::string& select,
+        const std::vector<int>& params)
+    {
+        MetrologyMeasureParams result;
+        result.measureLength1 = measureLength1;
+        result.measureLength2 = measureLength2;
+
+        // Parse transition string
+        if (transition == "positive" || transition == "Positive") {
+            result.measureTransition = EdgeTransition::Positive;
+        } else if (transition == "negative" || transition == "Negative") {
+            result.measureTransition = EdgeTransition::Negative;
+        } else {
+            result.measureTransition = EdgeTransition::All;
+        }
+
+        // Parse select string
+        if (select == "first" || select == "First") {
+            result.measureSelect = EdgeSelectMode::First;
+        } else if (select == "last" || select == "Last") {
+            result.measureSelect = EdgeSelectMode::Last;
+        } else if (select == "best" || select == "Best" || select == "strongest" || select == "Strongest") {
+            result.measureSelect = EdgeSelectMode::Strongest;
+        } else {
+            result.measureSelect = EdgeSelectMode::All;
+        }
+
+        // Parse key-value pairs from vector<int>
+        for (size_t i = 0; i + 1 < params.size(); i += 2) {
+            int key = params[i];
+            int value = params[i + 1];
+
+            switch (key) {
+                case METROLOGY_NUM_INSTANCES:
+                    result.numInstances = value;
+                    break;
+                case METROLOGY_MEASURE_SIGMA:
+                    result.measureSigma = value / 100.0;  // e.g., 150 -> 1.5
+                    break;
+                case METROLOGY_MEASURE_THRESHOLD:
+                    result.measureThreshold = static_cast<double>(value);
+                    break;
+                case METROLOGY_NUM_MEASURES:
+                    result.numMeasures = value;
+                    break;
+                case METROLOGY_MIN_SCORE:
+                    result.minScore = value / 100.0;  // e.g., 70 -> 0.7
+                    break;
+                case METROLOGY_FIT_METHOD:
+                    switch (value) {
+                        case 0: result.fitMethod = MetrologyFitMethod::RANSAC; break;
+                        case 1: result.fitMethod = MetrologyFitMethod::Huber; break;
+                        case 2: result.fitMethod = MetrologyFitMethod::Tukey; break;
+                    }
+                    break;
+                case METROLOGY_DISTANCE_THRESHOLD:
+                    result.distanceThreshold = value / 100.0;  // e.g., 350 -> 3.5
+                    break;
+                case METROLOGY_MAX_ITERATIONS:
+                    result.maxIterations = value;
+                    break;
+                case METROLOGY_RAND_SEED:
+                    result.randSeed = value;
+                    break;
+                case METROLOGY_THRESHOLD_MODE:
+                    result.thresholdMode = (value == 0) ? ThresholdMode::Manual : ThresholdMode::Auto;
+                    break;
+            }
+        }
+
+        return result;
+    }
+
     // Normalize angle to [0, 2*PI) - may be used for arc handling
     [[maybe_unused]] double NormalizeAngle(double angle) {
         while (angle < 0.0) angle += TWO_PI;
@@ -432,6 +508,16 @@ int32_t MetrologyModel::AddLineMeasure(double row1, double col1,
     return idx;
 }
 
+int32_t MetrologyModel::AddLineMeasure(double row1, double col1,
+                                         double row2, double col2,
+                                         double measureLength1, double measureLength2,
+                                         const std::string& transition,
+                                         const std::string& select,
+                                         const std::vector<int>& params) {
+    auto parsed = ParseVectorParams(measureLength1, measureLength2, transition, select, params);
+    return AddLineMeasure(row1, col1, row2, col2, parsed);
+}
+
 int32_t MetrologyModel::AddCircleMeasure(double row, double column, double radius,
                                           const MetrologyMeasureParams& params) {
     auto obj = std::make_unique<MetrologyObjectCircle>(row, column, radius, params);
@@ -439,6 +525,15 @@ int32_t MetrologyModel::AddCircleMeasure(double row, double column, double radiu
     obj->index_ = idx;
     impl_->objects.push_back(std::move(obj));
     return idx;
+}
+
+int32_t MetrologyModel::AddCircleMeasure(double row, double column, double radius,
+                                          double measureLength1, double measureLength2,
+                                          const std::string& transition,
+                                          const std::string& select,
+                                          const std::vector<int>& params) {
+    auto parsed = ParseVectorParams(measureLength1, measureLength2, transition, select, params);
+    return AddCircleMeasure(row, column, radius, parsed);
 }
 
 int32_t MetrologyModel::AddArcMeasure(double row, double column, double radius,
@@ -452,6 +547,16 @@ int32_t MetrologyModel::AddArcMeasure(double row, double column, double radius,
     return idx;
 }
 
+int32_t MetrologyModel::AddArcMeasure(double row, double column, double radius,
+                                        double angleStart, double angleEnd,
+                                        double measureLength1, double measureLength2,
+                                        const std::string& transition,
+                                        const std::string& select,
+                                        const std::vector<int>& params) {
+    auto parsed = ParseVectorParams(measureLength1, measureLength2, transition, select, params);
+    return AddArcMeasure(row, column, radius, angleStart, angleEnd, parsed);
+}
+
 int32_t MetrologyModel::AddEllipseMeasure(double row, double column, double phi,
                                            double ra, double rb,
                                            const MetrologyMeasureParams& params) {
@@ -462,6 +567,16 @@ int32_t MetrologyModel::AddEllipseMeasure(double row, double column, double phi,
     return idx;
 }
 
+int32_t MetrologyModel::AddEllipseMeasure(double row, double column, double phi,
+                                           double ra, double rb,
+                                           double measureLength1, double measureLength2,
+                                           const std::string& transition,
+                                           const std::string& select,
+                                           const std::vector<int>& params) {
+    auto parsed = ParseVectorParams(measureLength1, measureLength2, transition, select, params);
+    return AddEllipseMeasure(row, column, phi, ra, rb, parsed);
+}
+
 int32_t MetrologyModel::AddRectangle2Measure(double row, double column, double phi,
                                                double length1, double length2,
                                                const MetrologyMeasureParams& params) {
@@ -470,6 +585,16 @@ int32_t MetrologyModel::AddRectangle2Measure(double row, double column, double p
     obj->index_ = idx;
     impl_->objects.push_back(std::move(obj));
     return idx;
+}
+
+int32_t MetrologyModel::AddRectangle2Measure(double row, double column, double phi,
+                                               double length1, double length2,
+                                               double measureLength1, double measureLength2,
+                                               const std::string& transition,
+                                               const std::string& select,
+                                               const std::vector<int>& params) {
+    auto parsed = ParseVectorParams(measureLength1, measureLength2, transition, select, params);
+    return AddRectangle2Measure(row, column, phi, length1, length2, parsed);
 }
 
 void MetrologyModel::ClearObject(int32_t index) {
@@ -504,8 +629,6 @@ bool MetrologyModel::Apply(const QImage& image) {
     if (image.Channels() > 1) {
         grayImage = image.ToGray();
     }
-
-    MeasureParams measureParams;
 
     for (auto& objPtr : impl_->objects) {
         if (!objPtr) continue;

@@ -369,51 +369,38 @@ struct MeasureConcentricCircles {
 };
 ```
 
-### 2.2 测量参数
+### 2.2 MeasurePos
 
-```cpp
-struct MeasureParams {
-    // 边缘检测参数
-    double sigma = 1.0;             // 高斯平滑 sigma
-    double threshold = 30.0;        // 边缘阈值
-    EdgeTransition transition = EdgeTransition::All;  // 边缘极性
-    EdgeSelect select = EdgeSelect::All;              // 边缘选择
-
-    // 配对参数（用于 MeasurePairs）
-    double minPairDistance = 1.0;   // 最小配对距离
-    double maxPairDistance = 1000.0;// 最大配对距离
-};
-
-// 边缘极性
-enum class EdgeTransition {
-    All,        // 所有边缘
-    Positive,   // 亮到暗
-    Negative    // 暗到亮
-};
-
-// 边缘选择
-enum class EdgeSelect {
-    All,        // 所有边缘
-    First,      // 第一个
-    Last        // 最后一个
-};
-```
-
-### 2.3 MeasurePos
-
-测量边缘位置。
+测量边缘位置（Halcon: measure_pos）。
 
 ```cpp
 std::vector<EdgeResult> MeasurePos(
-    const QImage& image,
-    const MeasureRectangle2& handle,
-    const MeasureParams& params = MeasureParams()
+    const QImage& image,              // 输入图像（灰度）
+    const MeasureRectangle2& handle,  // 测量句柄
+    double sigma,                     // 高斯平滑 sigma
+    double threshold,                 // 边缘幅度阈值
+    const std::string& transition,    // "positive" | "negative" | "all"
+    const std::string& select         // "first" | "last" | "all"
 );
 
+// MeasureArc 版本
 std::vector<EdgeResult> MeasurePos(
     const QImage& image,
     const MeasureArc& handle,
-    const MeasureParams& params = MeasureParams()
+    double sigma,
+    double threshold,
+    const std::string& transition,
+    const std::string& select
+);
+
+// MeasureConcentricCircles 版本
+std::vector<EdgeResult> MeasurePos(
+    const QImage& image,
+    const MeasureConcentricCircles& handle,
+    double sigma,
+    double threshold,
+    const std::string& transition,
+    const std::string& select
 );
 ```
 
@@ -421,7 +408,7 @@ std::vector<EdgeResult> MeasurePos(
 ```cpp
 struct EdgeResult {
     double row;         // 边缘位置 Y（亚像素）
-    double col;         // 边缘位置 X（亚像素）
+    double column;      // 边缘位置 X（亚像素）
     double amplitude;   // 边缘强度
     double distance;    // 沿投影线的距离
 };
@@ -432,60 +419,54 @@ struct EdgeResult {
 #include <QiVision/Measure/Caliper.h>
 using namespace Qi::Vision::Measure;
 
-// 创建矩形测量区域
-MeasureRectangle2 rect;
-rect.row = 100.0;
-rect.col = 200.0;
-rect.phi = 0.0;         // 水平
-rect.length1 = 50.0;    // 半宽
-rect.length2 = 5.0;     // 半长
+// 创建矩形测量句柄
+auto handle = GenMeasureRectangle2(100.0, 200.0, 0.0, 50.0, 5.0);
 
-// 测量参数
-MeasureParams params;
-params.sigma = 1.0;
-params.threshold = 30.0;
-params.transition = EdgeTransition::All;
-
-// 执行测量
-auto edges = MeasurePos(image, rect, params);
+// 测量边缘（Halcon 风格直接传参）
+auto edges = MeasurePos(image, handle, 1.0, 30.0, "all", "first");
 
 for (const auto& e : edges) {
-    printf("Edge at (%.3f, %.3f), amplitude=%.1f\n", e.col, e.row, e.amplitude);
+    printf("Edge at (%.3f, %.3f), amplitude=%.1f\n", e.column, e.row, e.amplitude);
 }
 ```
 
 ---
 
-### 2.4 MeasurePairs
+### 2.3 MeasurePairs
 
-测量边缘对（宽度测量）。
+测量边缘对/宽度（Halcon: measure_pairs）。
 
 ```cpp
 std::vector<PairResult> MeasurePairs(
-    const QImage& image,
-    const MeasureRectangle2& handle,
-    const MeasureParams& params = MeasureParams()
+    const QImage& image,              // 输入图像（灰度）
+    const MeasureRectangle2& handle,  // 测量句柄
+    double sigma,                     // 高斯平滑 sigma
+    double threshold,                 // 边缘幅度阈值
+    const std::string& transition,    // "positive" | "negative" | "all"
+    const std::string& select         // "first" | "last" | "all"
 );
+
+// MeasureArc / MeasureConcentricCircles 版本同上
 ```
 
 **返回值**:
 ```cpp
 struct PairResult {
-    EdgeResult firstEdge;   // 第一条边缘
-    EdgeResult secondEdge;  // 第二条边缘
+    EdgeResult first;       // 第一条边缘
+    EdgeResult second;      // 第二条边缘
     double width;           // 边缘对宽度
+    double centerRow;       // 中心 Y
+    double centerColumn;    // 中心 X
 };
 ```
 
 **示例**:
 ```cpp
-// 测量宽度
-MeasureParams params;
-params.transition = EdgeTransition::All;
-params.minPairDistance = 5.0;
-params.maxPairDistance = 100.0;
+// 创建测量句柄
+auto handle = GenMeasureRectangle2(420.0, 210.0, 0.0, 100.0, 10.0);
 
-auto pairs = MeasurePairs(image, rect, params);
+// 测量边缘对
+auto pairs = MeasurePairs(image, handle, 1.0, 20.0, "positive", "first");
 
 for (const auto& p : pairs) {
     printf("Width: %.3f pixels\n", p.width);
@@ -494,27 +475,37 @@ for (const auto& p : pairs) {
 
 ---
 
-### 2.5 FuzzyMeasurePos / FuzzyMeasurePairs
+### 2.4 FuzzyMeasurePos / FuzzyMeasurePairs
 
-模糊测量，对噪声更鲁棒。
+模糊测量，对噪声更鲁棒（Halcon: fuzzy_measure_pos）。
 
 ```cpp
 std::vector<EdgeResult> FuzzyMeasurePos(
     const QImage& image,
     const MeasureRectangle2& handle,
-    const MeasureParams& params = MeasureParams()
+    double sigma,
+    double threshold,
+    const std::string& transition,
+    const std::string& select,
+    double fuzzyThresh = 0.5,         // 模糊阈值
+    MeasureStats* stats = nullptr     // 可选统计输出
 );
 
 std::vector<PairResult> FuzzyMeasurePairs(
     const QImage& image,
     const MeasureRectangle2& handle,
-    const MeasureParams& params = MeasureParams()
+    double sigma,
+    double threshold,
+    const std::string& transition,
+    const std::string& select,
+    double fuzzyThresh = 0.5,
+    MeasureStats* stats = nullptr
 );
 ```
 
 ---
 
-### 2.6 辅助函数
+### 2.5 辅助函数
 
 ```cpp
 // 提取灰度剖面
@@ -595,36 +586,76 @@ struct MetrologyMeasureParams {
 };
 ```
 
-#### 2.7.3 MetrologyModel
+#### 2.7.3 MetrologyParamFlag (OpenCV 风格参数)
 
+```cpp
+enum MetrologyParamFlag {
+    METROLOGY_NUM_INSTANCES = 1,      // 实例数量 (int)
+    METROLOGY_MEASURE_SIGMA = 2,      // 高斯 sigma * 100 (例: 150 = 1.5)
+    METROLOGY_MEASURE_THRESHOLD = 3,  // 边缘阈值 (int)
+    METROLOGY_NUM_MEASURES = 4,       // 卡尺数量 (int)
+    METROLOGY_MIN_SCORE = 5,          // 最小分数 * 100 (例: 70 = 0.7)
+    METROLOGY_FIT_METHOD = 6,         // 0=RANSAC, 1=Huber, 2=Tukey
+    METROLOGY_DISTANCE_THRESHOLD = 7, // 离群阈值 * 100 (例: 350 = 3.5)
+    METROLOGY_MAX_ITERATIONS = 8,     // 最大迭代次数 (-1 = 无限)
+    METROLOGY_RAND_SEED = 9,          // RANSAC 随机种子
+    METROLOGY_THRESHOLD_MODE = 10     // 0=Manual, 1=Auto
+};
+```
+
+#### 2.7.4 MetrologyModel
+
+**直接参数版本（推荐，Halcon 风格）**:
 ```cpp
 class MetrologyModel {
 public:
-    // 添加测量对象
+    // 直接参数 API（必需参数直接传，可选参数用 vector<int>）
     int32_t AddLineMeasure(double row1, double col1, double row2, double col2,
-                           const MetrologyMeasureParams& params = {});
+                           double measureLength1, double measureLength2,
+                           const std::string& transition = "all",
+                           const std::string& select = "all",
+                           const std::vector<int>& params = {});
+
     int32_t AddCircleMeasure(double row, double col, double radius,
-                             const MetrologyMeasureParams& params = {});
+                              double measureLength1, double measureLength2,
+                              const std::string& transition = "all",
+                              const std::string& select = "all",
+                              const std::vector<int>& params = {});
+
     int32_t AddArcMeasure(double row, double col, double radius,
-                          double angleStart, double angleEnd,
-                          const MetrologyMeasureParams& params = {});
+                           double angleStart, double angleEnd,
+                           double measureLength1, double measureLength2,
+                           const std::string& transition = "all",
+                           const std::string& select = "all",
+                           const std::vector<int>& params = {});
+
     int32_t AddEllipseMeasure(double row, double col, double phi,
-                              double ra, double rb,
-                              const MetrologyMeasureParams& params = {});
+                               double ra, double rb,
+                               double measureLength1, double measureLength2,
+                               const std::string& transition = "all",
+                               const std::string& select = "all",
+                               const std::vector<int>& params = {});
 
-    // 执行测量
+    int32_t AddRectangle2Measure(double row, double col, double phi,
+                                  double length1, double length2,
+                                  double measureLength1, double measureLength2,
+                                  const std::string& transition = "all",
+                                  const std::string& select = "all",
+                                  const std::vector<int>& params = {});
+
+    // 结构体参数 API（保留兼容）
+    int32_t AddLineMeasure(double row1, double col1, double row2, double col2,
+                           const MetrologyMeasureParams& params);
+    int32_t AddCircleMeasure(double row, double col, double radius,
+                             const MetrologyMeasureParams& params);
+    // ... 其他结构体版本
+
     bool Apply(const QImage& image);
-
-    // 获取结果
     MetrologyLineResult GetLineResult(int32_t index) const;
     MetrologyCircleResult GetCircleResult(int32_t index) const;
     MetrologyEllipseResult GetEllipseResult(int32_t index) const;
-
-    // 获取测量点
     std::vector<Point2d> GetMeasuredPoints(int32_t index) const;
     std::vector<double> GetPointWeights(int32_t index) const;
-
-    // 对齐
     void Align(double rowOffset, double colOffset, double phi);
     void ResetAlignment();
 };
@@ -635,14 +666,23 @@ public:
 #include <QiVision/Measure/Metrology.h>
 using namespace Qi::Vision::Measure;
 
+MetrologyModel model;
+
+// 直接参数 API（推荐，Halcon 风格）
+int idx = model.AddCircleMeasure(500.0, 650.0, 220.0,
+                                  30.0, 10.0,        // measureLength1, measureLength2
+                                  "all", "all",       // transition, select
+                                  {METROLOGY_NUM_MEASURES, 36,
+                                   METROLOGY_MEASURE_SIGMA, 150,      // 1.5 * 100
+                                   METROLOGY_THRESHOLD_MODE, 1});     // Auto mode
+
+// 结构体参数 API（兼容旧代码）
 MetrologyMeasureParams params;
 params.SetMeasureLength(30.0, 10.0)
       .SetNumMeasures(36)
       .SetMeasureSigma(1.5)
-      .SetThreshold("auto");  // 自动阈值模式
-
-MetrologyModel model;
-int idx = model.AddCircleMeasure(500.0, 650.0, 220.0, params);
+      .SetThreshold("auto");
+int idx2 = model.AddCircleMeasure(500.0, 650.0, 220.0, params);
 
 if (model.Apply(image)) {
     auto result = model.GetCircleResult(idx);
@@ -704,33 +744,46 @@ printf("Size: %d x %d, Channels: %d\n",
 
 读取 RAW 格式图像（无头信息）。
 
+**直接参数版本（推荐）**:
 ```cpp
-struct RawReadParams {
-    int32_t width = 0;              // 图像宽度（必填）
-    int32_t height = 0;             // 图像高度（必填）
-    PixelType pixelType = PixelType::UInt8;   // 像素类型
-    ChannelType channelType = ChannelType::Gray; // 通道类型
-    int32_t headerBytes = 0;        // 跳过的头部字节数
-    bool bigEndian = false;         // 大端序（16位图像）
-};
-
 void ReadImageRaw(
     const std::string& filename,
     QImage& image,                  // [out] 输出图像
-    const RawReadParams& params
+    int32_t width,                  // 图像宽度（必填）
+    int32_t height,                 // 图像高度（必填）
+    PixelType pixelType = PixelType::UInt8,   // 像素类型
+    ChannelType channelType = ChannelType::Gray, // 通道类型
+    int32_t headerBytes = 0,        // 跳过的头部字节数
+    bool bigEndian = false          // 大端序（16位图像）
 );
+```
+
+**结构体版本（保留兼容）**:
+```cpp
+struct RawReadParams {
+    int32_t width = 0;
+    int32_t height = 0;
+    PixelType pixelType = PixelType::UInt8;
+    ChannelType channelType = ChannelType::Gray;
+    int32_t headerBytes = 0;
+    bool bigEndian = false;
+};
+
+void ReadImageRaw(const std::string& filename, QImage& image, const RawReadParams& params);
 ```
 
 **示例**:
 ```cpp
+// 直接参数（推荐）
+QImage raw;
+ReadImageRaw("camera.raw", raw, 1920, 1080, PixelType::UInt16, ChannelType::Gray, 0, true);
+
+// 结构体参数（兼容旧代码）
 RawReadParams params;
 params.width = 1920;
 params.height = 1080;
 params.pixelType = PixelType::UInt16;
-params.channelType = ChannelType::Gray;
 params.bigEndian = true;
-
-QImage raw;
 ReadImageRaw("camera.raw", raw, params);
 ```
 
@@ -783,23 +836,37 @@ bool ReadImageMetadata(
 
 写入图像文件。
 
+**基本版本**:
 ```cpp
-bool WriteImage(
-    const QImage& image,
-    const std::string& filename
-);
+bool WriteImage(const QImage& image, const std::string& filename);
+```
 
-struct CompressionParams {
-    int32_t jpegQuality = 95;       // JPEG 质量 (0-100)
-    int32_t pngCompression = 6;     // PNG 压缩级别 (0-9)
+**OpenCV 风格参数版本（推荐）**:
+```cpp
+// 参数标志枚举
+enum ImageWriteFlag {
+    QIWRITE_JPEG_QUALITY = 1,       // JPEG 质量 [0-100]，默认 95
+    QIWRITE_PNG_COMPRESSION = 2,    // PNG 压缩级别 [0-9]，默认 6
+    QIWRITE_TIFF_COMPRESSION = 3    // TIFF LZW 压缩: 0=关, 1=开
 };
 
 bool WriteImage(
     const QImage& image,
     const std::string& filename,
-    ImageFormat format,             // 指定格式
-    const CompressionParams& params // 压缩参数
+    ImageFormat format,             // 指定格式 (Auto = 自动检测)
+    const std::vector<int>& params  // 键值对参数
 );
+```
+
+**结构体版本（保留兼容）**:
+```cpp
+struct CompressionParams {
+    int32_t jpegQuality = 95;
+    int32_t pngCompression = 6;
+};
+
+bool WriteImage(const QImage& image, const std::string& filename,
+                ImageFormat format, const CompressionParams& params);
 ```
 
 **示例**:
@@ -807,7 +874,11 @@ bool WriteImage(
 // 默认保存
 WriteImage(img, "output.png");
 
-// 指定 JPEG 质量
+// OpenCV 风格参数（推荐）
+WriteImage(img, "output.jpg", ImageFormat::JPEG, {QIWRITE_JPEG_QUALITY, 85});
+WriteImage(img, "output.png", ImageFormat::PNG, {QIWRITE_PNG_COMPRESSION, 9});
+
+// 结构体参数（兼容旧代码）
 CompressionParams params;
 params.jpegQuality = 85;
 WriteImage(img, "output.jpg", ImageFormat::JPEG, params);

@@ -194,7 +194,18 @@ void ReadImage(const std::string& filename, QImage& image, ImageFormat /*format*
 }
 
 void ReadImageRaw(const std::string& filename, QImage& image, const RawReadParams& params) {
-    if (params.width <= 0 || params.height <= 0) {
+    ReadImageRaw(filename, image, params.width, params.height,
+                 params.pixelType, params.channelType,
+                 params.headerBytes, params.bigEndian);
+}
+
+void ReadImageRaw(const std::string& filename, QImage& image,
+                  int32_t width, int32_t height,
+                  PixelType pixelType,
+                  ChannelType channelType,
+                  int32_t headerBytes,
+                  bool bigEndian) {
+    if (width <= 0 || height <= 0) {
         throw InvalidArgumentException("RAW read requires width and height");
     }
 
@@ -204,13 +215,13 @@ void ReadImageRaw(const std::string& filename, QImage& image, const RawReadParam
     }
 
     // Skip header
-    if (params.headerBytes > 0) {
-        file.seekg(params.headerBytes);
+    if (headerBytes > 0) {
+        file.seekg(headerBytes);
     }
 
     // Calculate buffer size
-    size_t bytesPerPixel = GetBytesPerPixel(params.pixelType, params.channelType);
-    size_t totalBytes = params.width * params.height * bytesPerPixel;
+    size_t bytesPerPixel = GetBytesPerPixel(pixelType, channelType);
+    size_t totalBytes = width * height * bytesPerPixel;
 
     // Read data
     std::vector<uint8_t> buffer(totalBytes);
@@ -221,8 +232,8 @@ void ReadImageRaw(const std::string& filename, QImage& image, const RawReadParam
     }
 
     // Handle endianness for 16-bit data
-    if (params.bigEndian && (params.pixelType == PixelType::UInt16 ||
-                             params.pixelType == PixelType::Int16)) {
+    if (bigEndian && (pixelType == PixelType::UInt16 ||
+                      pixelType == PixelType::Int16)) {
         uint16_t* data16 = reinterpret_cast<uint16_t*>(buffer.data());
         size_t count = totalBytes / 2;
         for (size_t i = 0; i < count; ++i) {
@@ -232,8 +243,7 @@ void ReadImageRaw(const std::string& filename, QImage& image, const RawReadParam
     }
 
     // Create image from data
-    image = QImage::FromData(buffer.data(), params.width, params.height,
-                             params.pixelType, params.channelType);
+    image = QImage::FromData(buffer.data(), width, height, pixelType, channelType);
 }
 
 bool ReadImageMetadata(const std::string& filename, ImageMetadata& metadata) {
@@ -295,11 +305,47 @@ void ReadImageGray(const std::string& filename, QImage& image) {
 // =============================================================================
 
 bool WriteImage(const QImage& image, const std::string& filename) {
-    return WriteImage(image, filename, ImageFormat::Auto, CompressionParams());
+    return WriteImage(image, filename, ImageFormat::Auto, std::vector<int>{});
 }
 
 bool WriteImage(const QImage& image, const std::string& filename,
                 ImageFormat format, const CompressionParams& params) {
+    // Convert CompressionParams to vector<int> and delegate
+    std::vector<int> vecParams;
+    vecParams.push_back(QIWRITE_JPEG_QUALITY);
+    vecParams.push_back(params.jpegQuality);
+    vecParams.push_back(QIWRITE_PNG_COMPRESSION);
+    vecParams.push_back(params.pngCompression);
+    vecParams.push_back(QIWRITE_TIFF_COMPRESSION);
+    vecParams.push_back(params.tiffCompression ? 1 : 0);
+    return WriteImage(image, filename, format, vecParams);
+}
+
+bool WriteImage(const QImage& image, const std::string& filename,
+                ImageFormat format, const std::vector<int>& params) {
+    // Parse vector<int> params into local variables
+    int32_t jpegQuality = 95;
+    int32_t pngCompression = 6;
+    bool tiffCompression = true;
+
+    for (size_t i = 0; i + 1 < params.size(); i += 2) {
+        int key = params[i];
+        int value = params[i + 1];
+        switch (key) {
+            case QIWRITE_JPEG_QUALITY:
+                jpegQuality = value;
+                break;
+            case QIWRITE_PNG_COMPRESSION:
+                pngCompression = value;
+                break;
+            case QIWRITE_TIFF_COMPRESSION:
+                tiffCompression = (value != 0);
+                break;
+        }
+    }
+
+    (void)pngCompression;    // Reserved for future use
+    (void)tiffCompression;   // Reserved for future use
     if (image.Empty()) {
         return false;
     }
@@ -333,7 +379,7 @@ bool WriteImage(const QImage& image, const std::string& filename,
                                       buffer.data(), static_cast<int>(srcStride)) != 0;
             case ImageFormat::JPEG:
                 return stbi_write_jpg(filename.c_str(), w, h, channels,
-                                      buffer.data(), params.jpegQuality) != 0;
+                                      buffer.data(), jpegQuality) != 0;
             case ImageFormat::BMP:
                 return stbi_write_bmp(filename.c_str(), w, h, channels,
                                       buffer.data()) != 0;

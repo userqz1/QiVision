@@ -7,6 +7,7 @@
 #include <QiVision/Core/QContourArray.h>
 #include <QiVision/Matching/ShapeModel.h>
 #include <QiVision/Matching/MatchTypes.h>
+#include <QiVision/Measure/MeasureHandle.h>
 
 #include <algorithm>
 #include <cmath>
@@ -773,6 +774,106 @@ void Draw::MeasureRect(QImage& image, const Measure::MeasureRectangle2& handle,
     Line(image, Point2d{x2, y2}, Point2d{x3, y3}, color, thickness);
     Line(image, Point2d{x3, y3}, Point2d{x4, y4}, color, thickness);
     Line(image, Point2d{x4, y4}, Point2d{x1, y1}, color, thickness);
+
+    // Draw projection line (center line along profile direction)
+    double pStartX = cx - len1 * profileDirX;
+    double pStartY = cy - len1 * profileDirY;
+    double pEndX = cx + len1 * profileDirX;
+    double pEndY = cy + len1 * profileDirY;
+    Line(image, Point2d{pStartX, pStartY}, Point2d{pEndX, pEndY}, color, thickness);
+}
+
+void Draw::MeasureArc(QImage& image, const Measure::MeasureArc& handle,
+                      const Scalar& color, int32_t thickness) {
+    // MeasureArc geometry (Halcon compatible):
+    // - CenterRow, CenterCol: Arc center
+    // - Radius: Arc radius (center of annular region)
+    // - AngleStart, AngleExtent: Arc angular span
+    // - AnnulusRadius: Half-width of annular region for averaging
+
+    double cx = handle.CenterCol();
+    double cy = handle.CenterRow();
+    double radius = handle.Radius();
+    double angleStart = handle.AngleStart();
+    double angleExtent = handle.AngleExtent();
+    double annulusRadius = handle.AnnulusRadius();
+
+    double angleEnd = angleStart + angleExtent;
+
+    // Inner and outer radii
+    double innerRadius = radius - annulusRadius;
+    double outerRadius = radius + annulusRadius;
+    if (innerRadius < 0) innerRadius = 0;
+
+    // Draw inner arc
+    Arc(image, Point2d{cx, cy}, innerRadius, angleStart, angleEnd, color, thickness);
+
+    // Draw outer arc
+    Arc(image, Point2d{cx, cy}, outerRadius, angleStart, angleEnd, color, thickness);
+
+    // Draw radial end lines (connecting inner and outer arcs)
+    double cosStart = std::cos(angleStart);
+    double sinStart = std::sin(angleStart);
+    double cosEnd = std::cos(angleEnd);
+    double sinEnd = std::sin(angleEnd);
+
+    Point2d innerStart{cx + innerRadius * cosStart, cy + innerRadius * sinStart};
+    Point2d outerStart{cx + outerRadius * cosStart, cy + outerRadius * sinStart};
+    Point2d innerEnd{cx + innerRadius * cosEnd, cy + innerRadius * sinEnd};
+    Point2d outerEnd{cx + outerRadius * cosEnd, cy + outerRadius * sinEnd};
+
+    Line(image, innerStart, outerStart, color, thickness);
+    Line(image, innerEnd, outerEnd, color, thickness);
+
+    // Draw projection arc (center arc along radius - the measurement path)
+    Arc(image, Point2d{cx, cy}, radius, angleStart, angleEnd, color, thickness);
+}
+
+void Draw::MeasureConcentric(QImage& image, const Measure::MeasureConcentricCircles& handle,
+                              const Scalar& color, int32_t thickness) {
+    // MeasureConcentricCircles geometry:
+    // - CenterRow, CenterCol: Circle center
+    // - InnerRadius, OuterRadius: Radial extent
+    // - Angle: Direction angle for radial profile
+    // - AngularWidth: Angular width for averaging
+
+    double cx = handle.CenterCol();
+    double cy = handle.CenterRow();
+    double innerRadius = handle.InnerRadius();
+    double outerRadius = handle.OuterRadius();
+    double angle = handle.Angle();
+    double angularWidth = handle.AngularWidth();
+
+    // Angular span of the measurement region
+    double angleStart = angle - angularWidth / 2.0;
+    double angleEnd = angle + angularWidth / 2.0;
+
+    // Draw inner arc
+    Arc(image, Point2d{cx, cy}, innerRadius, angleStart, angleEnd, color, thickness);
+
+    // Draw outer arc
+    Arc(image, Point2d{cx, cy}, outerRadius, angleStart, angleEnd, color, thickness);
+
+    // Draw angular boundary lines (connecting inner and outer arcs)
+    double cosStart = std::cos(angleStart);
+    double sinStart = std::sin(angleStart);
+    double cosEnd = std::cos(angleEnd);
+    double sinEnd = std::sin(angleEnd);
+
+    Point2d innerStart{cx + innerRadius * cosStart, cy + innerRadius * sinStart};
+    Point2d outerStart{cx + outerRadius * cosStart, cy + outerRadius * sinStart};
+    Point2d innerEnd{cx + innerRadius * cosEnd, cy + innerRadius * sinEnd};
+    Point2d outerEnd{cx + outerRadius * cosEnd, cy + outerRadius * sinEnd};
+
+    Line(image, innerStart, outerStart, color, thickness);
+    Line(image, innerEnd, outerEnd, color, thickness);
+
+    // Draw projection line (radial center line - the measurement path)
+    double cosAngle = std::cos(angle);
+    double sinAngle = std::sin(angle);
+    Point2d innerCenter{cx + innerRadius * cosAngle, cy + innerRadius * sinAngle};
+    Point2d outerCenter{cx + outerRadius * cosAngle, cy + outerRadius * sinAngle};
+    Line(image, innerCenter, outerCenter, color, thickness);
 }
 
 void Draw::MeasureRects(QImage& image,

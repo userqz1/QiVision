@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-23 (Draw Region API + 文档精简)
+> 最后更新: 2026-01-23 (API 风格统一: 直接参数)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -246,6 +246,30 @@ Tests    █████████████████░░░ 87%
 ---
 
 ## 变更日志
+
+### 2026-01-23 (API 风格统一：直接参数取代结构体)
+
+- **API 风格重构**
+  - 所有公开 API 新增直接参数版本（Halcon/OpenCV 风格）
+  - 结构体版本保留用于向后兼容
+  - 可选参数使用 `std::vector<int>` 键值对（参考 OpenCV imwrite）
+
+- **ImageIO 模块**
+  - `ReadImageRaw`: 新增 (filename, image, width, height, pixelType, ...) 版本
+  - `WriteImage`: 新增 (image, filename, format, vector<int> params) 版本
+  - 新增 `ImageWriteFlag` 枚举: QIWRITE_JPEG_QUALITY, QIWRITE_PNG_COMPRESSION, QIWRITE_TIFF_COMPRESSION
+
+- **Metrology 模块**
+  - `Add*Measure` 方法新增直接参数版本
+  - 新增 `MetrologyParamFlag` 枚举用于 vector<int> 参数
+  - 示例: `AddCircleMeasure(row, col, r, len1, len2, "all", "all", {METROLOGY_NUM_MEASURES, 20})`
+
+- **CaliperArray 模块**
+  - `CreateAlong*` 方法新增直接参数版本
+  - 示例: `CreateAlongCircle(center, radius, caliperCount, profileLength, handleWidth)`
+
+- **文档更新**
+  - `docs/API_Reference.md`: 更新 IO、Metrology 章节，添加新 API 示例
 
 ### 2026-01-23 (Draw Region API 和 Blob 示例)
 

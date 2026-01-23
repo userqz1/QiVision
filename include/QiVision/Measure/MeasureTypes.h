@@ -6,9 +6,9 @@
  *
  * Provides:
  * - Edge transition types
- * - Measurement parameters
  * - Edge and pair result structures
  * - Score and quality metrics
+ * - String parsing utilities for Halcon compatibility
  */
 
 #include <QiVision/Core/Types.h>
@@ -94,84 +94,6 @@ enum class ScoreMethod {
 };
 
 // =============================================================================
-// Parameter Structures
-// =============================================================================
-
-/**
- * @brief Common measurement parameters
- */
-struct MeasureParams {
-    // Edge detection parameters
-    double sigma = DEFAULT_SIGMA;                   ///< Gaussian smoothing sigma
-    double minAmplitude = DEFAULT_MIN_AMPLITUDE;    ///< Minimum edge amplitude
-    EdgeTransition transition = EdgeTransition::All; ///< Edge polarity filter
-
-    // Profile parameters
-    int32_t numLines = DEFAULT_NUM_LINES;           ///< Number of perpendicular lines
-    double samplesPerPixel = DEFAULT_SAMPLES_PER_PIXEL; ///< Sampling density
-    ProfileInterpolation interp = ProfileInterpolation::Bilinear;
-
-    // Selection parameters
-    EdgeSelectMode selectMode = EdgeSelectMode::All;
-    int32_t maxEdges = MAX_EDGES;                   ///< Maximum edges to return
-
-    // Score parameters
-    ScoreMethod scoreMethod = ScoreMethod::Amplitude;
-
-    // Builder pattern for fluent configuration
-    MeasureParams& SetSigma(double s) { sigma = s; return *this; }
-    MeasureParams& SetMinAmplitude(double a) { minAmplitude = a; return *this; }
-    MeasureParams& SetTransition(EdgeTransition t) { transition = t; return *this; }
-    MeasureParams& SetNumLines(int32_t n) { numLines = n; return *this; }
-    MeasureParams& SetSamplesPerPixel(double s) { samplesPerPixel = s; return *this; }
-    MeasureParams& SetInterpolation(ProfileInterpolation i) { interp = i; return *this; }
-    MeasureParams& SetSelectMode(EdgeSelectMode m) { selectMode = m; return *this; }
-    MeasureParams& SetMaxEdges(int32_t n) { maxEdges = n; return *this; }
-};
-
-/**
- * @brief Parameters for edge pair (width) measurement
- */
-struct PairParams : public MeasureParams {
-    // Pair-specific parameters
-    EdgeTransition firstTransition = EdgeTransition::Positive;   ///< First edge polarity
-    EdgeTransition secondTransition = EdgeTransition::Negative;  ///< Second edge polarity
-
-    double minWidth = 0.0;          ///< Minimum pair width (pixels)
-    double maxWidth = 1e9;          ///< Maximum pair width (pixels)
-
-    PairSelectMode pairSelectMode = PairSelectMode::All;
-    int32_t maxPairs = MAX_EDGES;   ///< Maximum pairs to return
-
-    PairParams& SetFirstTransition(EdgeTransition t) { firstTransition = t; return *this; }
-    PairParams& SetSecondTransition(EdgeTransition t) { secondTransition = t; return *this; }
-    PairParams& SetWidthRange(double minW, double maxW) {
-        minWidth = minW; maxWidth = maxW; return *this;
-    }
-    PairParams& SetPairSelectMode(PairSelectMode m) { pairSelectMode = m; return *this; }
-    PairParams& SetMaxPairs(int32_t n) { maxPairs = n; return *this; }
-};
-
-/**
- * @brief Fuzzy measurement parameters (extended)
- */
-struct FuzzyParams : public MeasureParams {
-    // Fuzzy-specific parameters
-    double fuzzyThresholdLow = 0.3;     ///< Lower amplitude threshold ratio
-    double fuzzyThresholdHigh = 0.8;    ///< Upper amplitude threshold ratio
-    double minScore = 0.5;              ///< Minimum score threshold
-
-    bool computeScore = true;           ///< Whether to compute detailed score
-    bool useAdaptiveThreshold = false;  ///< Adapt threshold based on local contrast
-
-    FuzzyParams& SetFuzzyThresholds(double low, double high) {
-        fuzzyThresholdLow = low; fuzzyThresholdHigh = high; return *this;
-    }
-    FuzzyParams& SetMinScore(double s) { minScore = s; return *this; }
-    FuzzyParams& SetAdaptiveThreshold(bool use) { useAdaptiveThreshold = use; return *this; }
-};
-
-// =============================================================================
 // Result Structures
 // =============================================================================
 
@@ -208,10 +130,10 @@ struct EdgeResult {
  * @brief Edge pair (width) measurement result (Halcon compatible)
  *
  * Halcon output mapping:
- * - RowEdgeFirst, ColEdgeFirst, AmplitudeFirst → first.row, first.column, first.amplitude
- * - RowEdgeSecond, ColEdgeSecond, AmplitudeSecond → second.row, second.column, second.amplitude
- * - IntraDistance → intraDistance (width between edges of this pair)
- * - InterDistance → interDistance (distance to next pair)
+ * - RowEdgeFirst, ColEdgeFirst, AmplitudeFirst -> first.row, first.column, first.amplitude
+ * - RowEdgeSecond, ColEdgeSecond, AmplitudeSecond -> second.row, second.column, second.amplitude
+ * - IntraDistance -> intraDistance (width between edges of this pair)
+ * - InterDistance -> interDistance (distance to next pair)
  */
 struct PairResult {
     EdgeResult first;           ///< First edge of pair
