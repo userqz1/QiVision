@@ -1,6 +1,6 @@
 /**
  * @file circle_metrology.cpp
- * @brief Circle metrology demo - measure multiple circles
+ * @brief Metrology demo - measure circles and rectangles
  */
 
 #include <QiVision/Core/QImage.h>
@@ -22,14 +22,6 @@ using namespace Qi::Vision::GUI;
 int main() {
     std::string imagePath = "tests/data/halcon_images/circle_plate.png";
 
-    // 预设要测量的圆 (cx, cy, radius) - 注意 API 使用 (row, col) 即 (cy, cx)
-    std::vector<std::tuple<double, double, double>> circles = {
-        {210, 420, 60},
-        {500, 420, 60},
-        {790, 420, 60},
-        {1077, 420, 110},
-    };
-
     QImage image = QImage::FromFile(imagePath);
     if (!image.IsValid()) {
         std::cerr << "Failed to load: " << imagePath << std::endl;
@@ -37,9 +29,8 @@ int main() {
     }
     QImage grayImage = image.ToGray();
 
-    std::cout << "=== Circle Metrology Demo ===" << std::endl;
+    std::cout << "=== Metrology Demo ===" << std::endl;
     std::cout << "Image: " << image.Width() << " x " << image.Height() << std::endl;
-    std::cout << "Circles to measure: " << circles.size() << std::endl;
 
     // 测量参数
     MetrologyMeasureParams params;
@@ -49,11 +40,20 @@ int main() {
     params.thresholdMode = ThresholdMode::Auto;
     params.fitMethod = MetrologyFitMethod::RANSAC;
 
-    // 创建模型，添加所有圆
+    // 创建模型
     MetrologyModel model;
-    for (const auto& [cx, cy, r] : circles) {
-        model.AddCircleMeasure(cy, cx, r, params);
-    }
+
+    // 添加圆 (row, col, radius)
+    model.AddCircleMeasure(420, 210, 60, params);
+    model.AddCircleMeasure(420, 500, 60, params);
+    model.AddCircleMeasure(420, 790, 60, params);
+    model.AddCircleMeasure(420, 1077, 110, params);
+
+    // 添加矩形 (row, col, phi, length1, length2)
+    // 中心(col=210, row=705), length1=65(x方向), length2=70(y方向)
+    MetrologyMeasureParams rectParams = params;
+    rectParams.numMeasures = 32;  // 每边8个卡尺
+    model.AddRectangle2Measure(705, 210, 0.0, 65, 70, rectParams);
 
     // 测量
     Timer timer;
@@ -63,21 +63,33 @@ int main() {
 
     // 输出结果
     std::cout << "\n=== Results ===" << std::endl;
-    for (int i = 0; i < static_cast<int>(circles.size()); ++i) {
-        auto [cx, cy, r] = circles[i];
-        auto result = model.GetCircleResult(i);
-        auto points = model.GetMeasuredPoints(i);
-
-        // 使用统一接口获取几何中心
+    int numObjects = model.NumObjects();
+    for (int i = 0; i < numObjects; ++i) {
         const auto* obj = model.GetObject(i);
-        auto center = obj->GetCenter();  // 返回 Point2d(x, y) = (column, row)
+        auto points = model.GetMeasuredPoints(i);
+        auto center = obj->GetCenter();
 
-        std::cout << "\nCircle " << (i+1) << ":" << std::endl;
-        std::cout << "  Initial center: (" << center.x << ", " << center.y << ") r=" << r << std::endl;
-        std::cout << "  Fitted center:  (" << std::fixed << std::setprecision(2)
-                  << result.column << ", " << result.row << ") r=" << result.radius << std::endl;
-        std::cout << "  Points: " << result.numUsed << "/" << points.size()
-                  << "  RMS: " << std::setprecision(3) << result.rmsError << " px" << std::endl;
+        std::cout << "\nObject " << (i+1) << " ("
+                  << (obj->Type() == MetrologyObjectType::Circle ? "Circle" : "Rectangle") << "):" << std::endl;
+
+        if (obj->HasCenter()) {
+            std::cout << "  Initial center: (" << center.x << ", " << center.y << ")" << std::endl;
+        }
+
+        if (obj->Type() == MetrologyObjectType::Circle) {
+            auto result = model.GetCircleResult(i);
+            std::cout << "  Fitted center:  (" << std::fixed << std::setprecision(2)
+                      << result.column << ", " << result.row << ") r=" << result.radius << std::endl;
+            std::cout << "  Points: " << result.numUsed << "/" << points.size()
+                      << "  RMS: " << std::setprecision(3) << result.rmsError << " px" << std::endl;
+        } else if (obj->Type() == MetrologyObjectType::Rectangle2) {
+            auto result = model.GetRectangle2Result(i);
+            std::cout << "  Fitted center:  (" << std::fixed << std::setprecision(2)
+                      << result.column << ", " << result.row << ") phi=" << result.phi << std::endl;
+            std::cout << "  Size: length1=" << result.length1 << " length2=" << result.length2 << std::endl;
+            std::cout << "  Points: " << result.numUsed << "/" << points.size()
+                      << "  RMS: " << std::setprecision(3) << result.rmsError << " px" << std::endl;
+        }
     }
     std::cout << "\nTotal time: " << std::setprecision(2) << elapsed << " ms" << std::endl;
 
@@ -87,9 +99,9 @@ int main() {
     Draw::MetrologyModelResult(colorImg, model);
 
     // 显示
-    Window win("Circle Metrology");
+    Window win("Metrology Demo");
     win.SetAutoResize(true);
-    win.EnablePixelInfo(true);  // Show mouse position and pixel value
+    win.EnablePixelInfo(true);
     win.DispImage(colorImg);
     std::cout << "\nMove mouse to see coordinates. Press any key to close..." << std::endl;
     win.WaitKey(0);

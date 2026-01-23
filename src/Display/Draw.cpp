@@ -928,26 +928,26 @@ void Draw::MetrologyModelResult(QImage& image, const Measure::MetrologyModel& mo
             }
         }
 
-        // Draw result based on object type
+        // Draw result based on object type (thickness=1 for single-pixel lines)
         switch (obj->Type()) {
             case MetrologyObjectType::Line: {
                 auto result = model.GetLineResult(idx);
-                MetrologyLine(image, result, resultColor, 2);
+                MetrologyLine(image, result, resultColor, 1);
                 break;
             }
             case MetrologyObjectType::Circle: {
                 auto result = model.GetCircleResult(idx);
-                MetrologyCircle(image, result, resultColor, 2);
+                MetrologyCircle(image, result, resultColor, 1);
                 break;
             }
             case MetrologyObjectType::Ellipse: {
                 auto result = model.GetEllipseResult(idx);
-                MetrologyEllipse(image, result, resultColor, 2);
+                MetrologyEllipse(image, result, resultColor, 1);
                 break;
             }
             case MetrologyObjectType::Rectangle2: {
                 auto result = model.GetRectangle2Result(idx);
-                MetrologyRectangle(image, result, resultColor, 2);
+                MetrologyRectangle(image, result, resultColor, 1);
                 break;
             }
         }

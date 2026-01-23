@@ -315,12 +315,13 @@ std::vector<MeasureRectangle2> MetrologyObjectRectangle2::GetCalipers() const {
         {{-length1_, length2_}, {-length1_, -length2_}}
     };
 
-    // Normal angles for each side (outward)
-    std::vector<double> normals = {
-        phi_ - PI * 0.5,  // Top: normal points up
-        phi_,              // Right: normal points right
-        phi_ + PI * 0.5,  // Bottom: normal points down
-        phi_ + PI         // Left: normal points left
+    // Edge directions for each side (caliper phi should be edge direction,
+    // so profile direction = phi + 90° is perpendicular to edge)
+    std::vector<double> edgeAngles = {
+        phi_,              // Top: horizontal edge, profile perpendicular (vertical)
+        phi_ + PI * 0.5,   // Right: vertical edge, profile perpendicular (horizontal)
+        phi_,              // Bottom: horizontal edge, profile perpendicular (vertical)
+        phi_ + PI * 0.5    // Left: vertical edge, profile perpendicular (horizontal)
     };
 
     for (size_t side = 0; side < 4; ++side) {
@@ -337,7 +338,7 @@ std::vector<MeasureRectangle2> MetrologyObjectRectangle2::GetCalipers() const {
             double col = column_ + localX * cosPhi - localY * sinPhi;
             double row = row_ + localX * sinPhi + localY * cosPhi;
 
-            MeasureRectangle2 caliper(row, col, normals[side],
+            MeasureRectangle2 caliper(row, col, edgeAngles[side],
                                        params_.measureLength1, params_.measureLength2);
             calipers.push_back(caliper);
         }
@@ -809,6 +810,7 @@ bool MetrologyModel::Apply(const QImage& image) {
                     Internal::RectangleFitResult fitResult;
                     Internal::FitParams fitParams;
                     fitParams.SetComputeResiduals(true);
+                    fitParams.computeInlierMask = true;  // For outlier visualization
 
                     if (fitMethod == MetrologyFitMethod::RANSAC) {
                         // For RANSAC: segment points by side, fit each with RANSAC, compute rectangle
@@ -852,6 +854,25 @@ bool MetrologyModel::Apply(const QImage& image) {
                                 fitResult.numInliers = totalInliers;
                                 fitResult.residualRMS = totalInliers > 0 ? totalResidual / totalInliers : 0.0;
                                 fitResult.sideResults = sideResults;
+
+                                // Build weights: iterate through sidedPoints and map back to edgePoints
+                                std::vector<double> weights(edgePoints.size(), 0.0);
+                                for (int side = 0; side < 4; ++side) {
+                                    const auto& sidePoints = sidedPoints[side];
+                                    const auto& mask = sideResults[side].inlierMask;
+                                    for (size_t j = 0; j < sidePoints.size(); ++j) {
+                                        const auto& pt = sidePoints[j];
+                                        // Find this point in edgePoints
+                                        for (size_t i = 0; i < edgePoints.size(); ++i) {
+                                            if (std::abs(edgePoints[i].x - pt.x) < 1e-6 &&
+                                                std::abs(edgePoints[i].y - pt.y) < 1e-6) {
+                                                weights[i] = (j < mask.size() && mask[j]) ? 1.0 : 0.0;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                impl_->pointWeights[idx] = weights;
                             }
                         }
                     } else {

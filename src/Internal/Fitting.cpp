@@ -1944,9 +1944,10 @@ std::optional<RotatedRect2d> RectangleFromLines(const std::array<Line2d, 4>& lin
     double width = (side30 + side12) / 2.0;   // top and bottom (along phi)
     double height = (side01 + side23) / 2.0;  // right and left (perpendicular)
 
-    // Angle from top line (line[0])
-    // Line normal is (a, b), line direction is (-b, a)
-    double angle = std::atan2(-lines[0].b, lines[0].a);  // direction of top line
+    // Angle from top edge direction (p3 to p0: left-top to top-right)
+    double dx = p0->x - p3->x;
+    double dy = p0->y - p3->y;
+    double angle = std::atan2(dy, dx);
 
     RotatedRect2d result;
     result.center = center;
