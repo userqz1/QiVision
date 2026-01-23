@@ -40,7 +40,7 @@ namespace Qi::Vision::Internal {
 // 常量和辅助函数
 // =============================================================================
 
-constexpr int32_t PARALLEL_MIN_PIXELS = 250000;
+constexpr int32_t PARALLEL_MIN_PIXELS = 150000;
 
 inline bool ShouldUseParallel(int32_t width, int32_t height) {
     return static_cast<int64_t>(width) * height >= PARALLEL_MIN_PIXELS;
@@ -253,7 +253,7 @@ static void FusedGaussianDownsample2x_Separable(
                          k3*srcRow[sx + 1] + k4*srcRow[sx + 2];
         }
 
-        // 中间安全区间 [safeDxBegin, safeDxEnd) - 无边界检查，指针递增
+        // 中间安全区间 [safeDxBegin, safeDxEnd) - 无边界检查
         if (safeDxBegin < safeDxEnd && safeDxEnd <= dstWidth) {
             const float* p = srcRow + safeDxBegin * 2;
             for (int32_t dx = safeDxBegin; dx < safeDxEnd; ++dx, p += 2) {
@@ -275,7 +275,7 @@ static void FusedGaussianDownsample2x_Separable(
 
 #ifdef _OPENMP
     if (useParallel) {
-        #pragma omp parallel for schedule(static)
+        #pragma omp parallel for schedule(static, 32)
         for (int32_t y = 0; y < srcHeight; ++y) { hPass(y); }
     } else
 #endif
@@ -332,7 +332,7 @@ static void FusedGaussianDownsample2x_Separable(
 
 #ifdef _OPENMP
     if (useParallel) {
-        #pragma omp parallel for schedule(static)
+        #pragma omp parallel for schedule(static, 16)
         for (int32_t dy = 0; dy < dstHeight; ++dy) { vPass(dy); }
     } else
 #endif
@@ -381,7 +381,7 @@ static void FusedGaussianDownsample2x_Scalar(
 
 #ifdef _OPENMP
     if (useParallel) {
-        #pragma omp parallel for schedule(static)
+        #pragma omp parallel for schedule(static, 32)
         for (int32_t y = 0; y < srcHeight; ++y) { hPass(y); }
     } else
 #endif
@@ -408,7 +408,7 @@ static void FusedGaussianDownsample2x_Scalar(
 
 #ifdef _OPENMP
     if (useParallel) {
-        #pragma omp parallel for schedule(static)
+        #pragma omp parallel for schedule(static, 16)
         for (int32_t dy = 0; dy < dstHeight; ++dy) { vPass(dy); }
     } else
 #endif
