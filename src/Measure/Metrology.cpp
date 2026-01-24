@@ -19,17 +19,17 @@ namespace {
     constexpr double PI = 3.14159265358979323846;
     constexpr double TWO_PI = 2.0 * PI;
 
-    // Helper: Parse vector<int> params into MetrologyMeasureParams
-    MetrologyMeasureParams ParseVectorParams(
+    // Helper: Merge params with measureLength and transition/select strings
+    MetrologyMeasureParams MergeParams(
         double measureLength1, double measureLength2,
         const std::string& transition, const std::string& select,
-        const std::vector<int>& params)
+        const MetrologyMeasureParams& params)
     {
-        MetrologyMeasureParams result;
+        MetrologyMeasureParams result = params;
         result.measureLength1 = measureLength1;
         result.measureLength2 = measureLength2;
 
-        // Parse transition string
+        // Parse transition string (override if specified)
         if (transition == "positive" || transition == "Positive") {
             result.measureTransition = EdgeTransition::Positive;
         } else if (transition == "negative" || transition == "Negative") {
@@ -38,7 +38,7 @@ namespace {
             result.measureTransition = EdgeTransition::All;
         }
 
-        // Parse select string
+        // Parse select string (override if specified)
         if (select == "first" || select == "First") {
             result.measureSelect = EdgeSelectMode::First;
         } else if (select == "last" || select == "Last") {
@@ -47,49 +47,6 @@ namespace {
             result.measureSelect = EdgeSelectMode::Strongest;
         } else {
             result.measureSelect = EdgeSelectMode::All;
-        }
-
-        // Parse key-value pairs from vector<int>
-        for (size_t i = 0; i + 1 < params.size(); i += 2) {
-            int key = params[i];
-            int value = params[i + 1];
-
-            switch (key) {
-                case METROLOGY_NUM_INSTANCES:
-                    result.numInstances = value;
-                    break;
-                case METROLOGY_MEASURE_SIGMA:
-                    result.measureSigma = value / 100.0;  // e.g., 150 -> 1.5
-                    break;
-                case METROLOGY_MEASURE_THRESHOLD:
-                    result.measureThreshold = static_cast<double>(value);
-                    break;
-                case METROLOGY_NUM_MEASURES:
-                    result.numMeasures = value;
-                    break;
-                case METROLOGY_MIN_SCORE:
-                    result.minScore = value / 100.0;  // e.g., 70 -> 0.7
-                    break;
-                case METROLOGY_FIT_METHOD:
-                    switch (value) {
-                        case 0: result.fitMethod = MetrologyFitMethod::RANSAC; break;
-                        case 1: result.fitMethod = MetrologyFitMethod::Huber; break;
-                        case 2: result.fitMethod = MetrologyFitMethod::Tukey; break;
-                    }
-                    break;
-                case METROLOGY_DISTANCE_THRESHOLD:
-                    result.distanceThreshold = value / 100.0;  // e.g., 350 -> 3.5
-                    break;
-                case METROLOGY_MAX_ITERATIONS:
-                    result.maxIterations = value;
-                    break;
-                case METROLOGY_RAND_SEED:
-                    result.randSeed = value;
-                    break;
-                case METROLOGY_THRESHOLD_MODE:
-                    result.thresholdMode = (value == 0) ? ThresholdMode::Manual : ThresholdMode::Auto;
-                    break;
-            }
         }
 
         return result;
@@ -519,13 +476,13 @@ int32_t MetrologyModel::AddLineMeasure(double row1, double col1,
                                          double measureLength1, double measureLength2,
                                          const std::string& transition,
                                          const std::string& select,
-                                         const std::vector<int>& params) {
-    auto parsed = ParseVectorParams(measureLength1, measureLength2, transition, select, params);
+                                         const MetrologyMeasureParams& params) {
+    auto merged = MergeParams(measureLength1, measureLength2, transition, select, params);
     auto obj = std::make_unique<MetrologyObjectLine>(row1, col1, row2, col2,
                                                       measureLength1, measureLength2,
-                                                      parsed.numMeasures);
-    // Copy additional params
-    obj->params_ = parsed;
+                                                      merged.numMeasures);
+    // Copy merged params
+    obj->params_ = merged;
     int32_t idx = static_cast<int32_t>(impl_->objects.size());
     obj->index_ = idx;
     impl_->objects.push_back(std::move(obj));
@@ -536,13 +493,13 @@ int32_t MetrologyModel::AddCircleMeasure(double row, double column, double radiu
                                           double measureLength1, double measureLength2,
                                           const std::string& transition,
                                           const std::string& select,
-                                          const std::vector<int>& params) {
-    auto parsed = ParseVectorParams(measureLength1, measureLength2, transition, select, params);
+                                          const MetrologyMeasureParams& params) {
+    auto merged = MergeParams(measureLength1, measureLength2, transition, select, params);
     auto obj = std::make_unique<MetrologyObjectCircle>(row, column, radius,
                                                         measureLength1, measureLength2,
-                                                        parsed.numMeasures);
-    // Copy additional params
-    obj->params_ = parsed;
+                                                        merged.numMeasures);
+    // Copy merged params
+    obj->params_ = merged;
     int32_t idx = static_cast<int32_t>(impl_->objects.size());
     obj->index_ = idx;
     impl_->objects.push_back(std::move(obj));
@@ -554,14 +511,14 @@ int32_t MetrologyModel::AddArcMeasure(double row, double column, double radius,
                                         double measureLength1, double measureLength2,
                                         const std::string& transition,
                                         const std::string& select,
-                                        const std::vector<int>& params) {
-    auto parsed = ParseVectorParams(measureLength1, measureLength2, transition, select, params);
+                                        const MetrologyMeasureParams& params) {
+    auto merged = MergeParams(measureLength1, measureLength2, transition, select, params);
     auto obj = std::make_unique<MetrologyObjectCircle>(row, column, radius,
                                                         angleStart, angleEnd,
                                                         measureLength1, measureLength2,
-                                                        parsed.numMeasures);
-    // Copy additional params
-    obj->params_ = parsed;
+                                                        merged.numMeasures);
+    // Copy merged params
+    obj->params_ = merged;
     int32_t idx = static_cast<int32_t>(impl_->objects.size());
     obj->index_ = idx;
     impl_->objects.push_back(std::move(obj));
@@ -573,13 +530,13 @@ int32_t MetrologyModel::AddEllipseMeasure(double row, double column, double phi,
                                            double measureLength1, double measureLength2,
                                            const std::string& transition,
                                            const std::string& select,
-                                           const std::vector<int>& params) {
-    auto parsed = ParseVectorParams(measureLength1, measureLength2, transition, select, params);
+                                           const MetrologyMeasureParams& params) {
+    auto merged = MergeParams(measureLength1, measureLength2, transition, select, params);
     auto obj = std::make_unique<MetrologyObjectEllipse>(row, column, phi, ra, rb,
                                                          measureLength1, measureLength2,
-                                                         parsed.numMeasures);
-    // Copy additional params
-    obj->params_ = parsed;
+                                                         merged.numMeasures);
+    // Copy merged params
+    obj->params_ = merged;
     int32_t idx = static_cast<int32_t>(impl_->objects.size());
     obj->index_ = idx;
     impl_->objects.push_back(std::move(obj));
@@ -591,15 +548,15 @@ int32_t MetrologyModel::AddRectangle2Measure(double row, double column, double p
                                                double measureLength1, double measureLength2,
                                                const std::string& transition,
                                                const std::string& select,
-                                               const std::vector<int>& params) {
-    auto parsed = ParseVectorParams(measureLength1, measureLength2, transition, select, params);
+                                               const MetrologyMeasureParams& params) {
+    auto merged = MergeParams(measureLength1, measureLength2, transition, select, params);
     // For rectangle, numMeasures in params is total, but constructor expects per-side
-    int32_t numMeasuresPerSide = std::max(1, parsed.numMeasures / 4);
+    int32_t numMeasuresPerSide = std::max(1, merged.numMeasures / 4);
     auto obj = std::make_unique<MetrologyObjectRectangle2>(row, column, phi, length1, length2,
                                                             measureLength1, measureLength2,
                                                             numMeasuresPerSide);
-    // Copy additional params (this will override numMeasures with correct total)
-    obj->params_ = parsed;
+    // Copy merged params (this will override numMeasures with correct total)
+    obj->params_ = merged;
     int32_t idx = static_cast<int32_t>(impl_->objects.size());
     obj->index_ = idx;
     impl_->objects.push_back(std::move(obj));

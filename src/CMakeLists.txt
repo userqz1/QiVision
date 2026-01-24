@@ -66,6 +66,10 @@ set(QIVISION_SOURCES
     Matching/ShapeModelCreate.cpp
     Matching/ShapeModelSearch.cpp
     Matching/ShapeModelScore.cpp
+    Matching/NCCModel.cpp
+    Matching/NCCModelCreate.cpp
+    Matching/NCCModelSearch.cpp
+    Matching/NCCModelScore.cpp
     # Measure (Feature Layer)
     Measure/MeasureHandle.cpp
     Measure/Caliper.cpp
@@ -155,8 +159,10 @@ set(QIVISION_HEADERS
     # Matching (Feature Layer)
     ${CMAKE_SOURCE_DIR}/include/QiVision/Matching/MatchTypes.h
     ${CMAKE_SOURCE_DIR}/include/QiVision/Matching/ShapeModel.h
+    ${CMAKE_SOURCE_DIR}/include/QiVision/Matching/NCCModel.h
     # Matching internal headers (in src/)
     ${CMAKE_SOURCE_DIR}/src/Matching/ShapeModelImpl.h
+    ${CMAKE_SOURCE_DIR}/src/Matching/NCCModelImpl.h
     # Measure (Feature Layer)
     ${CMAKE_SOURCE_DIR}/include/QiVision/Measure/MeasureTypes.h
     ${CMAKE_SOURCE_DIR}/include/QiVision/Measure/MeasureHandle.h

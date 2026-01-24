@@ -44,11 +44,15 @@ namespace Qi::Vision::Measure {
 /**
  * @brief Metrology measurement parameter flags
  *
- * Usage with Add*Measure functions:
- *   model.AddCircleMeasure(200, 200, 50, 20, 5, "all", "all",
- *       {METROLOGY_NUM_MEASURES, 20, METROLOGY_MIN_SCORE, 70});  // 70 = 0.7 * 100
+ * @deprecated Use MetrologyMeasureParams struct instead.
  *
- * Note: Double values must be scaled to integers (e.g., minScore 0.7 -> 70)
+ * Legacy usage (deprecated):
+ *   model.AddCircleMeasure(200, 200, 50, 20, 5, "all", "all",
+ *       {METROLOGY_NUM_MEASURES, 20, METROLOGY_MIN_SCORE, 70});
+ *
+ * New usage (recommended):
+ *   model.AddCircleMeasure(200, 200, 50, 20, 5, "all", "all",
+ *       MetrologyMeasureParams().SetNumMeasures(20).SetMinScore(0.7));
  */
 enum MetrologyParamFlag {
     METROLOGY_NUM_INSTANCES = 1,      ///< Number of instances to find (int)
@@ -654,14 +658,14 @@ public:
      * @param measureLength2 Half-width of caliper perpendicular
      * @param transition "positive", "negative", "all"
      * @param select "first", "last", "all"
-     * @param params Optional key-value pairs: {METROLOGY_NUM_MEASURES, 10, ...}
+     * @param params Measurement parameters (numMeasures, sigma, threshold, fitting method, etc.)
      * @return Object index
      */
     int32_t AddLineMeasure(double row1, double col1, double row2, double col2,
                            double measureLength1, double measureLength2,
                            const std::string& transition = "all",
                            const std::string& select = "all",
-                           const std::vector<int>& params = {});
+                           const MetrologyMeasureParams& params = {});
 
     /**
      * @brief Add a circle measurement object
@@ -673,14 +677,14 @@ public:
      * @param measureLength2 Half-width of caliper perpendicular
      * @param transition "positive", "negative", "all"
      * @param select "first", "last", "all"
-     * @param params Optional key-value pairs
+     * @param params Measurement parameters (numMeasures, sigma, threshold, fitting method, etc.)
      * @return Object index
      */
     int32_t AddCircleMeasure(double row, double column, double radius,
                               double measureLength1, double measureLength2,
                               const std::string& transition = "all",
                               const std::string& select = "all",
-                              const std::vector<int>& params = {});
+                              const MetrologyMeasureParams& params = {});
 
     /**
      * @brief Add an arc measurement object
@@ -694,7 +698,7 @@ public:
      * @param measureLength2 Half-width of caliper perpendicular
      * @param transition "positive", "negative", "all"
      * @param select "first", "last", "all"
-     * @param params Optional key-value pairs
+     * @param params Measurement parameters (numMeasures, sigma, threshold, fitting method, etc.)
      * @return Object index
      */
     int32_t AddArcMeasure(double row, double column, double radius,
@@ -702,7 +706,7 @@ public:
                            double measureLength1, double measureLength2,
                            const std::string& transition = "all",
                            const std::string& select = "all",
-                           const std::vector<int>& params = {});
+                           const MetrologyMeasureParams& params = {});
 
     /**
      * @brief Add an ellipse measurement object
@@ -716,7 +720,7 @@ public:
      * @param measureLength2 Half-width of caliper perpendicular
      * @param transition "positive", "negative", "all"
      * @param select "first", "last", "all"
-     * @param params Optional key-value pairs
+     * @param params Measurement parameters (numMeasures, sigma, threshold, fitting method, etc.)
      * @return Object index
      */
     int32_t AddEllipseMeasure(double row, double column, double phi,
@@ -724,7 +728,7 @@ public:
                                double measureLength1, double measureLength2,
                                const std::string& transition = "all",
                                const std::string& select = "all",
-                               const std::vector<int>& params = {});
+                               const MetrologyMeasureParams& params = {});
 
     /**
      * @brief Add a rectangle measurement object
@@ -738,7 +742,7 @@ public:
      * @param measureLength2 Half-width of caliper perpendicular
      * @param transition "positive", "negative", "all"
      * @param select "first", "last", "all"
-     * @param params Optional key-value pairs
+     * @param params Measurement parameters (numMeasures, sigma, threshold, fitting method, etc.)
      * @return Object index
      */
     int32_t AddRectangle2Measure(double row, double column, double phi,
@@ -746,7 +750,7 @@ public:
                                   double measureLength1, double measureLength2,
                                   const std::string& transition = "all",
                                   const std::string& select = "all",
-                                  const std::vector<int>& params = {});
+                                  const MetrologyMeasureParams& params = {});
 
     /**
      * @brief Clear a specific object

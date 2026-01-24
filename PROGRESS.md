@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-24 (API 文档重写为 OpenCV 风格)
+> 最后更新: 2026-01-24 (NCCModel 框架实现)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -152,7 +152,7 @@ Tests    █████████████████░░░ 87%
 |------|:----:|:----:|:----:|:--------:|:----:|------|
 | MatchTypes.h | ✅ | ✅ | - | - | ⬜ | 参数和结果结构体 |
 | ShapeModel.h | ✅ | ✅ | ⬜ | ⬜ | ⬜ | 形状匹配（P0，梯度方向特征） |
-| NCCModel.h | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | NCC 匹配（P1，归一化互相关） |
+| NCCModel.h | ✅ | 🟡 | ⬜ | ⬜ | ⬜ | NCC 匹配（P1，归一化互相关）- 框架已完成 |
 | ComponentModel.h | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | 组件匹配（P1，多部件关系约束） |
 | DeformableModel.h | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | 变形匹配（P2） |
 | Internal/AnglePyramid.h | ✅ | ✅ | ⬜ | ⬜ | ⬜ | 角度预计算模型（新增依赖） |
@@ -246,6 +246,31 @@ Tests    █████████████████░░░ 87%
 ---
 
 ## 变更日志
+
+### 2026-01-24 (NCCModel 框架实现)
+
+- **NCCModel 模块**
+  - 新增 `include/QiVision/Matching/NCCModel.h`: 公开 API 头文件
+  - 新增 `src/Matching/NCCModelImpl.h`: 内部实现结构体
+  - 新增 `src/Matching/NCCModel.cpp`: 公开 API 实现
+  - 新增 `src/Matching/NCCModelCreate.cpp`: 模型创建实现
+  - 新增 `src/Matching/NCCModelSearch.cpp`: 多级金字塔搜索
+  - 新增 `src/Matching/NCCModelScore.cpp`: NCC 分数计算（使用积分图加速）
+
+- **NCCModel API (Halcon 风格)**
+  - `CreateNCCModel`: 3个重载（无ROI、Rect2i ROI、QRegion ROI）
+  - `CreateScaledNCCModel`: 带缩放搜索
+  - `FindNCCModel` / `FindScaledNCCModel`: 匹配搜索
+  - `GetNCCModelParams` / `GetNCCModelOrigin` / `SetNCCModelOrigin` / `GetNCCModelSize`
+  - `WriteNCCModel` / `ReadNCCModel` / `ClearNCCModel`
+  - `DetermineNCCModelParams`: 自动参数推荐
+
+- **实现特性**
+  - 预计算旋转模板（离散角度）
+  - 积分图加速区域统计
+  - 多级金字塔粗到精搜索
+  - 抛物线插值亚像素精化
+  - 支持 use_polarity / ignore_global_polarity 模式
 
 ### 2026-01-24 (API 文档重写为 OpenCV 风格)
 

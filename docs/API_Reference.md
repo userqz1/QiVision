@@ -4,7 +4,7 @@
 > Last Updated: 2026-01-24
 > Namespace: `Qi::Vision`
 
-This document provides a comprehensive reference for all public APIs in QiVision. All functions follow the Halcon-style signature: `void Func(inputs..., outputs..., params...)`.
+Professional industrial machine vision library.
 
 ---
 
@@ -28,7 +28,7 @@ This document provides a comprehensive reference for all public APIs in QiVision
 **Namespace**: `Qi::Vision::Matching`
 **Header**: `<QiVision/Matching/ShapeModel.h>`
 
-Shape-based template matching using gradient orientation features. Compatible with Halcon's shape model operators.
+Shape-based template matching using gradient orientation features.
 
 ---
 
@@ -43,6 +43,11 @@ public:
     bool IsValid() const;
 };
 ```
+
+**Methods**
+| Method | Returns | Description |
+|--------|---------|-------------|
+| IsValid() | bool | True if model contains valid data |
 
 ---
 
@@ -467,6 +472,11 @@ std::vector<EdgeResult> FuzzyMeasurePos(
 );
 ```
 
+**Returns**
+| Type | Description |
+|------|-------------|
+| std::vector<EdgeResult> | Detected edge results with fuzzy scoring |
+
 ---
 
 ### MetrologyModel
@@ -480,27 +490,34 @@ public:
                            double measureLength1, double measureLength2,
                            const std::string& transition = "all",
                            const std::string& select = "all",
-                           const std::vector<int>& params = {});
+                           const MetrologyMeasureParams& params = {});
 
     int32_t AddCircleMeasure(double row, double col, double radius,
                               double measureLength1, double measureLength2,
                               const std::string& transition = "all",
                               const std::string& select = "all",
-                              const std::vector<int>& params = {});
+                              const MetrologyMeasureParams& params = {});
+
+    int32_t AddArcMeasure(double row, double col, double radius,
+                           double angleStart, double angleEnd,
+                           double measureLength1, double measureLength2,
+                           const std::string& transition = "all",
+                           const std::string& select = "all",
+                           const MetrologyMeasureParams& params = {});
 
     int32_t AddEllipseMeasure(double row, double col, double phi,
                                double ra, double rb,
                                double measureLength1, double measureLength2,
                                const std::string& transition = "all",
                                const std::string& select = "all",
-                               const std::vector<int>& params = {});
+                               const MetrologyMeasureParams& params = {});
 
     int32_t AddRectangle2Measure(double row, double col, double phi,
                                   double length1, double length2,
                                   double measureLength1, double measureLength2,
                                   const std::string& transition = "all",
                                   const std::string& select = "all",
-                                  const std::vector<int>& params = {});
+                                  const MetrologyMeasureParams& params = {});
 
     bool Apply(const QImage& image);
 
@@ -517,11 +534,68 @@ public:
 };
 ```
 
+**Method Returns**
+| Method | Returns | Description |
+|--------|---------|-------------|
+| AddLineMeasure | int32_t | Object index (0-based) for later retrieval |
+| AddCircleMeasure | int32_t | Object index (0-based) for later retrieval |
+| AddArcMeasure | int32_t | Object index (0-based) for later retrieval |
+| AddEllipseMeasure | int32_t | Object index (0-based) for later retrieval |
+| AddRectangle2Measure | int32_t | Object index (0-based) for later retrieval |
+| Apply | bool | True if measurement succeeded |
+| GetLineResult | MetrologyLineResult | Fitted line result for object at index |
+| GetCircleResult | MetrologyCircleResult | Fitted circle result for object at index |
+| GetEllipseResult | MetrologyEllipseResult | Fitted ellipse result for object at index |
+| GetRectangle2Result | MetrologyRectangle2Result | Fitted rectangle result for object at index |
+| GetMeasuredPoints | std::vector<Point2d> | Edge points used for fitting |
+| GetPointWeights | std::vector<double> | Weight of each edge point (0-1) |
+
 ---
 
-### MetrologyParamFlag
+### MetrologyMeasureParams
 
-OpenCV-style parameter flags for vector<int> params.
+Measurement parameters for metrology objects.
+
+```cpp
+struct MetrologyMeasureParams {
+    int32_t numInstances = 1;           // Number of instances to find
+    double measureLength1 = 20.0;       // Half-length of caliper along profile
+    double measureLength2 = 5.0;        // Half-width of caliper perpendicular
+    double measureSigma = 1.0;          // Gaussian smoothing sigma
+    double measureThreshold = 30.0;     // Edge amplitude threshold
+    ThresholdMode thresholdMode = ThresholdMode::Manual;  // Manual or Auto
+    EdgeTransition measureTransition = EdgeTransition::All;
+    EdgeSelectMode measureSelect = EdgeSelectMode::All;
+    int32_t numMeasures = 10;           // Number of calipers per object
+    double minScore = 0.7;              // Minimum score threshold
+    MetrologyFitMethod fitMethod = MetrologyFitMethod::RANSAC;
+    double distanceThreshold = 3.5;     // Outlier distance threshold (pixels)
+    int32_t maxIterations = -1;         // Max RANSAC iterations (-1 = unlimited)
+    int32_t randSeed = 42;              // Random seed for RANSAC
+
+    // Builder pattern setters
+    MetrologyMeasureParams& SetNumInstances(int32_t n);
+    MetrologyMeasureParams& SetMeasureLength(double l1, double l2);
+    MetrologyMeasureParams& SetMeasureSigma(double s);
+    MetrologyMeasureParams& SetThreshold(double t);          // Manual mode
+    MetrologyMeasureParams& SetThreshold(const std::string& mode);  // "auto" for Auto mode
+    MetrologyMeasureParams& SetMeasureTransition(EdgeTransition t);
+    MetrologyMeasureParams& SetMeasureSelect(EdgeSelectMode m);
+    MetrologyMeasureParams& SetNumMeasures(int32_t n);
+    MetrologyMeasureParams& SetMinScore(double s);
+    MetrologyMeasureParams& SetFitMethod(MetrologyFitMethod m);
+    MetrologyMeasureParams& SetFitMethod(const std::string& method);  // "ransac", "huber", "tukey"
+    MetrologyMeasureParams& SetDistanceThreshold(double t);
+    MetrologyMeasureParams& SetMaxIterations(int32_t n);
+    MetrologyMeasureParams& SetRandSeed(int32_t s);
+};
+```
+
+---
+
+### MetrologyParamFlag (deprecated)
+
+Parameter flags. **Deprecated: Use MetrologyMeasureParams instead.**
 
 ```cpp
 enum MetrologyParamFlag {
@@ -667,6 +741,11 @@ int32_t WriteSequence(
     int32_t startIndex = 0
 );
 ```
+
+**Returns (WriteSequence)**
+| Type | Description |
+|------|-------------|
+| int32_t | Number of images successfully written |
 
 ---
 
@@ -865,6 +944,11 @@ QImage MeanImage(const QImage& image, int32_t size);
 QImage MeanImage(const QImage& image, int32_t width, int32_t height);
 ```
 
+**Returns**
+| Type | Description |
+|------|-------------|
+| QImage | Mean-filtered output image |
+
 ---
 
 ### MedianImage
@@ -885,6 +969,11 @@ QImage MedianImage(
 | maskType | const std::string& | Mask shape: "circle", "square", "rhombus" |
 | radius | int32_t | Mask radius |
 
+**Returns**
+| Type | Description |
+|------|-------------|
+| QImage | Median-filtered output image |
+
 ---
 
 ### BilateralFilter
@@ -904,6 +993,11 @@ QImage BilateralFilter(
 |------|------|-------------|
 | sigmaSpatial | double | Spatial sigma (distance weight) |
 | sigmaIntensity | double | Intensity sigma (color similarity weight) |
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| QImage | Edge-preserving filtered output image |
 
 ---
 
@@ -932,6 +1026,12 @@ QImage SobelDir(
 | dirType | const std::string& | Direction type: "gradient", "tangent" |
 | size | int32_t | Kernel size: 3, 5, or 7 |
 
+**Returns**
+| Type | Description |
+|------|-------------|
+| QImage (SobelAmp) | Gradient amplitude image |
+| QImage (SobelDir) | Gradient direction image (angle in radians) |
+
 ---
 
 ### DerivateGauss
@@ -951,6 +1051,11 @@ QImage DerivateGauss(
 |------|------|-------------|
 | component | const std::string& | Derivative: "x", "y", "xx", "yy", "xy", "gradient" |
 
+**Returns**
+| Type | Description |
+|------|-------------|
+| QImage | Gaussian derivative response image |
+
 ---
 
 ### Laplace / LaplacianOfGaussian
@@ -961,6 +1066,12 @@ Laplacian operators.
 QImage Laplace(const QImage& image, const std::string& filterType = "3x3");
 QImage LaplacianOfGaussian(const QImage& image, double sigma);
 ```
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| QImage (Laplace) | Laplacian response image (edge enhancement) |
+| QImage (LaplacianOfGaussian) | LoG response image (blob detection) |
 
 ---
 
@@ -983,6 +1094,11 @@ QImage UnsharpMask(
 | sigma | double | Blur sigma |
 | amount | double | Sharpening amount |
 | threshold | double | Detail threshold (0=sharpen all) |
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| QImage | Sharpened output image |
 
 ---
 
@@ -1007,6 +1123,11 @@ QImage AnisoDiff(
 | contrast | double | Edge threshold K |
 | theta | double | Diffusion coefficient (0-0.25) |
 | iterations | int32_t | Number of iterations |
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| QImage | Edge-preserving smoothed output image |
 
 ---
 
@@ -1253,6 +1374,11 @@ QRegion VarThreshold(
 );
 ```
 
+**Returns**
+| Type | Description |
+|------|-------------|
+| QRegion | Region containing pixels with variance above threshold |
+
 ---
 
 ### CharThreshold
@@ -1268,6 +1394,11 @@ QRegion CharThreshold(
 );
 ```
 
+**Returns**
+| Type | Description |
+|------|-------------|
+| QRegion | Region containing character/text pixels |
+
 ---
 
 ### HysteresisThreshold
@@ -1281,6 +1412,11 @@ QRegion HysteresisThreshold(
     double highThreshold
 );
 ```
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| QRegion | Region containing connected pixels meeting hysteresis criteria |
 
 ---
 
@@ -1306,6 +1442,11 @@ Converts between regions and masks.
 void RegionToMask(const QRegion& region, QImage& mask);
 QRegion MaskToRegion(const QImage& mask, double threshold = 0);
 ```
+
+**Returns (MaskToRegion)**
+| Type | Description |
+|------|-------------|
+| QRegion | Region containing pixels above threshold |
 
 ---
 
@@ -1380,6 +1521,12 @@ QRegion SelectObj(const std::vector<QRegion>& regions, int32_t index);
 | Name | Type | Description |
 |------|------|-------------|
 | index | int32_t | 1-based index (Halcon compatible) |
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| int32_t (CountObj) | Number of regions in the array |
+| QRegion (SelectObj) | Region at the specified index |
 
 ---
 
@@ -1571,6 +1718,12 @@ int32_t EulerNumber(const QRegion& region);
 void FillUp(const QRegion& region, QRegion& filled);
 void GetHoles(const QRegion& region, std::vector<QRegion>& holes);
 ```
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| int32_t (CountHoles) | Number of holes in the region |
+| int32_t (EulerNumber) | Euler number (components - holes) |
 
 ---
 
@@ -1845,7 +1998,7 @@ enum class ScaleMode {
 
 ### Window
 
-Window class for image display.
+Window class for image display and interaction.
 
 ```cpp
 class Window {
@@ -1853,17 +2006,64 @@ public:
     Window(const std::string& title = "QiVision", int32_t width = 0, int32_t height = 0);
     ~Window();
 
+    // Display
     void DispImage(const QImage& image, ScaleMode scaleMode = ScaleMode::Fit);
     int32_t WaitKey(int32_t timeoutMs = 0);
 
+    // Window control
     bool IsOpen() const;
     void Close();
-
     void SetTitle(const std::string& title);
     void Resize(int32_t width, int32_t height);
     void Move(int32_t x, int32_t y);
 
+    // Auto resize for large images
+    void SetAutoResize(bool enable, int32_t maxWidth = 0, int32_t maxHeight = 0);
+    bool IsAutoResize() const;
+
+    // Mouse interaction
+    void SetMouseCallback(MouseCallback callback);
+    bool GetMousePosition(int32_t& x, int32_t& y) const;
+    bool GetMouseImagePosition(double& imageX, double& imageY) const;
+
+    // Interactive ROI drawing
+    ROIResult DrawRectangle();   // Click and drag to draw
+    ROIResult DrawCircle();      // Click center, drag radius
+    ROIResult DrawLine();
+    ROIResult DrawPolygon();     // Click points, double-click to close
+    ROIResult DrawPoint();
+    ROIResult DrawROI(ROIType type);
+
+    // Static helpers
     static int32_t ShowImage(const QImage& image, const std::string& title = "QiVision");
+};
+```
+
+**Method Returns**
+| Method | Returns | Description |
+|--------|---------|-------------|
+| IsOpen() | bool | True if window is currently open |
+| WaitKey() | int32_t | Key code pressed, or -1 on timeout/close |
+| IsAutoResize() | bool | True if auto-resize is enabled |
+| GetMousePosition() | bool | True if mouse position is valid |
+| GetMouseImagePosition() | bool | True if mouse is over image area |
+| DrawRectangle() | ROIResult | User-drawn rectangle region |
+| DrawCircle() | ROIResult | User-drawn circle region |
+| DrawLine() | ROIResult | User-drawn line |
+| DrawPolygon() | ROIResult | User-drawn polygon region |
+| DrawPoint() | ROIResult | User-selected point |
+| DrawROI() | ROIResult | User-drawn ROI of specified type |
+| ShowImage() | int32_t | Key code pressed after display |
+
+**ROIResult Structure**
+```cpp
+struct ROIResult {
+    ROIType type;
+    bool valid;                      // True if completed (not cancelled)
+    double row1, col1, row2, col2;   // Rectangle bounds
+    double centerRow, centerCol;     // Circle/Ellipse center
+    double radius;                   // Circle radius
+    std::vector<Point2d> points;     // Polygon points
 };
 ```
 
@@ -1891,7 +2091,7 @@ int32_t WaitKey(int32_t timeoutMs = 0);
 
 ### Global Functions
 
-Halcon-style global display functions.
+Global display functions.
 
 ```cpp
 void DispImage(const QImage& image, const std::string& windowName = "QiVision");
@@ -1949,8 +2149,8 @@ enum class ChannelType {
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 0.5.0 | 2026-01-24 | Rewrite to OpenCV-style format, add Segment module documentation |
-| 0.4.0 | 2026-01-21 | Unified Halcon-style API signatures |
+| 0.5.0 | 2026-01-24 | API format update, add Segment module, NCCModel |
+| 0.4.0 | 2026-01-21 | Unified API signatures |
 | 0.3.0 | 2026-01-20 | Added Metrology module, auto-threshold API |
 | 0.2.0 | 2026-01-17 | Added Blob, Display, GUI modules |
 | 0.1.0 | 2026-01-15 | Initial: Matching, Measure, IO, Color, Filter |

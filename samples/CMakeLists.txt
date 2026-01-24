@@ -16,6 +16,7 @@ endfunction()
 add_sample(matching_shape_match matching/shape_match.cpp)
 add_sample(matching_test_create_model matching/test_create_model.cpp)
 add_sample(matching_test_scaled_match matching/test_scaled_match.cpp)
+add_sample(matching_ncc_match matching/ncc_match.cpp)
 
 # Measure - Metrology & Caliper
 add_sample(measure_circle_metrology measure/circle_metrology.cpp)
@@ -30,6 +31,7 @@ add_custom_target(samples DEPENDS
     matching_shape_match
     matching_test_create_model
     matching_test_scaled_match
+    matching_ncc_match
     measure_circle_metrology
     measure_caliper_pairs
     measure_caliper_circle_manual

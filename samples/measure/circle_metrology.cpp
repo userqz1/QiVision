@@ -36,8 +36,9 @@ int main() {
     MetrologyModel model;
 
     // 添加圆 (row, col, radius, measureLength1, measureLength2, transition, select, params)
-    // 使用 vector<int> 传递额外参数: {METROLOGY_NUM_MEASURES, 20, METROLOGY_THRESHOLD_MODE, 1}
-    std::vector<int> circleParams = {METROLOGY_NUM_MEASURES, 20, METROLOGY_THRESHOLD_MODE, 1};
+    // 使用 MetrologyMeasureParams 传递额外参数
+    MetrologyMeasureParams circleParams;
+    circleParams.SetNumMeasures(20).SetThreshold("auto");
     model.AddCircleMeasure(420, 210, 60, 20.0, 5.0, "all", "all", circleParams);
     model.AddCircleMeasure(420, 500, 60, 20.0, 5.0, "all", "all", circleParams);
     model.AddCircleMeasure(420, 790, 60, 20.0, 5.0, "all", "all", circleParams);
@@ -45,7 +46,8 @@ int main() {
 
     // 添加矩形 (row, col, phi, length1, length2, measureLength1, measureLength2, ...)
     // 中心(col=210, row=705), length1=65(x方向), length2=70(y方向)
-    std::vector<int> rectParams = {METROLOGY_NUM_MEASURES, 32, METROLOGY_THRESHOLD_MODE, 1};
+    MetrologyMeasureParams rectParams;
+    rectParams.SetNumMeasures(32).SetThreshold("auto");
     model.AddRectangle2Measure(705, 210, 0.0, 65, 70, 20.0, 5.0, "all", "all", rectParams);
 
     // 测量
