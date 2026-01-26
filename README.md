@@ -17,10 +17,14 @@
     <img src="https://img.shields.io/badge/Dependencies-stb__image%20only-brightgreen.svg" alt="Dependencies">
 </p>
 
-<p align="center">
-    <a href="https://github.com/userqz1/QiVision"><img src="https://img.shields.io/badge/GitHub-userqz1%2FQiVision-blue?logo=github" alt="GitHub"></a>
-    <a href="https://gitee.com/flyingtoad/QiVision"><img src="https://img.shields.io/badge/Gitee-flyingtoad%2FQiVision-red?logo=gitee" alt="Gitee"></a>
-</p>
+---
+
+## 仓库地址
+
+| 平台 | 地址 |
+|------|------|
+| **GitHub** | https://github.com/userqz1/QiVision |
+| **Gitee** | https://gitee.com/flyingtoad/QiVision |
 
 ---
 
@@ -240,140 +244,6 @@ pip3 install cmake --upgrade
 .\build\bin\unit_test.exe          # ✗ 错误
 ```
 </details>
-
----
-
-## 使用示例
-
-### 形状模板匹配
-
-```cpp
-#include <QiVision/Matching/ShapeModel.h>
-#include <QiVision/IO/ImageIO.h>
-
-using namespace Qi::Vision;
-using namespace Qi::Vision::Matching;
-
-int main() {
-    // 加载图像
-    QImage templ = IO::ReadImage("template.png");
-    QImage search = IO::ReadImage("search.png");
-
-    // 创建模型 (Halcon 风格 API)
-    ShapeModel model = CreateShapeModel(
-        templ,
-        4,                      // 金字塔层数
-        0.0, RAD(360), 0.0,     // 角度范围
-        "auto",                 // 优化
-        "use_polarity",         // 度量
-        "auto", 10.0            // 对比度
-    );
-
-    // 搜索匹配
-    std::vector<double> rows, cols, angles, scores;
-    FindShapeModel(
-        search, model,
-        0.0, RAD(360),          // 搜索角度
-        0.7, 0, 0.5,            // minScore, numMatches, maxOverlap
-        "least_squares", 0, 0.9,
-        rows, cols, angles, scores
-    );
-
-    for (size_t i = 0; i < rows.size(); ++i) {
-        printf("Match %zu: (%.1f, %.1f) Angle=%.1f° Score=%.2f\n",
-               i, cols[i], rows[i], DEG(angles[i]), scores[i]);
-    }
-    return 0;
-}
-```
-
-### 卡尺测量
-
-```cpp
-#include <QiVision/Measure/Caliper.h>
-#include <QiVision/IO/ImageIO.h>
-
-using namespace Qi::Vision;
-using namespace Qi::Vision::Measure;
-
-int main() {
-    QImage image = IO::ReadImage("edge_image.png");
-
-    // 创建矩形测量句柄
-    MeasureRectangle2 rect;
-    rect.row = 240; rect.col = 320;
-    rect.phi = 0.0;
-    rect.length1 = 50; rect.length2 = 5;
-
-    // 测量边缘
-    MeasureParams params;
-    params.sigma = 1.0;
-    params.threshold = 30.0;
-    params.transition = EdgeTransition::All;
-
-    auto edges = MeasurePos(image, rect, params);
-    for (const auto& e : edges) {
-        printf("Edge: (%.3f, %.3f) amp=%.1f\n", e.col, e.row, e.amplitude);
-    }
-    return 0;
-}
-```
-
-### 颜色空间转换
-
-```cpp
-#include <QiVision/Color/ColorConvert.h>
-#include <QiVision/IO/ImageIO.h>
-
-using namespace Qi::Vision;
-
-int main() {
-    QImage rgb = IO::ReadImage("photo.png");
-
-    // RGB -> HSV
-    QImage hsv = Color::TransFromRgb(rgb, "hsv");
-
-    // 分解通道
-    QImage h, s, v;
-    Color::Decompose3(hsv, h, s, v);
-
-    // 调整饱和度
-    QImage saturated = Color::AdjustSaturation(rgb, 1.5);
-
-    // Bayer 去马赛克
-    QImage raw = IO::ReadImage("camera_raw.pgm");
-    QImage debayered = Color::CfaToRgb(raw, "bayer_rg");
-
-    return 0;
-}
-```
-
-### 图像滤波
-
-```cpp
-#include <QiVision/Filter/Filter.h>
-#include <QiVision/IO/ImageIO.h>
-
-using namespace Qi::Vision;
-
-int main() {
-    QImage image = IO::ReadImage("noisy.png");
-
-    // 高斯平滑
-    QImage smooth = Filter::GaussFilter(image, 1.5);
-
-    // 边缘检测
-    QImage edges = Filter::SobelAmp(image, "sum_abs", 3);
-
-    // 双边滤波（边缘保持）
-    QImage bilateral = Filter::BilateralFilter(image, 5.0, 30.0);
-
-    // 图像锐化
-    QImage sharp = Filter::UnsharpMask(image, 2.0, 1.5);
-
-    return 0;
-}
-```
 
 ---
 

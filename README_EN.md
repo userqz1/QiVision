@@ -17,10 +17,14 @@
     <img src="https://img.shields.io/badge/Dependencies-stb__image%20only-brightgreen.svg" alt="Dependencies">
 </p>
 
-<p align="center">
-    <a href="https://github.com/userqz1/QiVision"><img src="https://img.shields.io/badge/GitHub-userqz1%2FQiVision-blue?logo=github" alt="GitHub"></a>
-    <a href="https://gitee.com/flyingtoad/QiVision"><img src="https://img.shields.io/badge/Gitee-flyingtoad%2FQiVision-red?logo=gitee" alt="Gitee"></a>
-</p>
+---
+
+## Repository
+
+| Platform | URL |
+|----------|-----|
+| **GitHub** | https://github.com/userqz1/QiVision |
+| **Gitee** | https://gitee.com/flyingtoad/QiVision |
 
 ---
 
@@ -98,86 +102,6 @@ cmake --build build --parallel
 
 # Shape matching sample
 ./build/bin/samples/08_shape_match_large
-```
-
----
-
-## 💡 Usage Examples
-
-### Shape Template Matching
-
-```cpp
-#include <QiVision/QiVision.h>
-#include <QiVision/Matching/ShapeModel.h>
-
-using namespace Qi::Vision;
-using namespace Qi::Vision::Matching;
-
-int main() {
-    // Load template and search images
-    QImage templateImg = QImage::FromFile("template.png");
-    QImage searchImg = QImage::FromFile("search.png");
-
-    // Create model
-    ModelParams params;
-    params.angleStart = 0;
-    params.angleExtent = RAD(360);  // Full rotation support
-    params.numLevels = 4;
-
-    ShapeModel model;
-    Rect2i roi(100, 100, 50, 50);  // Template region
-    model.Create(templateImg, roi, params);
-
-    // Search for matches
-    SearchParams searchParams;
-    searchParams.minScore = 0.8;
-    searchParams.maxMatches = 10;
-
-    auto results = model.Find(searchImg, searchParams);
-
-    for (const auto& match : results) {
-        printf("Match: (%.1f, %.1f) Score=%.3f Angle=%.1f°\n",
-               match.x, match.y, match.score, DEG(match.angle));
-    }
-
-    return 0;
-}
-```
-
-### Caliper Measurement
-
-```cpp
-#include <QiVision/QiVision.h>
-#include <QiVision/Measure/Caliper.h>
-
-using namespace Qi::Vision;
-using namespace Qi::Vision::Measure;
-
-int main() {
-    QImage image = QImage::FromFile("edge_image.png");
-
-    // Create rectangle caliper handle
-    MeasureHandle handle = MeasureHandle::Rectangle(
-        Point2d{320, 240},  // Center
-        100,                // Length
-        30,                 // Width
-        0                   // Angle
-    );
-
-    // Measurement parameters
-    CaliperParams params;
-    params.transition = EdgeTransition::Positive;
-    params.selectType = EdgeSelect::First;
-
-    // Execute measurement
-    auto result = MeasurePos(image, handle, params);
-
-    if (result.edgeFound) {
-        printf("Edge at: (%.3f, %.3f)\n", result.edgeX, result.edgeY);
-    }
-
-    return 0;
-}
 ```
 
 ---
