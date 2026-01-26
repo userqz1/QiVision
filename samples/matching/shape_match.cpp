@@ -98,6 +98,8 @@ int main(int argc, char* argv[]) {
     std::cout << "=== QiVision Shape Matching Test ===" << std::endl;
     std::cout << "Folder: " << dataDir << std::endl;
     std::cout << "Controls: Press 'q' or ESC to quit" << std::endl;
+    std::string outputDir = "tests/output/shape_match_debug/";
+    fs::create_directories(outputDir);
 
     // Get all image files
     std::vector<std::string> imageFiles = GetImageFiles(dataDir);
@@ -179,6 +181,12 @@ int main(int argc, char* argv[]) {
     win.SetTitle("Template with ROI");
     win.DispImage(roiVis);
     win.WaitKey(1000);
+    WriteImage(roiVis, outputDir + "template_roi.png");
+
+    QImage contrastImage;
+    int32_t numPoints = 0;
+    InspectShapeModel(model, 0, contrastImage, numPoints);
+    WriteImage(contrastImage, outputDir + "model_contrast_level0.png");
 
     // Search in all images
     std::cout << "\n4. Searching in " << imageFiles.size() << " images..." << std::endl;
@@ -257,6 +265,11 @@ int main(int argc, char* argv[]) {
 
         win.SetTitle(title);
         win.DispImage(colorImg);
+
+        std::ostringstream outName;
+        outName << outputDir << "result_" << std::setw(2) << std::setfill('0') << (i + 1)
+                << "_" << imageFiles[i];
+        WriteImage(colorImg, outName.str());
 
         int32_t key = win.WaitKey(DISPLAY_INTERVAL_MS);
         if (key == 'q' || key == 'Q' || key == 27) {

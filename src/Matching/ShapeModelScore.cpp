@@ -133,7 +133,10 @@ double ShapeModelImpl::ComputeScoreAtPosition(
                        w01 * gyData[idx + stride] + w11 * gyData[idx + stride + 1];
 
             float magSq = gx * gx + gy * gy;
-            if (magSq >= 25.0f) {
+            float baseMin = (params_.minContrast > 0.0) ? static_cast<float>(params_.minContrast) : 5.0f;
+            float levelScale = static_cast<float>(pyramid.GetScale(level));
+            float minMag = std::max(2.0f, baseMin * levelScale);
+            if (magSq >= minMag * minMag) {
                 float rotCos = soaCos[i] * cosR - soaSin[i] * sinR;
                 float rotSin = soaSin[i] * cosR + soaCos[i] * sinR;
                 float dot = rotCos * gx + rotSin * gy;
@@ -219,7 +222,10 @@ double ShapeModelImpl::ComputeScoreBilinearSSE(
     const float xf = static_cast<float>(x);
     const float yf = static_cast<float>(y);
 
-    const __m128 vMinMagSq = _mm_set_ss(25.0f);
+    float baseMin = (params_.minContrast > 0.0) ? static_cast<float>(params_.minContrast) : 5.0f;
+    float levelScale = static_cast<float>(pyramid.GetScale(level));
+    float minMag = std::max(2.0f, baseMin * levelScale);
+    const __m128 vMinMagSq = _mm_set_ss(minMag * minMag);
     const __m128 vSignMask = _mm_set_ss(-0.0f);
 
     float totalScore = 0.0f;
@@ -278,12 +284,17 @@ double ShapeModelImpl::ComputeScoreBilinearSSE(
                 float dot = rotCos * gx + rotSin * gy;
 
                 __m128 vInvMag = _mm_rsqrt_ss(vMagSq);
-                __m128 vDot = _mm_set_ss(dot);
-                __m128 vAbsDot = _mm_andnot_ps(vSignMask, vDot);
-                __m128 vScore = _mm_mul_ss(vAbsDot, vInvMag);
+                float invMag = 0.0f;
+                _mm_store_ss(&invMag, vInvMag);
 
-                float score;
-                _mm_store_ss(&score, vScore);
+                float score = 0.0f;
+                if (params_.metric == MetricMode::UsePolarity) {
+                    if (dot > 0.0f) {
+                        score = dot * invMag;
+                    }
+                } else {
+                    score = std::fabs(dot) * invMag;
+                }
 
                 totalScore += soaWeight[i] * score;
                 totalWeight += soaWeight[i];
@@ -316,7 +327,8 @@ double ShapeModelImpl::ComputeScoreBilinearSSE(
 double ShapeModelImpl::ComputeScoreWithSinCos(
     const AnglePyramid& pyramid, int32_t level,
     double x, double y, float cosR, float sinR, double scale,
-    double greediness, double* outCoverage, bool useGridPoints) const
+    double greediness, double* outCoverage, bool useGridPoints,
+    float minMagSq) const
 {
     const auto& levelModel = levels_[level];
     const auto& pts = useGridPoints ? levelModel.gridPoints : levelModel.points;
@@ -338,7 +350,7 @@ double ShapeModelImpl::ComputeScoreWithSinCos(
     const float xf = static_cast<float>(x);
     const float yf = static_cast<float>(y);
 
-    const __m128 vMinMagSq = _mm_set_ss(25.0f);
+    const __m128 vMinMagSq = _mm_set_ss(minMagSq);
     const __m128 vSignMask = _mm_set_ss(-0.0f);
 
     float totalScore = 0.0f;
@@ -535,7 +547,11 @@ double ShapeModelImpl::ComputeScoreQuantized(
     double greediness, double* outCoverage, bool useGridPoints) const
 {
     if (cosLUT_.empty() || numAngleBins_ <= 0) {
-        return ComputeScoreWithSinCos(pyramid, level, x, y, cosR, sinR, 1.0, greediness, outCoverage, useGridPoints);
+        float baseMin = (params_.minContrast > 0.0) ? static_cast<float>(params_.minContrast) : 5.0f;
+        float levelScale = static_cast<float>(pyramid.GetScale(level));
+        float minMag = std::max(2.0f, baseMin * levelScale);
+        return ComputeScoreWithSinCos(pyramid, level, x, y, cosR, sinR, 1.0, greediness, outCoverage,
+                                      useGridPoints, minMag * minMag);
     }
 
     const auto& levelModel = levels_[level];
@@ -557,7 +573,11 @@ double ShapeModelImpl::ComputeScoreQuantized(
     const int16_t* binData;
     int32_t binWidth, binHeight, binStride, numBins;
     if (!pyramid.GetAngleBinData(level, binData, binWidth, binHeight, binStride, numBins)) {
-        return ComputeScoreWithSinCos(pyramid, level, x, y, cosR, sinR, 1.0, greediness, outCoverage, useGridPoints);
+        float baseMin = (params_.minContrast > 0.0) ? static_cast<float>(params_.minContrast) : 5.0f;
+        float levelScale = static_cast<float>(pyramid.GetScale(level));
+        float minMag = std::max(2.0f, baseMin * levelScale);
+        return ComputeScoreWithSinCos(pyramid, level, x, y, cosR, sinR, 1.0, greediness, outCoverage,
+                                      useGridPoints, minMag * minMag);
     }
 
     const float scalef = 1.0f;

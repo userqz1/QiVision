@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <queue>
 #include <unordered_map>
@@ -31,6 +32,21 @@ namespace Qi::Vision::Matching {
 // =============================================================================
 
 namespace {
+
+double GetResampleSpacing(OptimizationMode mode) {
+    switch (mode) {
+        case OptimizationMode::PointReductionHigh:
+            return 1.5;
+        case OptimizationMode::PointReductionMedium:
+            return 1.3;
+        case OptimizationMode::PointReductionLow:
+            return 1.1;
+        case OptimizationMode::None:
+        case OptimizationMode::Auto:
+        default:
+            return 1.0;
+    }
+}
 
 /// Contour segment for XLD processing
 struct XLDContourSegment {
@@ -93,6 +109,8 @@ struct XLDContourSegment {
         angleBins.push_back(bin);
     }
 };
+
+// Intentionally keep all contours by default to preserve inner geometry.
 
 /// Interpolate angle using shortest path
 inline double InterpolateAngleXLD(double a1, double a2, double t) {
@@ -243,6 +261,8 @@ std::vector<XLDContourSegment> TraceContoursXLD(
     // 8-neighbor offsets (ordered for smooth traversal)
     static const int32_t dx8[8] = {1, 1, 0, -1, -1, -1, 0, 1};
     static const int32_t dy8[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+    constexpr double MAX_DIR_DIFF = PI * 0.17;  // ~30 degrees
+    constexpr double MIN_MAG_RATIO = 0.4;       // Neighbor must be reasonably strong
 
     std::vector<bool> visited(edgePoints.size(), false);
     std::vector<XLDContourSegment> contours;
@@ -298,6 +318,14 @@ std::vector<XLDContourSegment> TraceContoursXLD(
                 double dirDiff = std::abs(edgeDir - neighborEdgeDir);
                 if (dirDiff > PI) dirDiff = 2.0 * PI - dirDiff;
 
+                if (dirDiff > MAX_DIR_DIFF) {
+                    continue;
+                }
+
+                if (edgePoints[neighborIdx].magnitude < ep.magnitude * MIN_MAG_RATIO) {
+                    continue;
+                }
+
                 double score = (1.0 - dirDiff / PI) + edgePoints[neighborIdx].magnitude * 0.001;
 
                 if (score > bestScore) {
@@ -341,6 +369,14 @@ std::vector<XLDContourSegment> TraceContoursXLD(
                 double neighborEdgeDir = edgePoints[neighborIdx].angle - PI * 0.5;
                 double dirDiff = std::abs(edgeDir - neighborEdgeDir);
                 if (dirDiff > PI) dirDiff = 2.0 * PI - dirDiff;
+
+                if (dirDiff > MAX_DIR_DIFF) {
+                    continue;
+                }
+
+                if (edgePoints[neighborIdx].magnitude < ep.magnitude * MIN_MAG_RATIO) {
+                    continue;
+                }
 
                 double score = (1.0 - dirDiff / PI) + edgePoints[neighborIdx].magnitude * 0.001;
 
@@ -409,6 +445,7 @@ std::vector<XLDContourSegment> TraceContoursXLD(
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
 #endif
 XLDContourSegment ResampleContourXLD(const XLDContourSegment& contour, double spacing = 1.0) {
     if (contour.Size() < 2) return contour;
@@ -538,6 +575,123 @@ void LevelModel::BuildSoAForPoints(const std::vector<ModelPoint>& pts,
         sinA[i] = static_cast<float>(pts[i].sinAngle);
         w[i] = static_cast<float>(pts[i].weight);
         bins[i] = static_cast<int16_t>(pts[i].angleBin);
+    }
+}
+
+// =============================================================================
+// Helpers for scaled model cache
+// =============================================================================
+
+static LevelModel ScaleLevelModel(const LevelModel& src, double scale) {
+    LevelModel dst = src;
+    dst.points.clear();
+    dst.gridPoints.clear();
+
+    dst.width = static_cast<int32_t>(std::round(src.width * scale));
+    dst.height = static_cast<int32_t>(std::round(src.height * scale));
+    dst.scale = src.scale * scale;
+
+    dst.points.reserve(src.points.size());
+    for (const auto& pt : src.points) {
+        ModelPoint p = pt;
+        p.x *= scale;
+        p.y *= scale;
+        dst.points.push_back(p);
+    }
+
+    // Re-generate grid points for scaled model (integer grid)
+    dst.RegenerateGridPoints();
+    dst.BuildSoA();
+    return dst;
+}
+
+static void ComputeBoundsForLevels(const std::vector<LevelModel>& levels,
+                                   double& minX, double& maxX,
+                                   double& minY, double& maxY) {
+    if (levels.empty() || levels[0].points.empty()) {
+        minX = maxX = minY = maxY = 0.0;
+        return;
+    }
+
+    minX = minY = std::numeric_limits<double>::max();
+    maxX = maxY = std::numeric_limits<double>::lowest();
+
+    for (const auto& pt : levels[0].points) {
+        minX = std::min(minX, pt.x);
+        maxX = std::max(maxX, pt.x);
+        minY = std::min(minY, pt.y);
+        maxY = std::max(maxY, pt.y);
+    }
+}
+
+static double ComputeMinCoverageForLevels(const std::vector<LevelModel>& levels) {
+    if (levels.empty() || levels[0].points.empty()) {
+        return 0.7;
+    }
+
+    size_t numModelPoints = levels[0].points.size();
+    if (numModelPoints < 200) {
+        double val = 0.7 + 0.15 * std::max(0.0, (200.0 - static_cast<double>(numModelPoints)) / 150.0);
+        return std::min(0.85, val);
+    }
+    return 0.7;
+}
+
+static void BuildSearchAngleCacheForLevels(const std::vector<LevelModel>& levels,
+                                           const Size2i& templateSize,
+                                           double angleStart, double angleExtent, double angleStep,
+                                           std::vector<SearchAngleData>& outCache,
+                                           double& outStep) {
+    outCache.clear();
+
+    // Auto-compute angle step if not specified (Halcon: AngleStep = atan(1/R_max))
+    if (angleStep <= 0) {
+        int32_t modelSize = std::max(templateSize.width, templateSize.height);
+        angleStep = EstimateAngleStep(modelSize);
+    }
+    outStep = angleStep;
+
+    int32_t numAngles = static_cast<int32_t>(std::ceil(angleExtent / angleStep)) + 1;
+    outCache.resize(numAngles);
+
+    const size_t numLevels = levels.size();
+
+    for (int32_t i = 0; i < numAngles; ++i) {
+        SearchAngleData& data = outCache[i];
+        data.angle = angleStart + i * angleStep;
+        data.cosA = static_cast<float>(std::cos(data.angle));
+        data.sinA = static_cast<float>(std::sin(data.angle));
+
+        data.levelBounds.resize(numLevels);
+        for (size_t level = 0; level < numLevels; ++level) {
+            const auto& levelModel = levels[level];
+            if (levelModel.points.empty()) {
+                data.levelBounds[level] = {0, 0, 0, 0};
+                continue;
+            }
+
+            double minX = std::numeric_limits<double>::max();
+            double maxX = std::numeric_limits<double>::lowest();
+            double minY = std::numeric_limits<double>::max();
+            double maxY = std::numeric_limits<double>::lowest();
+
+            const double cosA = data.cosA;
+            const double sinA = data.sinA;
+
+            for (const auto& pt : levelModel.points) {
+                double rx = cosA * pt.x - sinA * pt.y;
+                double ry = sinA * pt.x + cosA * pt.y;
+                minX = std::min(minX, rx);
+                maxX = std::max(maxX, rx);
+                minY = std::min(minY, ry);
+                maxY = std::max(maxY, ry);
+            }
+
+            data.levelBounds[level].minX = static_cast<int32_t>(std::floor(minX));
+            data.levelBounds[level].maxX = static_cast<int32_t>(std::ceil(maxX));
+            data.levelBounds[level].minY = static_cast<int32_t>(std::floor(minY));
+            data.levelBounds[level].maxY = static_cast<int32_t>(std::ceil(maxY));
+        }
     }
 }
 
@@ -729,8 +883,10 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const Rect2i& roi, const P
             }
             else if (params_.contrastMode == ContrastMode::AutoHysteresis) {
                 double otsuThreshold = computeOtsu();
-                size_t highIdx = magnitudes.size() * 3 / 4;
-                double percentileHigh = magnitudes[highIdx];
+                int32_t effectiveTargetPoints = std::max(80, targetPoints / 2);
+                size_t targetIdx = (magnitudes.size() > static_cast<size_t>(effectiveTargetPoints))
+                    ? magnitudes.size() - effectiveTargetPoints : 0;
+                double percentileHigh = magnitudes[targetIdx];
 
                 params_.contrastHigh = std::max(otsuThreshold, percentileHigh);
                 params_.contrastHigh = std::clamp(params_.contrastHigh, 8.0, maxMag * 0.85);
@@ -738,8 +894,9 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const Rect2i& roi, const P
                 size_t lowIdx = magnitudes.size() / 2;
                 double medianMag = magnitudes[lowIdx];
 
-                params_.contrastLow = std::max(medianMag * 0.6, params_.contrastHigh * 0.35);
-                params_.contrastLow = std::clamp(params_.contrastLow, 3.0, params_.contrastHigh * 0.7);
+                params_.contrastLow = std::max(medianMag * 0.6, params_.contrastHigh * 0.4);
+                params_.contrastLow = std::clamp(params_.contrastLow, 5.0, params_.contrastHigh * 0.7);
+                params_.minComponentSize = std::max(params_.minComponentSize, 8);
             }
             else if (params_.contrastMode == ContrastMode::AutoMinSize) {
                 double otsuThreshold = computeOtsu();
@@ -836,6 +993,7 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const Rect2i& roi, const P
     }
 
     valid_ = true;
+    BuildScaledModels();
     return true;
 }
 
@@ -933,6 +1091,142 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const QRegion& region, con
     // Translate region to template-local coordinates (must be done before origin calculation)
     QRegion localRegion = region.Translate(-bbox.x, -bbox.y);
 
+    // Auto-detect contrast threshold for ROI if requested (use NMS edge points within region)
+    tStep = std::chrono::high_resolution_clock::now();
+    if (needAutoContrast) {
+        const auto& edgePoints = pyramid.GetEdgePoints(0);
+        if (!edgePoints.empty()) {
+            std::vector<double> magnitudes;
+            magnitudes.reserve(edgePoints.size());
+
+            for (const auto& ep : edgePoints) {
+                int32_t px = static_cast<int32_t>(std::lround(ep.x));
+                int32_t py = static_cast<int32_t>(std::lround(ep.y));
+                if (localRegion.Contains(px, py)) {
+                    magnitudes.push_back(ep.magnitude);
+                }
+            }
+
+            if (!magnitudes.empty()) {
+                std::sort(magnitudes.begin(), magnitudes.end());
+
+                double minMag = magnitudes.front();
+                double maxMag = magnitudes.back();
+
+                int32_t templateArea = templateSize_.width * templateSize_.height;
+                int32_t targetPoints;
+                if (templateArea < 2500) {
+                    targetPoints = std::min(300, static_cast<int32_t>(magnitudes.size() / 4));
+                } else if (templateArea < 10000) {
+                    targetPoints = std::min(800, static_cast<int32_t>(magnitudes.size() / 4));
+                } else if (templateArea < 40000) {
+                    targetPoints = std::min(1500, static_cast<int32_t>(magnitudes.size() / 5));
+                } else {
+                    targetPoints = std::min(2500, static_cast<int32_t>(magnitudes.size() / 6));
+                }
+
+                auto computeOtsu = [&]() -> double {
+                    const int32_t numBins = 256;
+                    double range = maxMag - minMag;
+                    if (range < 1e-6) return minMag;
+
+                    std::vector<int32_t> hist(numBins, 0);
+                    for (double val : magnitudes) {
+                        int32_t bin = static_cast<int32_t>((val - minMag) / range * (numBins - 1));
+                        bin = std::clamp(bin, 0, numBins - 1);
+                        hist[bin]++;
+                    }
+
+                    int32_t total = static_cast<int32_t>(magnitudes.size());
+                    double sumAll = 0.0;
+                    for (int32_t i = 0; i < numBins; ++i) {
+                        sumAll += i * hist[i];
+                    }
+
+                    double sumBg = 0.0;
+                    int32_t weightBg = 0;
+                    double maxVariance = 0.0;
+                    int32_t bestThreshold = 0;
+
+                    for (int32_t t = 0; t < numBins; ++t) {
+                        weightBg += hist[t];
+                        if (weightBg == 0) continue;
+
+                        int32_t weightFg = total - weightBg;
+                        if (weightFg == 0) break;
+
+                        sumBg += t * hist[t];
+                        double meanBg = sumBg / weightBg;
+                        double meanFg = (sumAll - sumBg) / weightFg;
+
+                        double variance = static_cast<double>(weightBg) * weightFg *
+                                          (meanBg - meanFg) * (meanBg - meanFg);
+
+                        if (variance > maxVariance) {
+                            maxVariance = variance;
+                            bestThreshold = t;
+                        }
+                    }
+
+                    return minMag + (bestThreshold + 0.5) * range / numBins;
+                };
+
+                if (params_.contrastMode == ContrastMode::Auto) {
+                    size_t targetIdx = (magnitudes.size() > static_cast<size_t>(targetPoints))
+                        ? magnitudes.size() - targetPoints : 0;
+                    double percentileThreshold = magnitudes[targetIdx];
+                    double otsuThreshold = computeOtsu();
+
+                    params_.contrastHigh = std::max(percentileThreshold, otsuThreshold) * 0.6 +
+                                           std::min(percentileThreshold, otsuThreshold) * 0.4;
+                    params_.contrastHigh = std::clamp(params_.contrastHigh, 5.0, maxMag * 0.9);
+                    params_.contrastLow = 0.0;
+                }
+                else if (params_.contrastMode == ContrastMode::AutoHysteresis) {
+                    double otsuThreshold = computeOtsu();
+                    int32_t effectiveTargetPoints = std::max(80, targetPoints / 2);
+                    size_t targetIdx = (magnitudes.size() > static_cast<size_t>(effectiveTargetPoints))
+                        ? magnitudes.size() - effectiveTargetPoints : 0;
+                    double percentileHigh = magnitudes[targetIdx];
+
+                    params_.contrastHigh = std::max(otsuThreshold, percentileHigh);
+                    params_.contrastHigh = std::clamp(params_.contrastHigh, 8.0, maxMag * 0.85);
+
+                    size_t lowIdx = magnitudes.size() / 2;
+                    double medianMag = magnitudes[lowIdx];
+
+                    params_.contrastLow = std::max(medianMag * 0.6, params_.contrastHigh * 0.4);
+                    params_.contrastLow = std::clamp(params_.contrastLow, 5.0, params_.contrastHigh * 0.7);
+                    params_.minComponentSize = std::max(params_.minComponentSize, 8);
+                }
+                else if (params_.contrastMode == ContrastMode::AutoMinSize) {
+                    double otsuThreshold = computeOtsu();
+                    params_.contrastHigh = std::clamp(otsuThreshold * 0.8, 5.0, maxMag * 0.9);
+                    params_.contrastLow = 0.0;
+                }
+
+                if (timingParams_.debugCreateModel) {
+                    size_t p50 = magnitudes.size() / 2;
+                    size_t p90 = magnitudes.size() * 9 / 10;
+                    size_t p95 = magnitudes.size() * 95 / 100;
+                    std::printf("[CreateModel][ROI] mag p50=%.2f p90=%.2f p95=%.2f max=%.2f -> contrast=[%.2f, %.2f]\n",
+                                magnitudes[p50], magnitudes[p90], magnitudes[p95], maxMag,
+                                params_.contrastLow, params_.contrastHigh);
+                    std::fflush(stdout);
+                }
+            } else {
+                params_.contrastHigh = 10.0;
+                params_.contrastLow = 0.0;
+            }
+        } else {
+            params_.contrastHigh = 10.0;
+            params_.contrastLow = 0.0;
+        }
+    }
+    if (timingParams_.enableTiming) {
+        createTiming_.contrastAutoMs = elapsedMs(tStep);
+    }
+
     // Set origin - HALCON uses domain centroid as default reference point
     origin_ = origin;
     if (origin_.x == 0 && origin_.y == 0) {
@@ -1010,6 +1304,7 @@ bool ShapeModelImpl::CreateModel(const QImage& image, const QRegion& region, con
     }
 
     valid_ = true;
+    BuildScaledModels();
     return true;
 }
 
@@ -1036,7 +1331,7 @@ void ShapeModelImpl::ExtractModelPointsXLD(const QImage& templateImg, const Angl
     //   Level 4: 154 points,  spacing=1.09px
     //   Level 5: 52 points,   spacing=1.11px
 
-    const double RESAMPLE_SPACING = 1.0;  // Halcon uses ~1.1px, we use 1.0px
+    const double RESAMPLE_SPACING = GetResampleSpacing(params_.optimization);
     const int32_t MIN_CONTOUR_POINTS = 4;
 
     double contrastHigh = params_.contrastHigh;
@@ -1194,7 +1489,7 @@ void ShapeModelImpl::ExtractModelPointsXLD(const QImage& templateImg, const Angl
                         preHysteresisCount, postHysteresisCount, postMinSizeCount);
         }
 
-        // Step 2: Trace into ordered contours
+    // Step 2: Trace into ordered contours
         auto contours = TraceContoursXLD(filteredPoints, levelData.width, levelData.height, MIN_CONTOUR_POINTS);
 
         // Step 3: Resample and collect points WITH contour topology
@@ -1274,7 +1569,7 @@ void ShapeModelImpl::ExtractModelPointsXLDWithRegion(const QImage& templateImg, 
     levels_.clear();
     levels_.resize(pyramid.NumLevels());
 
-    const double RESAMPLE_SPACING = 1.0;
+    const double RESAMPLE_SPACING = GetResampleSpacing(params_.optimization);
     const int32_t MIN_CONTOUR_POINTS = 4;
 
     double contrastHigh = params_.contrastHigh;
@@ -1296,9 +1591,17 @@ void ShapeModelImpl::ExtractModelPointsXLDWithRegion(const QImage& templateImg, 
         // Scale region for this pyramid level
         QRegion scaledRegion = region.Scale(levelData.scale, levelData.scale);
 
-        // Extract all edge points with minimal threshold for noise estimation
-        constexpr double MINIMAL_THRESHOLD = 0.5;
-        auto allEdgePoints = pyramid.ExtractEdgePoints(level, scaledRegion, MINIMAL_THRESHOLD);
+        // Extract edge points with NMS from full level, then filter by region
+        const auto& fullEdgePoints = pyramid.GetEdgePoints(level);
+        std::vector<Qi::Vision::Internal::EdgePoint> allEdgePoints;
+        allEdgePoints.reserve(fullEdgePoints.size());
+        for (const auto& ep : fullEdgePoints) {
+            int32_t px = static_cast<int32_t>(std::lround(ep.x));
+            int32_t py = static_cast<int32_t>(std::lround(ep.y));
+            if (scaledRegion.Contains(px, py)) {
+                allEdgePoints.push_back(ep);
+            }
+        }
 
         // Compute level thresholds with fixed floors (HALCON-compatible)
         constexpr double FLOOR_LOW = 1.0;
@@ -1312,11 +1615,45 @@ void ShapeModelImpl::ExtractModelPointsXLDWithRegion(const QImage& templateImg, 
             levelContrastHigh = levelContrastLow;
         }
 
+        // Local adaptive thresholds (for complex backgrounds)
+        // Build per-tile high thresholds from ROI edge magnitudes
+        const int32_t tileSize = std::max(16, std::min(32, std::min(levelData.width, levelData.height) / 4));
+        const int32_t tilesX = (levelData.width + tileSize - 1) / tileSize;
+        const int32_t tilesY = (levelData.height + tileSize - 1) / tileSize;
+        std::vector<std::vector<float>> tileMags(static_cast<size_t>(tilesX * tilesY));
+        tileMags.shrink_to_fit();  // ensure contiguous storage ownership
+
+        for (const auto& ep : allEdgePoints) {
+            int32_t tx = std::clamp(static_cast<int32_t>(ep.x) / tileSize, 0, tilesX - 1);
+            int32_t ty = std::clamp(static_cast<int32_t>(ep.y) / tileSize, 0, tilesY - 1);
+            tileMags[ty * tilesX + tx].push_back(static_cast<float>(ep.magnitude));
+        }
+
+        std::vector<float> tileHigh(static_cast<size_t>(tilesX * tilesY),
+                                    static_cast<float>(levelContrastHigh));
+        for (int32_t ty = 0; ty < tilesY; ++ty) {
+            for (int32_t tx = 0; tx < tilesX; ++tx) {
+                auto& mags = tileMags[ty * tilesX + tx];
+                if (mags.size() < 20) {
+                    continue;
+                }
+                std::sort(mags.begin(), mags.end());
+                size_t idx = mags.size() * 85 / 100;  // p85
+                idx = std::min(idx, mags.size() - 1);
+                float localHigh = mags[idx];
+                tileHigh[ty * tilesX + tx] = std::max(tileHigh[ty * tilesX + tx], localHigh);
+            }
+        }
+
         // Filter edge points by low threshold
         std::vector<Qi::Vision::Internal::EdgePoint> edgePoints;
         edgePoints.reserve(allEdgePoints.size());
         for (const auto& ep : allEdgePoints) {
-            if (ep.magnitude >= levelContrastLow) {
+            int32_t tx = std::clamp(static_cast<int32_t>(ep.x) / tileSize, 0, tilesX - 1);
+            int32_t ty = std::clamp(static_cast<int32_t>(ep.y) / tileSize, 0, tilesY - 1);
+            float localHigh = tileHigh[ty * tilesX + tx];
+            float localLow = std::max(static_cast<float>(levelContrastLow), localHigh * 0.5f);
+            if (ep.magnitude >= localLow) {
                 edgePoints.push_back(ep);
             }
         }
@@ -1342,11 +1679,15 @@ void ShapeModelImpl::ExtractModelPointsXLDWithRegion(const QImage& templateImg, 
 
             for (size_t i = 0; i < edgePoints.size(); ++i) {
                 const auto& ep = edgePoints[i];
+                int32_t tx = std::clamp(static_cast<int32_t>(ep.x) / tileSize, 0, tilesX - 1);
+                int32_t ty = std::clamp(static_cast<int32_t>(ep.y) / tileSize, 0, tilesY - 1);
+                float localHigh = tileHigh[ty * tilesX + tx];
+                float localLow = std::max(static_cast<float>(levelContrastLow), localHigh * 0.5f);
                 if (ep.magnitude > levelContrastMax) continue;
 
-                if (ep.magnitude >= levelContrastHigh) {
+                if (ep.magnitude >= localHigh) {
                     strongIndices.push_back(static_cast<int32_t>(i));
-                } else if (ep.magnitude >= levelContrastLow) {
+                } else if (ep.magnitude >= localLow) {
                     weakIndices.push_back(static_cast<int32_t>(i));
                 }
             }
@@ -1519,24 +1860,24 @@ void ShapeModelImpl::OptimizeModel() {
             minSpacing = 0.0;  // Keep all points
             break;
         case OptimizationMode::PointReductionLow:
-            minSpacing = 1.5;
-            break;
-        case OptimizationMode::PointReductionMedium:
             minSpacing = 2.0;
             break;
-        case OptimizationMode::PointReductionHigh:
+        case OptimizationMode::PointReductionMedium:
             minSpacing = 3.0;
+            break;
+        case OptimizationMode::PointReductionHigh:
+            minSpacing = 4.0;
             break;
         case OptimizationMode::Auto:
         default:
             // Auto: adaptive spacing based on template size
             int32_t templateDim = std::max(templateSize_.width, templateSize_.height);
             if (templateDim <= 100) {
-                minSpacing = 1.5;
-            } else if (templateDim <= 300) {
                 minSpacing = 2.0;
-            } else {
+            } else if (templateDim <= 300) {
                 minSpacing = 2.5;
+            } else {
+                minSpacing = 3.0;
             }
             break;
     }
@@ -1768,6 +2109,76 @@ void ShapeModelImpl::BuildSearchAngleCache(double angleStart, double angleExtent
             data.levelBounds[level].maxY = static_cast<int32_t>(std::ceil(maxY));
         }
     }
+}
+
+// =============================================================================
+// ShapeModelImpl::BuildScaledModels
+// =============================================================================
+
+void ShapeModelImpl::BuildScaledModels() {
+    scaledModels_.clear();
+
+    if (levels_.empty() || !valid_) {
+        return;
+    }
+
+    double scaleMin = params_.scaleMin;
+    double scaleMax = params_.scaleMax;
+    double scaleStep = params_.scaleStep;
+
+    if (scaleMin <= 0 || scaleMax <= 0 || scaleMin > scaleMax) {
+        return;
+    }
+
+    if (scaleStep <= 0.0) {
+        scaleStep = 0.02;
+        if (scaleMax > scaleMin) {
+            scaleStep = std::max(0.01, (scaleMax - scaleMin) / 10.0);
+        }
+        params_.scaleStep = scaleStep;
+    }
+
+    constexpr double SCALE_TOLERANCE = 1e-6;
+    for (double scale = scaleMin; scale <= scaleMax + SCALE_TOLERANCE; scale += scaleStep) {
+        ScaledModelData sm;
+        sm.scale = scale;
+
+        sm.levels.reserve(levels_.size());
+        for (const auto& level : levels_) {
+            sm.levels.push_back(ScaleLevelModel(level, scale));
+        }
+
+        sm.templateSize.width = static_cast<int32_t>(std::round(templateSize_.width * scale));
+        sm.templateSize.height = static_cast<int32_t>(std::round(templateSize_.height * scale));
+
+        ComputeBoundsForLevels(sm.levels, sm.modelMinX, sm.modelMaxX, sm.modelMinY, sm.modelMaxY);
+        sm.minCoverage = ComputeMinCoverageForLevels(sm.levels);
+
+        double angleExtent = params_.angleExtent;
+        if (angleExtent <= 0) {
+            angleExtent = 2.0 * PI;
+        }
+        BuildSearchAngleCacheForLevels(sm.levels, sm.templateSize,
+                                       params_.angleStart, angleExtent, params_.angleStep,
+                                       sm.searchAngleCache, sm.searchAngleStep);
+        sm.searchAngleStart = params_.angleStart;
+        sm.searchAngleExtent = angleExtent;
+
+        scaledModels_.push_back(std::move(sm));
+    }
+}
+
+const ShapeModelImpl::ScaledModelData* ShapeModelImpl::GetScaledModelData(double scale) const {
+    if (scaledModels_.empty()) {
+        return nullptr;
+    }
+    const double tol = 1e-6;
+    for (const auto& sm : scaledModels_) {
+        if (std::abs(sm.scale - scale) <= tol) {
+            return &sm;
+        }
+    }
+    return nullptr;
 }
 
 // =============================================================================

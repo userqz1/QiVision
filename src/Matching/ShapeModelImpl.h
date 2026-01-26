@@ -184,6 +184,19 @@ extern const FastCosTable g_cosTable;
 
 class ShapeModelImpl {
 public:
+    struct ScaledModelData {
+        double scale = 1.0;
+        std::vector<LevelModel> levels;
+        Size2i templateSize;
+        double modelMinX = 0, modelMaxX = 0;
+        double modelMinY = 0, modelMaxY = 0;
+        double minCoverage = 0.7;
+        std::vector<SearchAngleData> searchAngleCache;
+        double searchAngleStart = 0.0;
+        double searchAngleExtent = 2.0 * PI;
+        double searchAngleStep = 0.0;
+    };
+
     // Model data
     std::vector<LevelModel> levels_;
     ModelParams params_;
@@ -217,6 +230,9 @@ public:
     // Simple models (few points) need higher coverage to avoid false matches
     double minCoverage_ = 0.7;                       ///< Minimum coverage for valid match
 
+    // Cached scaled models for scale search
+    std::vector<ScaledModelData> scaledModels_;
+
     // ==========================================================================
     // Model Creation (ShapeModelCreate.cpp)
     // ==========================================================================
@@ -233,6 +249,8 @@ public:
     void ComputeModelBounds();
     static void ComputeRotatedBounds(const std::vector<ModelPoint>& points, double angle,
                                      double& minX, double& maxX, double& minY, double& maxY);
+    void BuildScaledModels();
+    const ScaledModelData* GetScaledModelData(double scale) const;
 
     // ==========================================================================
     // Search Functions (ShapeModelSearch.cpp)
@@ -278,7 +296,8 @@ public:
     double ComputeScoreWithSinCos(const AnglePyramid& pyramid, int32_t level,
                                    double x, double y, float cosR, float sinR, double scale,
                                    double greediness, double* outCoverage = nullptr,
-                                   bool useGridPoints = false) const;
+                                   bool useGridPoints = false,
+                                   float minMagSq = 25.0f) const;
 
     /// Fast score using nearest-neighbor interpolation (4x less memory access)
     double ComputeScoreNearestNeighbor(const AnglePyramid& pyramid, int32_t level,

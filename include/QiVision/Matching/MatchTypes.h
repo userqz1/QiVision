@@ -192,7 +192,7 @@ struct MatchedContour {
  */
 struct SearchParams {
     // Score threshold
-    double minScore = 0.5;          ///< Minimum score to accept [0, 1]
+    double minScore = 0.9;          ///< Minimum score to accept [0, 1]
 
     // Number of results
     int32_t maxMatches = 0;         ///< Maximum matches to return (0 = all above threshold)
@@ -353,6 +353,7 @@ struct ModelParams {
     // =========================================================================
     double scaleMin = 1.0;          ///< Minimum scale
     double scaleMax = 1.0;          ///< Maximum scale
+    double scaleStep = 0.0;         ///< Scale step (0 = auto)
 
     // =========================================================================
     // Builder Pattern Methods

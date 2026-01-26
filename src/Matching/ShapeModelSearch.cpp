@@ -382,13 +382,87 @@ std::vector<MatchResult> ShapeModelImpl::SearchPyramidScaled(
     const SearchParams& params,
     double scale) const
 {
-    // Create a copy of params with the specified scale
+    const auto* scaledModel = GetScaledModelData(scale);
+    if (!scaledModel) {
+        // Fallback to runtime scaling if cache not available
+        SearchParams scaledParams = params;
+        scaledParams.scaleMode = ScaleSearchMode::Uniform;
+        scaledParams.scaleMin = scale;
+        scaledParams.scaleMax = scale;
+        return SearchPyramid(targetPyramid, scaledParams);
+    }
+
+    // Use cached scaled model (scale baked into model points)
     SearchParams scaledParams = params;
     scaledParams.scaleMode = ScaleSearchMode::Uniform;
-    scaledParams.scaleMin = scale;
-    scaledParams.scaleMax = scale;
+    scaledParams.scaleMin = 1.0;
+    scaledParams.scaleMax = 1.0;
 
-    // Use the standard SearchPyramid with scaled parameters
+    struct ModelSwapGuard {
+        ShapeModelImpl& impl;
+        std::vector<LevelModel> levelsBackup;
+        Size2i templateSizeBackup;
+        double modelMinXBackup;
+        double modelMaxXBackup;
+        double modelMinYBackup;
+        double modelMaxYBackup;
+        double minCoverageBackup;
+        std::vector<SearchAngleData> searchAngleCacheBackup;
+        double searchAngleStartBackup;
+        double searchAngleExtentBackup;
+        double searchAngleStepBackup;
+
+        ModelSwapGuard(ShapeModelImpl& implRef, const ScaledModelData& scaled)
+            : impl(implRef),
+              levelsBackup(implRef.levels_),
+              templateSizeBackup(implRef.templateSize_),
+              modelMinXBackup(implRef.modelMinX_),
+              modelMaxXBackup(implRef.modelMaxX_),
+              modelMinYBackup(implRef.modelMinY_),
+              modelMaxYBackup(implRef.modelMaxY_),
+              minCoverageBackup(implRef.minCoverage_),
+              searchAngleCacheBackup(implRef.searchAngleCache_),
+              searchAngleStartBackup(implRef.searchAngleStart_),
+              searchAngleExtentBackup(implRef.searchAngleExtent_),
+              searchAngleStepBackup(implRef.searchAngleStep_) {
+            impl.levels_ = scaled.levels;
+            impl.templateSize_ = scaled.templateSize;
+            impl.modelMinX_ = scaled.modelMinX;
+            impl.modelMaxX_ = scaled.modelMaxX;
+            impl.modelMinY_ = scaled.modelMinY;
+            impl.modelMaxY_ = scaled.modelMaxY;
+            impl.minCoverage_ = scaled.minCoverage;
+            impl.searchAngleCache_ = scaled.searchAngleCache;
+            impl.searchAngleStart_ = scaled.searchAngleStart;
+            impl.searchAngleExtent_ = scaled.searchAngleExtent;
+            impl.searchAngleStep_ = scaled.searchAngleStep;
+        }
+
+        ~ModelSwapGuard() {
+            impl.levels_ = std::move(levelsBackup);
+            impl.templateSize_ = templateSizeBackup;
+            impl.modelMinX_ = modelMinXBackup;
+            impl.modelMaxX_ = modelMaxXBackup;
+            impl.modelMinY_ = modelMinYBackup;
+            impl.modelMaxY_ = modelMaxYBackup;
+            impl.minCoverage_ = minCoverageBackup;
+            impl.searchAngleCache_ = std::move(searchAngleCacheBackup);
+            impl.searchAngleStart_ = searchAngleStartBackup;
+            impl.searchAngleExtent_ = searchAngleExtentBackup;
+            impl.searchAngleStep_ = searchAngleStepBackup;
+        }
+    };
+
+    ModelSwapGuard guard(const_cast<ShapeModelImpl&>(*this), *scaledModel);
+    if (timingParams_.debugCreateModel) {
+        double adjusted = scaledModel->minCoverage;
+        double delta = std::fabs(scale - 1.0);
+        if (delta > 0.05) adjusted = std::min(adjusted, 0.6);
+        if (scale < 0.8 || scale > 1.2) adjusted = std::min(adjusted, 0.5);
+        guard.impl.minCoverage_ = adjusted;
+        std::printf("[ScaledSearch] scale=%.3f minCoverage=%.2f\n", scale, adjusted);
+        std::fflush(stdout);
+    }
     return SearchPyramid(targetPyramid, scaledParams);
 }
 

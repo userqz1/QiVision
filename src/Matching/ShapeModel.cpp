@@ -22,6 +22,10 @@ namespace Qi::Vision::Matching {
 using Qi::Vision::Internal::AnglePyramid;
 using Qi::Vision::Internal::AnglePyramidParams;
 
+namespace {
+bool g_debugCreateModel = false;
+}
+
 // =============================================================================
 // String to Enum Conversion Helpers
 // =============================================================================
@@ -236,6 +240,7 @@ void CreateShapeModel(
     params.minContrast = minContrast;
 
     model.Impl()->params_ = params;
+    model.Impl()->timingParams_.debugCreateModel = g_debugCreateModel;
 
     // Create model
     Point2d origin{0, 0};
@@ -279,10 +284,39 @@ void CreateShapeModel(
     if (!model.Impl()->CreateModel(templateImage, region, origin)) {
         model = ShapeModel();  // Set to invalid model
     }
+    if (g_debugCreateModel && model.IsValid()) {
+        auto* impl = model.Impl();
+        std::printf("[CreateShapeModel] contrast=[%.2f, %.2f] minContrast=%.2f points=%zu\n",
+                    impl->params_.contrastLow, impl->params_.contrastHigh, impl->params_.minContrast,
+                    impl->levels_.empty() ? 0u : impl->levels_[0].points.size());
+        std::fflush(stdout);
+    }
 }
 
 void CreateScaledShapeModel(
     const QImage& templateImage,
+    ShapeModel& model,
+    int32_t numLevels,
+    double angleStart,
+    double angleExtent,
+    double angleStep,
+    double scaleMin,
+    double scaleMax,
+    double scaleStep,
+    const std::string& optimization,
+    const std::string& metric,
+    const std::string& contrast,
+    double minContrast)
+{
+    CreateScaledShapeModel(templateImage, Rect2i{}, model, numLevels,
+                           angleStart, angleExtent, angleStep,
+                           scaleMin, scaleMax, scaleStep,
+                           optimization, metric, contrast, minContrast);
+}
+
+void CreateScaledShapeModel(
+    const QImage& templateImage,
+    const Rect2i& roi,
     ShapeModel& model,
     int32_t numLevels,
     double angleStart,
@@ -305,8 +339,49 @@ void CreateScaledShapeModel(
     params.angleStep = angleStep;
     params.scaleMin = scaleMin;
     params.scaleMax = scaleMax;
-    // params.scaleStep = scaleStep;  // TODO: Add to ModelParams if needed
-    (void)scaleStep;
+    params.scaleStep = scaleStep;
+    params.optimization = ParseOptimization(optimization);
+    params.metric = ParseMetric(metric);
+
+    // Parse contrast parameter (supports "auto", numeric, "[low,high]", or "[low,high,minSize]")
+    ParseContrast(contrast, params.contrastMode, params.contrastHigh, params.contrastLow, params.minComponentSize);
+    params.minContrast = minContrast;
+
+    model.Impl()->params_ = params;
+    model.Impl()->timingParams_.debugCreateModel = g_debugCreateModel;
+
+    Point2d origin{0, 0};
+    if (!model.Impl()->CreateModel(templateImage, roi, origin)) {
+        model = ShapeModel();
+    }
+}
+
+void CreateScaledShapeModel(
+    const QImage& templateImage,
+    const QRegion& region,
+    ShapeModel& model,
+    int32_t numLevels,
+    double angleStart,
+    double angleExtent,
+    double angleStep,
+    double scaleMin,
+    double scaleMax,
+    double scaleStep,
+    const std::string& optimization,
+    const std::string& metric,
+    const std::string& contrast,
+    double minContrast)
+{
+    model = ShapeModel();
+
+    ModelParams params;
+    params.numLevels = numLevels;
+    params.angleStart = angleStart;
+    params.angleExtent = angleExtent;
+    params.angleStep = angleStep;
+    params.scaleMin = scaleMin;
+    params.scaleMax = scaleMax;
+    params.scaleStep = scaleStep;
     params.optimization = ParseOptimization(optimization);
     params.metric = ParseMetric(metric);
 
@@ -317,8 +392,15 @@ void CreateScaledShapeModel(
     model.Impl()->params_ = params;
 
     Point2d origin{0, 0};
-    if (!model.Impl()->CreateModel(templateImage, Rect2i{}, origin)) {
+    if (!model.Impl()->CreateModel(templateImage, region, origin)) {
         model = ShapeModel();
+    }
+    if (g_debugCreateModel && model.IsValid()) {
+        auto* impl = model.Impl();
+        std::printf("[CreateScaledShapeModel] contrast=[%.2f, %.2f] minContrast=%.2f points=%zu\n",
+                    impl->params_.contrastLow, impl->params_.contrastHigh, impl->params_.minContrast,
+                    impl->levels_.empty() ? 0u : impl->levels_[0].points.size());
+        std::fflush(stdout);
     }
 }
 
@@ -459,23 +541,32 @@ void FindScaledShapeModel(
         return;
     }
 
+    // Get model implementation
+    auto* impl = model.Impl();
+
     // Auto-compute scale step if not specified
     // Rule: step = (max - min) / 10 for reasonable coverage, but at least 0.01
     // For typical range [0.9, 1.1], this gives step = 0.02 (10 scales)
-    double scaleStep = 0.02;
-    if (scaleMax > scaleMin) {
-        scaleStep = std::max(0.01, (scaleMax - scaleMin) / 10.0);
+    double scaleStep = impl->params_.scaleStep;
+    if (scaleStep <= 0.0) {
+        scaleStep = 0.02;
+        if (scaleMax > scaleMin) {
+            scaleStep = std::max(0.01, (scaleMax - scaleMin) / 10.0);
+        }
     }
-
-    // Get model implementation
-    auto* impl = model.Impl();
 
     // Build pyramid for search image (reused for all scales)
     AnglePyramidParams pyramidParams;
     pyramidParams.numLevels = (numLevels > 0) ? numLevels : impl->params_.numLevels;
     pyramidParams.smoothSigma = 0.5;
-    pyramidParams.minContrast = impl->params_.minContrast;
-    pyramidParams.useNMS = false;
+    double minContrast = (impl->params_.minContrast > 0.0)
+        ? impl->params_.minContrast
+        : impl->params_.contrastHigh;
+    if (impl->params_.contrastLow > 0.0) {
+        minContrast = std::max(minContrast, impl->params_.contrastLow * 0.5);
+    }
+    pyramidParams.minContrast = minContrast;
+    pyramidParams.useNMS = true;
 
     AnglePyramid targetPyramid;
     if (!targetPyramid.Build(image, pyramidParams)) {
@@ -511,6 +602,10 @@ void FindScaledShapeModel(
 
         // Search with this scale
         auto results = impl->SearchPyramidScaled(targetPyramid, params, scale);
+        if (impl->timingParams_.debugCreateModel) {
+            std::printf("[FindScaled] scale=%.3f results=%zu\n", scale, results.size());
+            std::fflush(stdout);
+        }
 
         // Collect results
         for (const auto& r : results) {
@@ -698,7 +793,7 @@ void GetShapeModelParams(
     angleStep = impl->params_.angleStep;
     scaleMin = impl->params_.scaleMin;
     scaleMax = impl->params_.scaleMax;
-    scaleStep = 0;  // Not stored currently
+    scaleStep = impl->params_.scaleStep;
     metric = MetricToString(impl->params_.metric);
 }
 
@@ -754,7 +849,7 @@ void WriteShapeModel(
 
     // Magic number and version
     const uint32_t MAGIC = 0x4D495351;  // "QISM"
-    const uint32_t VERSION = 3;
+    const uint32_t VERSION = 4;
     writer.Write(MAGIC);
     writer.Write(VERSION);
 
@@ -775,6 +870,7 @@ void WriteShapeModel(
     writer.Write(impl->params_.angleStep);
     writer.Write(impl->params_.scaleMin);
     writer.Write(impl->params_.scaleMax);
+    writer.Write(impl->params_.scaleStep);
     writer.Write(static_cast<int32_t>(impl->params_.polarity));
 
     // Origin and template size
@@ -833,7 +929,7 @@ void ReadShapeModel(
     }
 
     uint32_t version = reader.Read<uint32_t>();
-    if (version < 1 || version > 3) {
+    if (version < 1 || version > 4) {
         throw std::runtime_error("Unsupported shape model version");
     }
 
@@ -857,6 +953,11 @@ void ReadShapeModel(
         impl->params_.angleStep = reader.Read<double>();
         impl->params_.scaleMin = reader.Read<double>();
         impl->params_.scaleMax = reader.Read<double>();
+        if (version >= 4) {
+            impl->params_.scaleStep = reader.Read<double>();
+        } else {
+            impl->params_.scaleStep = 0.0;
+        }
         impl->params_.polarity = static_cast<MatchPolarity>(reader.Read<int32_t>());
     } else {
         // Legacy v1/v2 format
@@ -879,6 +980,7 @@ void ReadShapeModel(
         impl->params_.angleExtent = reader.Read<double>();
         impl->params_.scaleMin = reader.Read<double>();
         impl->params_.scaleMax = reader.Read<double>();
+        impl->params_.scaleStep = 0.0;
 
         bool optimizeModel = reader.Read<bool>();
         (void)reader.Read<int32_t>();  // maxModelPoints
@@ -936,6 +1038,7 @@ void ClearShapeModel(ShapeModel& model)
 {
     if (model.Impl()) {
         model.Impl()->levels_.clear();
+        model.Impl()->scaledModels_.clear();
         model.Impl()->valid_ = false;
     }
 }
@@ -1035,6 +1138,21 @@ void InspectShapeModel(
             data[py * stride + px] = 255;
         }
     }
+}
+
+void SetShapeModelDebugCreate(ShapeModel& model, bool enable)
+{
+    if (model.Impl()) {
+        model.Impl()->timingParams_.debugCreateModel = enable;
+    }
+    g_debugCreateModel = enable;
+}
+
+void SetShapeModelDebugCreateGlobal(bool enable)
+{
+    g_debugCreateModel = enable;
+    std::printf("[ShapeModel] debugCreateModel=%d\n", enable ? 1 : 0);
+    std::fflush(stdout);
 }
 
 } // namespace Qi::Vision::Matching

@@ -223,6 +223,80 @@ void CreateScaledShapeModel(
     double minContrast
 );
 
+/**
+ * @brief Create a shape model with scale search (isotropic) from ROI
+ *
+ * Equivalent to Halcon's create_scaled_shape_model operator with ROI.
+ *
+ * @param templateImage Template image
+ * @param roi           Rectangular ROI for model creation
+ * @param model         [out] Created shape model handle
+ * @param numLevels     Number of pyramid levels (0 = auto)
+ * @param angleStart    Smallest rotation angle [rad]
+ * @param angleExtent   Extent of rotation angles [rad]
+ * @param angleStep     Step length of angles [rad] (0 = auto)
+ * @param scaleMin      Minimum scale factor
+ * @param scaleMax      Maximum scale factor
+ * @param scaleStep     Scale step (0 = auto)
+ * @param optimization  Point reduction mode
+ * @param metric        Match metric
+ * @param contrast      Threshold for edge extraction
+ * @param minContrast   Minimum contrast in search images
+ */
+void CreateScaledShapeModel(
+    const QImage& templateImage,
+    const Rect2i& roi,
+    ShapeModel& model,
+    int32_t numLevels,
+    double angleStart,
+    double angleExtent,
+    double angleStep,
+    double scaleMin,
+    double scaleMax,
+    double scaleStep,
+    const std::string& optimization,
+    const std::string& metric,
+    const std::string& contrast,
+    double minContrast
+);
+
+/**
+ * @brief Create a shape model with scale search (isotropic) from QRegion
+ *
+ * Equivalent to Halcon's create_scaled_shape_model operator with region mask.
+ *
+ * @param templateImage Template image
+ * @param region        Region mask for model creation
+ * @param model         [out] Created shape model handle
+ * @param numLevels     Number of pyramid levels (0 = auto)
+ * @param angleStart    Smallest rotation angle [rad]
+ * @param angleExtent   Extent of rotation angles [rad]
+ * @param angleStep     Step length of angles [rad] (0 = auto)
+ * @param scaleMin      Minimum scale factor
+ * @param scaleMax      Maximum scale factor
+ * @param scaleStep     Scale step (0 = auto)
+ * @param optimization  Point reduction mode
+ * @param metric        Match metric
+ * @param contrast      Threshold for edge extraction
+ * @param minContrast   Minimum contrast in search images
+ */
+void CreateScaledShapeModel(
+    const QImage& templateImage,
+    const QRegion& region,
+    ShapeModel& model,
+    int32_t numLevels,
+    double angleStart,
+    double angleExtent,
+    double angleStep,
+    double scaleMin,
+    double scaleMax,
+    double scaleStep,
+    const std::string& optimization,
+    const std::string& metric,
+    const std::string& contrast,
+    double minContrast
+);
+
 // =============================================================================
 // Model Search Functions
 // =============================================================================
@@ -495,6 +569,18 @@ void InspectShapeModel(
     QImage& contrastImage,
     int32_t& numPoints
 );
+
+/**
+ * @brief Enable/disable model creation debug output
+ *
+ * Prints auto-contrast statistics and stage point counts.
+ */
+void SetShapeModelDebugCreate(ShapeModel& model, bool enable);
+
+/**
+ * @brief Enable/disable model creation debug output for newly created models
+ */
+void SetShapeModelDebugCreateGlobal(bool enable);
 
 // =============================================================================
 // Helper: Convert degrees to radians

@@ -14,6 +14,8 @@
 #include <QiVision/Color/ColorConvert.h>
 #include <QiVision/Matching/ShapeModel.h>
 #include <QiVision/Matching/MatchTypes.h>
+#include <QiVision/Segment/Segment.h>
+#include <QiVision/Filter/Filter.h>
 #include <QiVision/IO/ImageIO.h>
 #include <QiVision/Platform/Timer.h>
 #include <QiVision/Platform/FileIO.h>
@@ -89,8 +91,8 @@ int main(int argc, char* argv[]) {
     // Configuration
     // =========================================================================
     std::string dataDir = "tests/data/halcon_images/rings/";
-    double scaleMin = 0.8;
-    double scaleMax = 1.2;
+    double scaleMin = 0.5;
+    double scaleMax = 1.5;
 
     if (argc > 1) {
         dataDir = argv[1];
@@ -107,6 +109,8 @@ int main(int argc, char* argv[]) {
     std::cout << "Folder: " << dataDir << std::endl;
     std::cout << "Scale range: [" << scaleMin << ", " << scaleMax << "]" << std::endl;
     std::cout << "Controls: Press 'q' or ESC to quit" << std::endl;
+    std::string outputDir = "tests/output/shape_debug/";
+    fs::create_directories(outputDir);
 
     // Get all image files
     std::vector<std::string> imageFiles = GetImageFiles(dataDir);
@@ -152,18 +156,27 @@ int main(int argc, char* argv[]) {
     std::cout << "   Selected ROI: (" << roi.x << ", " << roi.y
               << ", " << roi.width << ", " << roi.height << ")" << std::endl;
 
-    // Create shape model
+    // Create scaled shape model (smoothed template + auto params -> manual hysteresis + min size)
     std::cout << "\n3. Creating shape model..." << std::endl;
     timer.Start();
 
     ShapeModel model;
-    CreateShapeModel(
-        templateGray, roi, model,
+    SetShapeModelDebugCreateGlobal(true);
+    QRegion roiRegion = QRegion::Rectangle(roi.x, roi.y, roi.width, roi.height);
+
+    QImage templateSmooth;
+    Filter::GaussFilter(templateGray, templateSmooth, 0.7);
+
+    std::string contrastParam = "auto_contrast_hyst";
+
+    CreateScaledShapeModel(
+        templateSmooth, roiRegion, model,
         4,                      // numLevels
-        0, RAD(360), 0,         // angleStart, angleExtent, angleStep (auto)
-        "auto",                 // optimization
+        0, RAD(360), RAD(5),    // angleStart, angleExtent, angleStep
+        scaleMin, scaleMax, 0.05,  // scale range, scaleStep
+        "point_reduction_high", // optimization
         "use_polarity",         // metric
-        "auto", 10              // contrast, minContrast
+        contrastParam, 10.0  // contrast, minContrast
     );
 
     if (!model.IsValid()) {
@@ -188,6 +201,13 @@ int main(int argc, char* argv[]) {
     win.SetTitle("Template with ROI");
     win.DispImage(roiVis);
     win.WaitKey(1000);
+    WriteImage(roiVis, outputDir + "template_roi.png");
+
+    // Dump model contrast image for inspection
+    QImage contrastImage;
+    int32_t numPoints = 0;
+    InspectShapeModel(model, 0, contrastImage, numPoints);
+    WriteImage(contrastImage, outputDir + "model_contrast_level0.png");
 
     // Search in all images
     std::cout << "\n4. Searching in " << imageFiles.size() << " images with scale ["
@@ -211,8 +231,8 @@ int main(int argc, char* argv[]) {
         FindScaledShapeModel(searchGray, model,
                              0, RAD(360),           // search angle range
                              scaleMin, scaleMax,    // scale range
-                             0.5, 10, 0.5,          // minScore, numMatches, maxOverlap
-                             "least_squares", 0, 0.9,  // subPixel, numLevels, greediness
+                             0.9, 1, 0.5,           // minScore, numMatches, maxOverlap
+                             "least_squares", 0, 0.8,  // subPixel, numLevels, greediness
                              rows, cols, angles, scales, scores);
         double searchTime = timer.ElapsedMs();
         totalTime += searchTime;
@@ -271,6 +291,11 @@ int main(int argc, char* argv[]) {
 
         win.SetTitle(title);
         win.DispImage(colorImg);
+
+        std::ostringstream outName;
+        outName << outputDir << "result_" << std::setw(2) << std::setfill('0') << (i + 1)
+                << "_" << imageFiles[i];
+        WriteImage(colorImg, outName.str());
 
         int32_t key = win.WaitKey(DISPLAY_INTERVAL_MS);
         if (key == 'q' || key == 'Q' || key == 27) {
