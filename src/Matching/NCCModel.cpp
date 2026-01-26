@@ -17,7 +17,6 @@
 #include "NCCModelImpl.h"
 
 #include <QiVision/Core/Exception.h>
-
 #include <algorithm>
 #include <fstream>
 #include <cmath>

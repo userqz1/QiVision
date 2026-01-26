@@ -153,8 +153,44 @@ std::vector<MatchResult> NCCModelImpl::CoarseSearch(
         }
     }
 
+    auto computeOriginOffset = [&](int32_t angleIdx, const RotatedTemplate& rotatedTemplate,
+                                   double& outX, double& outY) {
+        double angle = searchAngles_[angleIdx];
+        double cosA = std::cos(angle);
+        double sinA = std::sin(angle);
+
+        double levelCenterX = modelLevel.width * 0.5;
+        double levelCenterY = modelLevel.height * 0.5;
+        double originLevelX = origin_.x * modelLevel.scale;
+        double originLevelY = origin_.y * modelLevel.scale;
+
+        double dx = originLevelX - levelCenterX;
+        double dy = originLevelY - levelCenterY;
+
+        double rotDx = cosA * dx - sinA * dy;
+        double rotDy = sinA * dx + cosA * dy;
+
+        outX = rotatedTemplate.offsetX + rotDx;
+        outY = rotatedTemplate.offsetY + rotDy;
+    };
+
+    // Use smallest rotated template size to avoid missing valid positions
+    int32_t minRotWidth = modelLevel.width;
+    int32_t minRotHeight = modelLevel.height;
+    for (int32_t angleIdx : angleIndices) {
+        const auto& rotatedTemplate = rotatedTemplates_[level][angleIdx];
+        if (!rotatedTemplate.IsValid()) {
+            continue;
+        }
+        minRotWidth = std::min(minRotWidth, rotatedTemplate.width);
+        minRotHeight = std::min(minRotHeight, rotatedTemplate.height);
+    }
+    searchEndX = imgWidth - minRotWidth;
+    searchEndY = imgHeight - minRotHeight;
+
     // Minimum score for coarse level (lower than final threshold)
-    double coarseMinScore = params.minScore * 0.5;
+    // Reference: DennisLiu uses 0.9^level decay
+    double coarseMinScore = params.minScore * 0.7;  // ~70% of target
 
     // Search all positions and angles
     std::vector<MatchResult> localCandidates;
@@ -168,15 +204,28 @@ std::vector<MatchResult> NCCModelImpl::CoarseSearch(
         for (int32_t y = searchStartY; y <= searchEndY; y += step) {
             for (int32_t x = searchStartX; x <= searchEndX; x += step) {
                 for (int32_t angleIdx : angleIndices) {
+                    const auto& rotatedTemplate = rotatedTemplates_[level][angleIdx];
+                    if (!rotatedTemplate.IsValid()) {
+                        continue;
+                    }
+                    if (x + rotatedTemplate.width > imgWidth ||
+                        y + rotatedTemplate.height > imgHeight) {
+                        continue;
+                    }
+
                     double score = ComputeNCCScore(integralImage,
                                                    imageLevel.data.data(),
                                                    imgWidth, imgHeight,
                                                    x, y, angleIdx, level);
 
                     if (score >= coarseMinScore) {
+                        double originOffsetX = 0.0;
+                        double originOffsetY = 0.0;
+                        computeOriginOffset(angleIdx, rotatedTemplate, originOffsetX, originOffsetY);
+
                         MatchResult match;
-                        match.x = x + origin_.x / modelLevel.scale;
-                        match.y = y + origin_.y / modelLevel.scale;
+                        match.x = x + originOffsetX;
+                        match.y = y + originOffsetY;
                         match.angle = searchAngles_[angleIdx];
                         match.score = score;
                         match.pyramidLevel = level;
@@ -236,17 +285,38 @@ std::vector<MatchResult> NCCModelImpl::SearchLevel(
     int32_t imgHeight = imageLevel.height;
 
     // Refinement search radius (pixels)
-    int32_t posRadius = 2;
-    int32_t angleRadius = 1;  // Angle indices
+    int32_t posRadius = 4;    // Larger for rotation
+    int32_t angleRadius = 2;  // Angle indices
 
-    // Minimum score for this level
-    double minScore = (level == 0) ? params.minScore : params.minScore * 0.7;
+    // Minimum score for this level (90% decay per level)
+    double minScore = (level == 0) ? params.minScore : params.minScore * 0.85;
+
+    auto computeOriginOffset = [&](int32_t angleIdx, const RotatedTemplate& rotatedTemplate,
+                                   double& outX, double& outY) {
+        double angle = searchAngles_[angleIdx];
+        double cosA = std::cos(angle);
+        double sinA = std::sin(angle);
+
+        double levelCenterX = modelLevel.width * 0.5;
+        double levelCenterY = modelLevel.height * 0.5;
+        double originLevelX = origin_.x * modelLevel.scale;
+        double originLevelY = origin_.y * modelLevel.scale;
+
+        double dx = originLevelX - levelCenterX;
+        double dy = originLevelY - levelCenterY;
+
+        double rotDx = cosA * dx - sinA * dy;
+        double rotDy = sinA * dx + cosA * dy;
+
+        outX = rotatedTemplate.offsetX + rotDx;
+        outY = rotatedTemplate.offsetY + rotDy;
+    };
 
     for (const auto& candidate : candidates) {
         // Scale position from previous level
         double scale = levels_[level].scale / levels_[level + 1].scale;
-        int32_t centerX = static_cast<int32_t>((candidate.x - origin_.x / levels_[level + 1].scale) * scale);
-        int32_t centerY = static_cast<int32_t>((candidate.y - origin_.y / levels_[level + 1].scale) * scale);
+        double originX = candidate.x * scale;
+        double originY = candidate.y * scale;
 
         // Get candidate angle index
         int32_t centerAngleIdx = GetAngleIndex(candidate.angle);
@@ -256,16 +326,27 @@ std::vector<MatchResult> NCCModelImpl::SearchLevel(
         best.score = -1.0;
 
         for (int32_t dy = -posRadius; dy <= posRadius; ++dy) {
-            int32_t y = centerY + dy;
-            if (y < 0 || y + modelLevel.height > imgHeight) continue;
-
             for (int32_t dx = -posRadius; dx <= posRadius; ++dx) {
-                int32_t x = centerX + dx;
-                if (x < 0 || x + modelLevel.width > imgWidth) continue;
-
                 for (int32_t da = -angleRadius; da <= angleRadius; ++da) {
                     int32_t angleIdx = centerAngleIdx + da;
                     if (angleIdx < 0 || angleIdx >= static_cast<int32_t>(searchAngles_.size())) {
+                        continue;
+                    }
+
+                    const auto& rotatedTemplate = rotatedTemplates_[level][angleIdx];
+                    if (!rotatedTemplate.IsValid()) {
+                        continue;
+                    }
+
+                    double originOffsetX = 0.0;
+                    double originOffsetY = 0.0;
+                    computeOriginOffset(angleIdx, rotatedTemplate, originOffsetX, originOffsetY);
+
+                    int32_t x = static_cast<int32_t>(std::round(originX - originOffsetX)) + dx;
+                    int32_t y = static_cast<int32_t>(std::round(originY - originOffsetY)) + dy;
+                    if (x < 0 || y < 0 ||
+                        x + rotatedTemplate.width > imgWidth ||
+                        y + rotatedTemplate.height > imgHeight) {
                         continue;
                     }
 
@@ -275,8 +356,8 @@ std::vector<MatchResult> NCCModelImpl::SearchLevel(
                                                    x, y, angleIdx, level);
 
                     if (score > best.score) {
-                        best.x = x + origin_.x / modelLevel.scale;
-                        best.y = y + origin_.y / modelLevel.scale;
+                        best.x = x + originOffsetX;
+                        best.y = y + originOffsetY;
                         best.angle = searchAngles_[angleIdx];
                         best.score = score;
                         best.pyramidLevel = level;

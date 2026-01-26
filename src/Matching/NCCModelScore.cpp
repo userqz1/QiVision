@@ -66,17 +66,65 @@ double NCCModelImpl::ComputeNCCScore(
         return -1.0;
     }
 
-    // Get image region statistics using integral image
-    double imageSum = integralImage.GetRectSum(x, y, x + tWidth - 1, y + tHeight - 1);
-    double imageSumSq = integralImage.GetRectSumSquared(x, y, x + tWidth - 1, y + tHeight - 1);
+    // For rotated templates, we need to compute image statistics only for valid pixels
+    // (integral image gives wrong result for rotated bounding box with empty corners)
 
+    const float* templateData = rotatedTemplate.data.data();
     int32_t n = rotatedTemplate.numPixels;
+
     if (n <= 1) {
         return -1.0;
     }
 
-    double imageMean = imageSum / n;
-    double imageVar = imageSumSq / n - imageMean * imageMean;
+    // Template statistics (precomputed)
+    double templateStddev = rotatedTemplate.stddev;
+    if (templateStddev < 1e-6) {
+        return 0.0;
+    }
+
+    // Compute image statistics and cross-correlation in single pass
+    // Use mask to identify valid pixels (rotated templates always have mask)
+    double imageSum = 0.0;
+    double imageSumSq = 0.0;
+    double crossCorr = 0.0;
+    int32_t validCount = 0;
+
+    // Rotated templates always have mask now
+    if (!rotatedTemplate.mask.empty()) {
+        const uint8_t* mask = rotatedTemplate.mask.data();
+
+        for (int32_t ty = 0; ty < tHeight; ++ty) {
+            for (int32_t tx = 0; tx < tWidth; ++tx) {
+                if (mask[ty * tWidth + tx] > 0) {
+                    int32_t imgX = x + tx;
+                    int32_t imgY = y + ty;
+                    float iVal = imageData[imgY * imageWidth + imgX];
+                    imageSum += iVal;
+                    imageSumSq += iVal * iVal;
+                    validCount++;
+                }
+            }
+        }
+    } else {
+        // Fallback for level 0 unrotated template (no mask)
+        for (int32_t ty = 0; ty < tHeight; ++ty) {
+            for (int32_t tx = 0; tx < tWidth; ++tx) {
+                int32_t imgX = x + tx;
+                int32_t imgY = y + ty;
+                float iVal = imageData[imgY * imageWidth + imgX];
+                imageSum += iVal;
+                imageSumSq += iVal * iVal;
+                validCount++;
+            }
+        }
+    }
+
+    if (validCount <= 1) {
+        return -1.0;
+    }
+
+    double imageMean = imageSum / validCount;
+    double imageVar = imageSumSq / validCount - imageMean * imageMean;
 
     // Handle low variance (flat region)
     if (imageVar < 1e-6) {
@@ -85,19 +133,9 @@ double NCCModelImpl::ComputeNCCScore(
 
     double imageStddev = std::sqrt(imageVar);
 
-    // Template statistics (precomputed)
-    double templateStddev = rotatedTemplate.stddev;
-
-    if (templateStddev < 1e-6) {
-        return 0.0;
-    }
-
-    // Compute cross-correlation: sum((T - mean_T) * (I - mean_I))
-    double crossCorr = 0.0;
-    const float* templateData = rotatedTemplate.data.data();
-
-    if (hasMask_ && !rotatedTemplate.mask.empty()) {
-        // Masked NCC
+    // Second pass: compute cross-correlation with correct mean
+    crossCorr = 0.0;
+    if (!rotatedTemplate.mask.empty()) {
         const uint8_t* mask = rotatedTemplate.mask.data();
 
         for (int32_t ty = 0; ty < tHeight; ++ty) {
@@ -114,7 +152,6 @@ double NCCModelImpl::ComputeNCCScore(
             }
         }
     } else {
-        // Full template NCC
         for (int32_t ty = 0; ty < tHeight; ++ty) {
             for (int32_t tx = 0; tx < tWidth; ++tx) {
                 int32_t imgX = x + tx;
@@ -127,6 +164,9 @@ double NCCModelImpl::ComputeNCCScore(
             }
         }
     }
+
+    // Use validCount for normalization
+    n = validCount;
 
     // Compute NCC
     double denominator = n * templateStddev * imageStddev;
@@ -184,10 +224,39 @@ void NCCModelImpl::RefinePosition(
     // Sample 3x3 grid around current position
 
     const auto& modelLevel = levels_[level];
-
-    int32_t cx = static_cast<int32_t>(match.x - origin_.x / modelLevel.scale);
-    int32_t cy = static_cast<int32_t>(match.y - origin_.y / modelLevel.scale);
     int32_t angleIdx = GetAngleIndex(match.angle);
+    const auto& rotatedTemplate = rotatedTemplates_[level][angleIdx];
+    if (!rotatedTemplate.IsValid()) {
+        return;
+    }
+
+    auto computeOriginOffset = [&](int32_t aIdx, const RotatedTemplate& tpl,
+                                   double& outX, double& outY) {
+        double angle = searchAngles_[aIdx];
+        double cosA = std::cos(angle);
+        double sinA = std::sin(angle);
+
+        double levelCenterX = modelLevel.width * 0.5;
+        double levelCenterY = modelLevel.height * 0.5;
+        double originLevelX = origin_.x * modelLevel.scale;
+        double originLevelY = origin_.y * modelLevel.scale;
+
+        double dx = originLevelX - levelCenterX;
+        double dy = originLevelY - levelCenterY;
+
+        double rotDx = cosA * dx - sinA * dy;
+        double rotDy = sinA * dx + cosA * dy;
+
+        outX = tpl.offsetX + rotDx;
+        outY = tpl.offsetY + rotDy;
+    };
+
+    double originOffsetX = 0.0;
+    double originOffsetY = 0.0;
+    computeOriginOffset(angleIdx, rotatedTemplate, originOffsetX, originOffsetY);
+
+    int32_t cx = static_cast<int32_t>(std::round(match.x - originOffsetX));
+    int32_t cy = static_cast<int32_t>(std::round(match.y - originOffsetY));
 
     // Sample scores in 3x3 neighborhood
     double scores[3][3];
@@ -199,8 +268,8 @@ void NCCModelImpl::RefinePosition(
             int32_t y = cy + dy;
 
             if (x >= 0 && y >= 0 &&
-                x + modelLevel.width <= imageWidth &&
-                y + modelLevel.height <= imageHeight) {
+                x + rotatedTemplate.width <= imageWidth &&
+                y + rotatedTemplate.height <= imageHeight) {
 
                 scores[dy + 1][dx + 1] = ComputeNCCScore(
                     integralImage, imageData, imageWidth, imageHeight,
@@ -250,20 +319,51 @@ void NCCModelImpl::RefinePosition(
 
     // Parabolic refinement in angle
     if (angleIdx > 0 && angleIdx < static_cast<int32_t>(searchAngles_.size()) - 1) {
-        double sLeft = ComputeNCCScore(integralImage, imageData, imageWidth, imageHeight,
-                                        cx, cy, angleIdx - 1, level);
+        const auto& leftTemplate = rotatedTemplates_[level][angleIdx - 1];
+        const auto& rightTemplate = rotatedTemplates_[level][angleIdx + 1];
+
+        double sLeft = -1.0;
+        double sRight = -1.0;
+
+        if (leftTemplate.IsValid()) {
+            double leftOriginOffsetX = 0.0;
+            double leftOriginOffsetY = 0.0;
+            computeOriginOffset(angleIdx - 1, leftTemplate, leftOriginOffsetX, leftOriginOffsetY);
+            int32_t leftX = static_cast<int32_t>(std::round(match.x - leftOriginOffsetX));
+            int32_t leftY = static_cast<int32_t>(std::round(match.y - leftOriginOffsetY));
+            if (leftX >= 0 && leftY >= 0 &&
+                leftX + leftTemplate.width <= imageWidth &&
+                leftY + leftTemplate.height <= imageHeight) {
+                sLeft = ComputeNCCScore(integralImage, imageData, imageWidth, imageHeight,
+                                         leftX, leftY, angleIdx - 1, level);
+            }
+        }
+
         double sCenter = match.score;
-        double sRight = ComputeNCCScore(integralImage, imageData, imageWidth, imageHeight,
-                                         cx, cy, angleIdx + 1, level);
+        if (rightTemplate.IsValid()) {
+            double rightOriginOffsetX = 0.0;
+            double rightOriginOffsetY = 0.0;
+            computeOriginOffset(angleIdx + 1, rightTemplate, rightOriginOffsetX, rightOriginOffsetY);
+            int32_t rightX = static_cast<int32_t>(std::round(match.x - rightOriginOffsetX));
+            int32_t rightY = static_cast<int32_t>(std::round(match.y - rightOriginOffsetY));
+            if (rightX >= 0 && rightY >= 0 &&
+                rightX + rightTemplate.width <= imageWidth &&
+                rightY + rightTemplate.height <= imageHeight) {
+                sRight = ComputeNCCScore(integralImage, imageData, imageWidth, imageHeight,
+                                          rightX, rightY, angleIdx + 1, level);
+            }
+        }
 
-        double denom = 2.0 * (sLeft - 2.0 * sCenter + sRight);
-        if (std::abs(denom) > 1e-10) {
-            double subAngle = (sLeft - sRight) / denom;
-            subAngle = std::clamp(subAngle, -0.5, 0.5);
+        if (sLeft >= 0.0 && sRight >= 0.0) {
+            double denom = 2.0 * (sLeft - 2.0 * sCenter + sRight);
+            if (std::abs(denom) > 1e-10) {
+                double subAngle = (sLeft - sRight) / denom;
+                subAngle = std::clamp(subAngle, -0.5, 0.5);
 
-            double angleStep = (searchAngles_.size() > 1) ?
-                (searchAngles_[1] - searchAngles_[0]) : 0.0;
-            match.angle += subAngle * angleStep;
+                double angleStep = (searchAngles_.size() > 1) ?
+                    (searchAngles_[1] - searchAngles_[0]) : 0.0;
+                match.angle += subAngle * angleStep;
+            }
         }
     }
 }

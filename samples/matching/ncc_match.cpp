@@ -33,7 +33,7 @@ int main() {
     std::cout << "=== NCC Model Batch Demo ===\n";
 
     // 1. Get all images in the folder
-    std::string imageFolder = "tests/data/matching/image2";
+    std::string imageFolder = "tests/data/matching/image1";
     std::vector<std::string> imagePaths;
 
     for (const auto& entry : fs::directory_iterator(imageFolder)) {
@@ -119,7 +119,7 @@ int main() {
         model,
         4,                      // numLevels (0 = auto)
         0.0,                    // angleStart
-        0.0,                    // angleExtent (0 = no rotation search)
+        DegToRad(360.0),        // angleExtent (full rotation)
         0.0,                    // angleStep (0 = auto)
         "use_polarity"          // metric
     );
@@ -139,10 +139,14 @@ int main() {
     double angleStart, angleExtent, angleStep;
     std::string metric;
     GetNCCModelParams(model, numLevels, angleStart, angleExtent, angleStep, metric);
+    double modelOriginRow = 0.0;
+    double modelOriginCol = 0.0;
+    GetNCCModelOrigin(model, modelOriginRow, modelOriginCol);
     std::cout << "Model params: levels=" << numLevels
               << ", angles=[" << RadToDeg(angleStart) << ", " << RadToDeg(angleStart + angleExtent) << "] deg"
               << ", step=" << RadToDeg(angleStep) << " deg"
               << ", metric=" << metric << "\n";
+    std::cout << "Model origin: (" << modelOriginCol << ", " << modelOriginRow << ")\n";
 
     // 5. Match all images
     std::cout << "\n=== Matching all " << imagePaths.size() << " images ===\n\n";
@@ -182,7 +186,7 @@ int main() {
             gray,
             model,
             0.0,                    // angleStart
-            0.0,                    // angleExtent (0 = use model range)
+            DegToRad(360.0),        // angleExtent (full rotation)
             0.9,                    // minScore
             10,                     // numMatches (0 = all)
             0.5,                    // maxOverlap
@@ -202,9 +206,33 @@ int main() {
                   << rows.size() << " match(es), "
                   << searchTime << " ms\n";
 
+        if (rows.empty()) {
+            std::vector<double> debugRows, debugCols, debugAngles, debugScores;
+            FindNCCModel(
+                gray,
+                model,
+                0.0,
+                DegToRad(360.0),
+                0.0,                // debug: no threshold
+                1,                  // best match only
+                0.5,
+                "interpolation",
+                0,
+                debugRows, debugCols, debugAngles, debugScores
+            );
+
+            if (!debugRows.empty()) {
+                std::cout << "    Best (below threshold): "
+                          << "pos=(" << debugCols[0] << ", " << debugRows[0] << ") "
+                          << "angle=" << RadToDeg(debugAngles[0]) << " deg "
+                          << "score=" << (debugScores[0] * 100) << "%\n";
+            }
+        }
+
         for (size_t i = 0; i < rows.size(); ++i) {
             std::cout << "    Match " << (i + 1) << ": "
                       << "pos=(" << cols[i] << ", " << rows[i] << ") "
+                      << "angle=" << RadToDeg(angles[i]) << " deg "
                       << "score=" << (scores[i] * 100) << "%\n";
         }
 
@@ -227,11 +255,18 @@ int main() {
             int32_t cy = static_cast<int32_t>(rows[i]);
 
             // Draw cross at match center
-            Draw::Cross(display, Point2d(cols[i], rows[i]), 20, Scalar(0, 255, 0), 2);
+            Draw::Cross(display, Point2d(cols[i], rows[i]), 20, angles[i], Scalar(0, 255, 0), 2);
 
-            // Draw bounding box
-            Rect2i matchBox(cx - tw/2, cy - th/2, tw, th);
-            Draw::Rectangle(display, matchBox, Scalar(0, 255, 0), 1);
+            // Draw rotated bounding box (account for model origin)
+            double dx = (tw * 0.5) - modelOriginCol;
+            double dy = (th * 0.5) - modelOriginRow;
+            double cosA = std::cos(angles[i]);
+            double sinA = std::sin(angles[i]);
+            Point2d rectCenter{
+                cols[i] + cosA * dx - sinA * dy,
+                rows[i] + sinA * dx + cosA * dy
+            };
+            Draw::RotatedRectangle(display, rectCenter, tw, th, angles[i], Scalar(0, 255, 0), 1);
         }
 
         // Show result

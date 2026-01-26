@@ -401,8 +401,8 @@ RotatedTemplate NCCModelImpl::RotateTemplate(const NCCLevelModel& level, double 
     if (std::abs(angle) < 1e-6) {
         result.width = level.width;
         result.height = level.height;
-        result.offsetX = 0;
-        result.offsetY = 0;
+        result.offsetX = static_cast<int32_t>(level.width * 0.5);
+        result.offsetY = static_cast<int32_t>(level.height * 0.5);
         result.data = level.zeroMean;
         result.mask = level.mask;
         result.mean = level.mean;
@@ -444,10 +444,9 @@ RotatedTemplate NCCModelImpl::RotateTemplate(const NCCLevelModel& level, double 
     result.offsetY = static_cast<int32_t>(-minY);
 
     // Allocate rotated template
+    // Always create mask for rotated templates to mark valid pixels
     result.data.resize(result.width * result.height, 0.0f);
-    if (hasMask_) {
-        result.mask.resize(result.width * result.height, 0);
-    }
+    result.mask.resize(result.width * result.height, 0);  // 0 = invalid, 255 = valid
 
     // Rotate using inverse mapping
     double invCosA = cosA;   // cos(-angle) = cos(angle)
@@ -477,10 +476,10 @@ RotatedTemplate NCCModelImpl::RotateTemplate(const NCCLevelModel& level, double 
                 double fx = srcX - x0;
                 double fy = srcY - y0;
 
-                double v00 = level.zeroMean[y0 * level.width + x0];
-                double v10 = level.zeroMean[y0 * level.width + x0 + 1];
-                double v01 = level.zeroMean[(y0 + 1) * level.width + x0];
-                double v11 = level.zeroMean[(y0 + 1) * level.width + x0 + 1];
+                double v00 = level.data[y0 * level.width + x0];
+                double v10 = level.data[y0 * level.width + x0 + 1];
+                double v01 = level.data[(y0 + 1) * level.width + x0];
+                double v11 = level.data[(y0 + 1) * level.width + x0 + 1];
 
                 double val = v00 * (1 - fx) * (1 - fy) +
                              v10 * fx * (1 - fy) +
@@ -489,16 +488,19 @@ RotatedTemplate NCCModelImpl::RotateTemplate(const NCCLevelModel& level, double 
 
                 result.data[y * result.width + x] = static_cast<float>(val);
 
-                // Handle mask
+                // Mark as valid pixel in mask
                 if (hasMask_) {
+                    // Use source mask
                     uint8_t m = level.mask[y0 * level.width + x0];
                     result.mask[y * result.width + x] = m;
                     if (m > 0) {
-                        sum += val * val;
+                        sum += val;
                         count++;
                     }
                 } else {
-                    sum += val * val;
+                    // No source mask - all rotated pixels are valid
+                    result.mask[y * result.width + x] = 255;
+                    sum += val;
                     count++;
                 }
             }
@@ -506,8 +508,25 @@ RotatedTemplate NCCModelImpl::RotateTemplate(const NCCLevelModel& level, double 
     }
 
     result.numPixels = count;
-    result.mean = 0.0;  // Already zero-mean
-    result.stddev = (count > 0) ? std::sqrt(sum / count) : 0.0;
+    result.mean = (count > 0) ? (sum / count) : 0.0;
+
+    // Convert to zero-mean and compute stddev
+    double sumSq = 0.0;
+    if (count > 0) {
+        for (int32_t y = 0; y < result.height; ++y) {
+            for (int32_t x = 0; x < result.width; ++x) {
+                if (result.mask[y * result.width + x] > 0) {
+                    double v = result.data[y * result.width + x] - result.mean;
+                    result.data[y * result.width + x] = static_cast<float>(v);
+                    sumSq += v * v;
+                } else {
+                    result.data[y * result.width + x] = 0.0f;
+                }
+            }
+        }
+    }
+
+    result.stddev = (count > 0) ? std::sqrt(sumSq / count) : 0.0;
 
     return result;
 }
