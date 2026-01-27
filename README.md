@@ -68,7 +68,7 @@ Tests    █████████████████░░░ 87%   (261
 
 | 模块 | 状态 | 说明 |
 |------|:----:|------|
-| **Matching** | ✅ | 形状模板匹配，支持旋转 0-360°，缩放 |
+| **Matching** | ✅ | ShapeModel (形状匹配) + NCCModel (灰度匹配)，支持旋转、缩放 |
 | **Measure** | ✅ | 卡尺测量，矩形/弧形句柄，< 0.03px 精度 |
 | **IO** | ✅ | 图像读写，PNG/JPEG/BMP/RAW，16位支持 |
 | **Color** | ✅ | 颜色转换（HSV/Lab/YCrCb）、Bayer 去马赛克、PCA |
@@ -78,9 +78,8 @@ Tests    █████████████████░░░ 87%   (261
 
 | 模块 | 优先级 | 状态 |
 |------|:------:|:----:|
-| NCCModel | P1 | 设计中 |
 | ComponentModel | P1 | 设计中 |
-| Blob 分析 | P1 | 计划中 |
+| Blob 分析 | P1 | 进行中 |
 | OCR | P1 | 计划中 |
 | Barcode | P1 | 计划中 |
 | 相机标定 | P2 | 计划中 |
@@ -277,7 +276,7 @@ target_link_libraries(your_app PRIVATE QiVision)
 │   QImage (Domain), QRegion (RLE), QContour (XLD), QMatrix       │
 ├─────────────────────────────────────────────────────────────────┤
 │ Feature Layer                                                    │
-│   Matching: ShapeModel ✓, NCCModel, ComponentModel              │
+│   Matching: ShapeModel ✓, NCCModel ✓, ComponentModel            │
 │   Measure:  Caliper ✓, CaliperArray ✓, Metrology                │
 │   IO:       ReadImage ✓, WriteImage ✓, Sequence ✓               │
 │   Color:    ColorConvert ✓, Decompose ✓, CfaToRgb ✓             │

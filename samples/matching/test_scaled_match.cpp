@@ -128,12 +128,12 @@ int main(int argc, char* argv[]) {
 
     // Load first image as template
     std::cout << "\n1. Loading template: " << imageFiles[0] << std::endl;
-    QImage templateImg = QImage::FromFile(dataDir + imageFiles[0]);
-    if (!templateImg.IsValid()) {
+    QImage templateGray;
+    ReadImageGray(dataDir + imageFiles[0], templateGray);
+    if (templateGray.Empty()) {
         std::cerr << "Failed to load template!" << std::endl;
         return 1;
     }
-    QImage templateGray = templateImg.ToGray();
     std::cout << "   Size: " << templateGray.Width() << " x " << templateGray.Height() << std::endl;
 
     // Interactive ROI selection
@@ -217,12 +217,12 @@ int main(int argc, char* argv[]) {
     double totalTime = 0;
 
     for (size_t i = 0; i < imageFiles.size(); ++i) {
-        QImage searchImg = QImage::FromFile(dataDir + imageFiles[i]);
-        if (!searchImg.IsValid()) {
+        QImage searchGray;
+        ReadImageGray(dataDir + imageFiles[i], searchGray);
+        if (searchGray.Empty()) {
             std::cerr << "   [" << (i+1) << "] Failed to load: " << imageFiles[i] << std::endl;
             continue;
         }
-        QImage searchGray = searchImg.ToGray();
 
         std::vector<double> rows, cols, angles, scales, scores;
 

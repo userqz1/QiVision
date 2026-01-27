@@ -67,7 +67,7 @@ int main(int argc, char* argv[]) {
     // Convert to grayscale for processing
     QImage gray;
     if (image.Channels() == 3 || image.Channels() == 4) {
-        gray = image.ToGray();
+        Color::Rgb1ToGray(image, gray);
     } else {
         gray = image;
     }

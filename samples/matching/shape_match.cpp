@@ -61,25 +61,9 @@ std::vector<std::string> GetImageFiles(const std::string& dir) {
 // Draw bounding box for a match result
 void DrawMatchBoundingBox(QImage& colorImg, double row, double col, double angle,
                           double modelWidth, double modelHeight) {
-    double cosA = std::cos(angle);
-    double sinA = std::sin(angle);
-
-    double halfW = modelWidth / 2.0;
-    double halfH = modelHeight / 2.0;
-
-    double corners[4][2] = {
-        {-halfW, -halfH}, {halfW, -halfH},
-        {halfW, halfH}, {-halfW, halfH}
-    };
-    int32_t px[4], py[4];
-    for (int k = 0; k < 4; ++k) {
-        px[k] = static_cast<int32_t>(col + cosA * corners[k][0] - sinA * corners[k][1]);
-        py[k] = static_cast<int32_t>(row + sinA * corners[k][0] + cosA * corners[k][1]);
-    }
-    Draw::Line(colorImg, px[0], py[0], px[1], py[1], Scalar::Cyan(), 2);
-    Draw::Line(colorImg, px[1], py[1], px[2], py[2], Scalar::Cyan(), 2);
-    Draw::Line(colorImg, px[2], py[2], px[3], py[3], Scalar::Cyan(), 2);
-    Draw::Line(colorImg, px[3], py[3], px[0], py[0], Scalar::Cyan(), 2);
+    Point2d center{col, row};
+    Draw::RotatedRectangle(colorImg, center, modelWidth, modelHeight, angle,
+                           Scalar::Cyan(), 2);
 
     Draw::Cross(colorImg, Point2d{col, row}, 15, angle, Scalar::Yellow(), 2);
 }
@@ -117,12 +101,12 @@ int main(int argc, char* argv[]) {
 
     // Load first image as template
     std::cout << "\n1. Loading template: " << imageFiles[0] << std::endl;
-    QImage templateImg = QImage::FromFile(dataDir + imageFiles[0]);
-    if (!templateImg.IsValid()) {
+    QImage templateGray;
+    ReadImageGray(dataDir + imageFiles[0], templateGray);
+    if (templateGray.Empty()) {
         std::cerr << "Failed to load template!" << std::endl;
         return 1;
     }
-    QImage templateGray = templateImg.ToGray();
     std::cout << "   Size: " << templateGray.Width() << " x " << templateGray.Height() << std::endl;
 
     // Interactive ROI selection
@@ -156,7 +140,7 @@ int main(int argc, char* argv[]) {
         0, RAD(360), 0,         // angleStart, angleExtent, angleStep (auto)
         "auto",                 // optimization
         "use_polarity",         // metric
-        "auto", 10              // contrast, minContrast
+        "auto", 5              // contrast, minContrast
     );
 
     if (!model.IsValid()) {
@@ -195,12 +179,12 @@ int main(int argc, char* argv[]) {
     double totalTime = 0;
 
     for (size_t i = 0; i < imageFiles.size(); ++i) {
-        QImage searchImg = QImage::FromFile(dataDir + imageFiles[i]);
-        if (!searchImg.IsValid()) {
+        QImage searchGray;
+        ReadImageGray(dataDir + imageFiles[i], searchGray);
+        if (searchGray.Empty()) {
             std::cerr << "   [" << (i+1) << "] Failed to load: " << imageFiles[i] << std::endl;
             continue;
         }
-        QImage searchGray = searchImg.ToGray();
 
         std::vector<double> rows, cols, angles, scores;
 

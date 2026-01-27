@@ -8,6 +8,7 @@
 #include <QiVision/Display/Draw.h>
 #include <QiVision/Color/ColorConvert.h>
 #include <QiVision/Matching/ShapeModel.h>
+#include <QiVision/IO/ImageIO.h>
 #include <QiVision/Platform/Timer.h>
 #include <QiVision/GUI/Window.h>
 
@@ -18,6 +19,7 @@
 using namespace Qi::Vision;
 using namespace Qi::Vision::Matching;
 using namespace Qi::Vision::GUI;
+using namespace Qi::Vision::IO;
 
 // 颜色表
 static const Scalar kColors[] = {
@@ -45,12 +47,12 @@ int main(int argc, char* argv[]) {
     std::cout << "=== 模板创建测试 ===" << std::endl;
 
     // 加载图像
-    QImage img = QImage::FromFile(imagePath);
-    if (!img.IsValid()) {
+    QImage gray;
+    ReadImageGray(imagePath, gray);
+    if (gray.Empty()) {
         std::cerr << "加载失败: " << imagePath << std::endl;
         return 1;
     }
-    QImage gray = img.ToGray();
     std::cout << "图像: " << gray.Width() << " x " << gray.Height() << std::endl;
 
     // 创建窗口，绘制 ROI

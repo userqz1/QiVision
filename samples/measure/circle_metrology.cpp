@@ -7,6 +7,7 @@
 #include <QiVision/Display/Draw.h>
 #include <QiVision/Color/ColorConvert.h>
 #include <QiVision/Measure/Metrology.h>
+#include <QiVision/IO/ImageIO.h>
 #include <QiVision/Platform/Timer.h>
 #include <QiVision/GUI/Window.h>
 
@@ -16,21 +17,22 @@
 
 using namespace Qi::Vision;
 using namespace Qi::Vision::Measure;
+using namespace Qi::Vision::IO;
 using namespace Qi::Vision::Platform;
 using namespace Qi::Vision::GUI;
 
 int main() {
     std::string imagePath = "tests/data/halcon_images/circle_plate.png";
 
-    QImage image = QImage::FromFile(imagePath);
-    if (!image.IsValid()) {
+    QImage grayImage;
+    ReadImageGray(imagePath, grayImage);
+    if (grayImage.Empty()) {
         std::cerr << "Failed to load: " << imagePath << std::endl;
         return 1;
     }
-    QImage grayImage = image.ToGray();
 
     std::cout << "=== Metrology Demo ===" << std::endl;
-    std::cout << "Image: " << image.Width() << " x " << image.Height() << std::endl;
+    std::cout << "Image: " << grayImage.Width() << " x " << grayImage.Height() << std::endl;
 
     // 创建模型
     MetrologyModel model;
@@ -94,7 +96,7 @@ int main() {
     Draw::MetrologyModelResult(colorImg, model);
 
     // 保存结果
-    colorImg.SaveToFile("tests/output/metrology_result.png");
+    WriteImage(colorImg, "tests/output/metrology_result.png");
 
     // 显示
     Window win("Metrology Demo");

@@ -69,7 +69,7 @@ int main() {
     // Convert to grayscale if needed
     QImage firstGray;
     if (firstImage.Channels() > 1) {
-        firstGray = firstImage.ToGray();
+        Rgb1ToGray(firstImage, firstGray);
     } else {
         firstGray = firstImage;
     }
@@ -173,7 +173,7 @@ int main() {
         // Convert to grayscale
         QImage gray;
         if (searchImage.Channels() > 1) {
-            gray = searchImage.ToGray();
+            Rgb1ToGray(searchImage, gray);
         } else {
             gray = searchImage;
         }

@@ -617,6 +617,8 @@ void FindScaledShapeModel(
     pyramidParams.smoothSigma = 0.5;
     pyramidParams.minContrast = 1.0;
     pyramidParams.useNMS = true;
+    pyramidParams.extractEdgePoints = false;   // search pyramid无需边缘点
+    pyramidParams.storeDirection = false;      // 不存方向图，节省构建时间与内存
 
     AnglePyramid targetPyramid;
     if (!targetPyramid.Build(image, pyramidParams)) {

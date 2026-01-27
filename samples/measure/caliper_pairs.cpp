@@ -8,6 +8,7 @@
 #include <QiVision/Color/ColorConvert.h>
 #include <QiVision/Measure/Caliper.h>
 #include <QiVision/Measure/MeasureHandle.h>
+#include <QiVision/IO/ImageIO.h>
 #include <QiVision/GUI/Window.h>
 
 #include <iostream>
@@ -16,6 +17,7 @@
 using namespace Qi::Vision;
 using namespace Qi::Vision::Measure;
 using namespace Qi::Vision::GUI;
+using namespace Qi::Vision::IO;
 
 int main(int argc, char* argv[]) {
     std::string imagePath = "tests/data/halcon_images/circle_plate.png";
@@ -23,15 +25,15 @@ int main(int argc, char* argv[]) {
         imagePath = argv[1];
     }
 
-    QImage image = QImage::FromFile(imagePath);
-    if (!image.IsValid()) {
+    QImage gray;
+    ReadImageGray(imagePath, gray);
+    if (gray.Empty()) {
         std::cerr << "Failed to load: " << imagePath << std::endl;
         return 1;
     }
-    QImage gray = image.ToGray();
 
     std::cout << "=== Caliper Edge Pairs Demo ===" << std::endl;
-    std::cout << "Image: " << image.Width() << " x " << image.Height() << std::endl;
+    std::cout << "Image: " << gray.Width() << " x " << gray.Height() << std::endl;
 
     // Create caliper handle - horizontal across first circle
     // Circle center approx (col=210, row=420), radius approx 63
@@ -107,7 +109,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Save result
-    colorImg.SaveToFile("tests/output/caliper_pairs.png");
+    WriteImage(colorImg, "tests/output/caliper_pairs.png");
 
     // Display
     Window win("Caliper Pairs Demo");

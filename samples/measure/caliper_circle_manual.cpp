@@ -15,6 +15,7 @@
 #include <QiVision/Measure/Caliper.h>
 #include <QiVision/Measure/MeasureHandle.h>
 #include <QiVision/Internal/Fitting.h>
+#include <QiVision/IO/ImageIO.h>
 #include <QiVision/GUI/Window.h>
 
 #include <iostream>
@@ -24,19 +25,20 @@
 using namespace Qi::Vision;
 using namespace Qi::Vision::Measure;
 using namespace Qi::Vision::GUI;
+using namespace Qi::Vision::IO;
 
 int main() {
     std::string imagePath = "tests/data/halcon_images/circle_plate.png";
 
-    QImage image = QImage::FromFile(imagePath);
-    if (!image.IsValid()) {
+    QImage gray;
+    ReadImageGray(imagePath, gray);
+    if (gray.Empty()) {
         std::cerr << "Failed to load: " << imagePath << std::endl;
         return 1;
     }
-    QImage gray = image.ToGray();
 
     std::cout << "=== Manual Circle Measurement Demo ===" << std::endl;
-    std::cout << "Image: " << image.Width() << " x " << image.Height() << std::endl;
+    std::cout << "Image: " << gray.Width() << " x " << gray.Height() << std::endl;
 
     // =========================================================================
     // 圆的初始参数（大致位置）
@@ -147,7 +149,7 @@ int main() {
         Draw::MeasureRects(colorImg, calipers, cyan, 1);
 
         // 保存结果
-        colorImg.SaveToFile("tests/output/caliper_only.png");
+        WriteImage(colorImg, "tests/output/caliper_only.png");
 
         // 显示
         Window win("Manual Circle Measurement");
