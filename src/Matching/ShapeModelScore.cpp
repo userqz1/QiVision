@@ -107,6 +107,12 @@ double ShapeModelImpl::ComputeScoreAtPosition(
     const int32_t maxX = width - 2;
     const int32_t maxY = height - 2;
 
+    // Precompute minMagSq outside the loop (constant for all points)
+    const float baseMin = (params_.minContrast > 0.0) ? static_cast<float>(params_.minContrast) : 5.0f;
+    const float levelScale = static_cast<float>(pyramid.GetScale(level));
+    const float minMag = std::max(2.0f, baseMin * levelScale);
+    const float minMagSq = minMag * minMag;
+
     for (size_t i = 0; i < numPoints; ++i) {
         float rotX = cosR * soaX[i] - sinR * soaY[i];
         float rotY = sinR * soaX[i] + cosR * soaY[i];
@@ -133,10 +139,7 @@ double ShapeModelImpl::ComputeScoreAtPosition(
                        w01 * gyData[idx + stride] + w11 * gyData[idx + stride + 1];
 
             float magSq = gx * gx + gy * gy;
-            float baseMin = (params_.minContrast > 0.0) ? static_cast<float>(params_.minContrast) : 5.0f;
-            float levelScale = static_cast<float>(pyramid.GetScale(level));
-            float minMag = std::max(2.0f, baseMin * levelScale);
-            if (magSq >= minMag * minMag) {
+            if (magSq >= minMagSq) {
                 float rotCos = soaCos[i] * cosR - soaSin[i] * sinR;
                 float rotSin = soaSin[i] * cosR + soaCos[i] * sinR;
                 float dot = rotCos * gx + rotSin * gy;
