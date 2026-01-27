@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-24 (NCCModel 框架实现)
+> 最后更新: 2026-01-27 (Morphology 模块实现)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -187,7 +187,7 @@ Tests    █████████████████░░░ 87%
 | **Blob/Blob.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P0** | Blob 分析 (Connection, SelectShape, InnerCircle, FillUp, CountHoles等) |
 | Edge/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | 2D 边缘检测 |
 | Transform/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | 几何变换 |
-| Morphology/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | 形态学 |
+| **Morphology/Morphology.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 形态学 (二值+灰度, SE创建) |
 | **OCR/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P1** | 字符识别/验证 |
 | **Barcode/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P1** | 一维码/二维码 |
 | **Defect/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P1** | 缺陷检测 |
@@ -246,6 +246,30 @@ Tests    █████████████████░░░ 87%
 ---
 
 ## 变更日志
+
+### 2026-01-27 (Morphology 模块实现)
+
+- **新增 Morphology 模块** (Feature 层)
+  - 新增 `include/QiVision/Morphology/Morphology.h`: 公开 API 头文件
+  - 新增 `src/Morphology/Morphology.cpp`: 实现文件
+  - 封装 Internal/MorphBinary.h 和 MorphGray.h 为公开 API
+
+- **Morphology API (Halcon 风格)**
+  - **结构元素**: `StructuringElement` 类
+    - 工厂方法: `Rectangle`, `Square`, `Circle`, `Ellipse`, `Cross`, `Diamond`, `Line`
+    - 自定义: `FromMask`, `FromRegion`
+    - 变换: `Reflect`, `Rotate`
+  - **二值形态学** (Region 操作):
+    - 基本: `Dilation`, `Erosion`, `DilationCircle`, `ErosionCircle`, `DilationRectangle`, `ErosionRectangle`
+    - 复合: `Opening`, `Closing`, `OpeningCircle`, `ClosingCircle`, `OpeningRectangle`, `ClosingRectangle`
+    - 衍生: `Boundary`, `Skeleton`, `Thinning`, `PruneSkeleton`, `FillUp`, `ClearBorder`
+  - **灰度形态学** (Image 操作):
+    - 基本: `GrayDilation`, `GrayErosion`, `GrayDilationCircle`, `GrayErosionCircle`
+    - 复合: `GrayOpening`, `GrayClosing`, `GrayOpeningCircle`, `GrayClosingCircle`
+    - 衍生: `GrayGradient`, `GrayTopHat`, `GrayBlackHat`, `GrayRange`
+    - 重构: `GrayReconstructDilation`, `GrayReconstructErosion`, `GrayFillHoles`
+    - 背景校正: `RollingBall`
+  - **便捷函数**: `SE_Cross3`, `SE_Square3`, `SE_Disk5`
 
 ### 2026-01-24 (NCCModel 框架实现)
 

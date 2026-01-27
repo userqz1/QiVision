@@ -32,6 +32,7 @@
 #include <QiVision/Filter/Filter.h>
 #include <QiVision/Segment/Segment.h>
 #include <QiVision/Color/ColorConvert.h>
+#include <QiVision/Morphology/Morphology.h>
 #include <QiVision/Display/Display.h>
 #include <QiVision/Display/Draw.h>
 

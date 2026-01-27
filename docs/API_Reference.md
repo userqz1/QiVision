@@ -1,7 +1,7 @@
 # QiVision API Reference
 
-> Version: 0.5.0
-> Last Updated: 2026-01-24
+> Version: 0.6.0
+> Last Updated: 2026-01-27
 > Namespace: `Qi::Vision`
 
 Professional industrial machine vision library.
@@ -19,7 +19,8 @@ Professional industrial machine vision library.
 7. [Blob](#7-blob) - Region analysis
 8. [Display](#8-display) - Drawing primitives
 9. [GUI](#9-gui) - Window display
-10. [Appendix](#appendix) - Types and constants
+10. [Morphology](#10-morphology) - Morphological operations
+11. [Appendix](#appendix) - Types and constants
 
 ---
 
@@ -2102,6 +2103,238 @@ void CloseAllWindows();
 
 ---
 
+## 10. Morphology
+
+**Namespace**: `Qi::Vision::Morphology`
+**Header**: `<QiVision/Morphology/Morphology.h>`
+
+Binary and gray-scale morphological operations.
+
+---
+
+### StructuringElement
+
+Structuring element for morphological operations.
+
+```cpp
+class StructuringElement {
+public:
+    // Factory methods
+    static StructuringElement Rectangle(int32_t width, int32_t height);
+    static StructuringElement Square(int32_t size);
+    static StructuringElement Circle(int32_t radius);
+    static StructuringElement Ellipse(int32_t radiusX, int32_t radiusY);
+    static StructuringElement Cross(int32_t armLength, int32_t thickness = 1);
+    static StructuringElement Diamond(int32_t radius);
+    static StructuringElement Line(int32_t length, double angle);
+    static StructuringElement FromMask(const QImage& mask, int32_t anchorX = -1, int32_t anchorY = -1);
+    static StructuringElement FromRegion(const QRegion& region, int32_t anchorX = -1, int32_t anchorY = -1);
+
+    // Properties
+    bool Empty() const;
+    int32_t Width() const;
+    int32_t Height() const;
+    size_t PixelCount() const;
+
+    // Transformations
+    StructuringElement Reflect() const;
+    StructuringElement Rotate(double angle) const;
+};
+```
+
+**Factory Methods**
+| Method | Description |
+|--------|-------------|
+| Rectangle(w, h) | Rectangular SE of width×height |
+| Square(s) | Square SE of size s |
+| Circle(r) | Circular SE of radius r |
+| Ellipse(rx, ry) | Elliptical SE |
+| Cross(len, thick) | Cross-shaped SE |
+| Diamond(r) | Diamond (rhombus) SE |
+| Line(len, angle) | Line segment SE |
+| FromMask(mask) | Custom SE from binary mask |
+| FromRegion(region) | Custom SE from QRegion |
+
+---
+
+### Binary Morphology (Region)
+
+Operations on QRegion objects.
+
+#### Dilation
+
+Dilates a region with a structuring element.
+
+```cpp
+QRegion Dilation(const QRegion& region, const StructuringElement& se);
+QRegion DilationCircle(const QRegion& region, int32_t radius);
+QRegion DilationRectangle(const QRegion& region, int32_t width, int32_t height);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| region | const QRegion& | Input region |
+| se | const StructuringElement& | Structuring element |
+| radius | int32_t | Circle radius |
+| width, height | int32_t | Rectangle dimensions |
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| QRegion | Dilated region |
+
+---
+
+#### Erosion
+
+Erodes a region with a structuring element.
+
+```cpp
+QRegion Erosion(const QRegion& region, const StructuringElement& se);
+QRegion ErosionCircle(const QRegion& region, int32_t radius);
+QRegion ErosionRectangle(const QRegion& region, int32_t width, int32_t height);
+```
+
+---
+
+#### Opening
+
+Erosion followed by dilation. Removes small protrusions.
+
+```cpp
+QRegion Opening(const QRegion& region, const StructuringElement& se);
+QRegion OpeningCircle(const QRegion& region, int32_t radius);
+QRegion OpeningRectangle(const QRegion& region, int32_t width, int32_t height);
+```
+
+---
+
+#### Closing
+
+Dilation followed by erosion. Fills small holes.
+
+```cpp
+QRegion Closing(const QRegion& region, const StructuringElement& se);
+QRegion ClosingCircle(const QRegion& region, int32_t radius);
+QRegion ClosingRectangle(const QRegion& region, int32_t width, int32_t height);
+```
+
+---
+
+#### Derived Operations
+
+```cpp
+QRegion Boundary(const QRegion& region, const std::string& type = "both");
+QRegion Skeleton(const QRegion& region);
+QRegion Thinning(const QRegion& region, int32_t maxIterations = 0);
+QRegion PruneSkeleton(const QRegion& skeleton, int32_t iterations = 1);
+QRegion FillUp(const QRegion& region);
+QRegion ClearBorder(const QRegion& region, const Rect2i& bounds);
+```
+
+| Function | Description |
+|----------|-------------|
+| Boundary | Region boundary ("inner", "outer", or "both") |
+| Skeleton | Medial axis extraction |
+| Thinning | Iterative thinning |
+| PruneSkeleton | Remove skeleton branches |
+| FillUp | Fill holes in region |
+| ClearBorder | Remove border-touching regions |
+
+---
+
+### Gray Morphology (Image)
+
+Operations on QImage objects.
+
+#### GrayDilation
+
+Grayscale dilation (local maximum).
+
+```cpp
+void GrayDilation(const QImage& image, QImage& output, const StructuringElement& se);
+void GrayDilationCircle(const QImage& image, QImage& output, int32_t radius);
+void GrayDilationRectangle(const QImage& image, QImage& output, int32_t width, int32_t height);
+```
+
+---
+
+#### GrayErosion
+
+Grayscale erosion (local minimum).
+
+```cpp
+void GrayErosion(const QImage& image, QImage& output, const StructuringElement& se);
+void GrayErosionCircle(const QImage& image, QImage& output, int32_t radius);
+void GrayErosionRectangle(const QImage& image, QImage& output, int32_t width, int32_t height);
+```
+
+---
+
+#### GrayOpening / GrayClosing
+
+Compound operations.
+
+```cpp
+void GrayOpening(const QImage& image, QImage& output, const StructuringElement& se);
+void GrayOpeningCircle(const QImage& image, QImage& output, int32_t radius);
+void GrayClosing(const QImage& image, QImage& output, const StructuringElement& se);
+void GrayClosingCircle(const QImage& image, QImage& output, int32_t radius);
+```
+
+---
+
+#### Top-Hat Transforms
+
+Extract small features.
+
+```cpp
+void GrayTopHat(const QImage& image, QImage& output, const StructuringElement& se);
+void GrayTopHatCircle(const QImage& image, QImage& output, int32_t radius);
+void GrayBlackHat(const QImage& image, QImage& output, const StructuringElement& se);
+void GrayBlackHatCircle(const QImage& image, QImage& output, int32_t radius);
+```
+
+| Function | Formula | Description |
+|----------|---------|-------------|
+| GrayTopHat | image - opening | Extract bright features |
+| GrayBlackHat | closing - image | Extract dark features |
+
+---
+
+#### Additional Operations
+
+```cpp
+void GrayGradient(const QImage& image, QImage& output, const StructuringElement& se);
+void GrayRange(const QImage& image, QImage& output, int32_t width, int32_t height);
+void RollingBall(const QImage& image, QImage& output, int32_t radius);
+void GrayReconstructDilation(const QImage& marker, const QImage& mask, QImage& output);
+void GrayReconstructErosion(const QImage& marker, const QImage& mask, QImage& output);
+void GrayFillHoles(const QImage& image, QImage& output);
+```
+
+| Function | Description |
+|----------|-------------|
+| GrayGradient | Morphological gradient (dilation - erosion) |
+| GrayRange | Local contrast (max - min) |
+| RollingBall | Background subtraction |
+| GrayReconstructDilation | Reconstruction by dilation |
+| GrayReconstructErosion | Reconstruction by erosion |
+| GrayFillHoles | Fill dark holes |
+
+---
+
+### Convenience Functions
+
+```cpp
+StructuringElement SE_Cross3();   // 3x3 cross (4-connected)
+StructuringElement SE_Square3();  // 3x3 square (8-connected)
+StructuringElement SE_Disk5();    // 5x5 disk
+```
+
+---
+
 ## Appendix
 
 ### A. PixelType
@@ -2149,6 +2382,7 @@ enum class ChannelType {
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 0.6.0 | 2026-01-27 | Add Morphology module (binary + gray-scale) |
 | 0.5.0 | 2026-01-24 | API format update, add Segment module, NCCModel |
 | 0.4.0 | 2026-01-21 | Unified API signatures |
 | 0.3.0 | 2026-01-20 | Added Metrology module, auto-threshold API |

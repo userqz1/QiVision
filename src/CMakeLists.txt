@@ -81,6 +81,8 @@ set(QIVISION_SOURCES
     Color/ColorConvert.cpp
     # Filter (Feature Layer)
     Filter/Filter.cpp
+    # Morphology (Feature Layer)
+    Morphology/Morphology.cpp
     # Blob (Feature Layer)
     Blob/Blob.cpp
     # Segment (Feature Layer)
@@ -175,6 +177,8 @@ set(QIVISION_HEADERS
     ${CMAKE_SOURCE_DIR}/include/QiVision/Color/ColorConvert.h
     # Filter (Feature Layer)
     ${CMAKE_SOURCE_DIR}/include/QiVision/Filter/Filter.h
+    # Morphology (Feature Layer)
+    ${CMAKE_SOURCE_DIR}/include/QiVision/Morphology/Morphology.h
     # Blob (Feature Layer)
     ${CMAKE_SOURCE_DIR}/include/QiVision/Blob/Blob.h
     # Segment (Feature Layer)
