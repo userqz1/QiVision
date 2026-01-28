@@ -323,7 +323,7 @@ struct ModelParams {
     // Optimization (point reduction)
     // =========================================================================
     OptimizationMode optimization = OptimizationMode::Auto;
-    bool pregeneration = false;     ///< Pre-generate rotated models (memory vs speed)
+    bool pregeneration = true;      ///< Pre-generate rotated models (memory vs speed, default ON)
 
     // =========================================================================
     // LINEMOD Mode (Paper-accurate implementation)
