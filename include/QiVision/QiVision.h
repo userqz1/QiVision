@@ -43,6 +43,8 @@
 #include <QiVision/Transform/AffineTransform.h>
 #include <QiVision/Transform/Homography.h>
 #include <QiVision/Edge/Edge.h>
+#include <QiVision/Hough/Hough.h>
+#include <QiVision/Contour/Contour.h>
 
 namespace Qi::Vision {
 

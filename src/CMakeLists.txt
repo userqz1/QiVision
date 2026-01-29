@@ -105,6 +105,10 @@ set(QIVISION_SOURCES
     Transform/Homography.cpp
     # Edge (Feature Layer)
     Edge/Edge.cpp
+    # Hough (Feature Layer)
+    Hough/Hough.cpp
+    # Contour (Feature Layer)
+    Contour/Contour.cpp
 )
 
 set(QIVISION_HEADERS
@@ -214,6 +218,10 @@ set(QIVISION_HEADERS
     ${CMAKE_SOURCE_DIR}/include/QiVision/Transform/Homography.h
     # Edge (Feature Layer)
     ${CMAKE_SOURCE_DIR}/include/QiVision/Edge/Edge.h
+    # Hough (Feature Layer)
+    ${CMAKE_SOURCE_DIR}/include/QiVision/Hough/Hough.h
+    # Contour (Feature Layer)
+    ${CMAKE_SOURCE_DIR}/include/QiVision/Contour/Contour.h
 )
 
 # Create library

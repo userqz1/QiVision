@@ -1,6 +1,6 @@
 # QiVision API Reference
 
-> Version: 0.11.0
+> Version: 0.13.0
 > Last Updated: 2026-01-29
 > Namespace: `Qi::Vision`
 
@@ -23,7 +23,9 @@ Professional industrial machine vision library.
 11. [Calib](#11-calib) - Camera calibration and distortion correction
 12. [Transform](#12-transform) - Geometric transformations (Polar, Affine, Homography)
 13. [Edge](#13-edge) - Edge detection (Canny, Steger)
-14. [Appendix](#appendix) - Types and constants
+14. [Hough](#14-hough) - Hough transform (lines, circles)
+15. [Contour](#15-contour) - XLD contour operations
+16. [Appendix](#appendix) - Types and constants
 
 ---
 
@@ -3355,10 +3357,799 @@ void EstimateThresholds(
 
 ---
 
+## 14. Hough
+
+**Namespace**: `Qi::Vision::Hough`
+**Header**: `<QiVision/Hough/Hough.h>`
+
+Hough transform for line and circle detection.
+
+---
+
+### HoughLine
+
+Hough line detection result (polar form).
+
+```cpp
+struct HoughLine {
+    double rho;        // Distance from origin to line
+    double theta;      // Angle in radians [0, PI)
+    double score;      // Accumulator vote count
+    Point2d p1, p2;    // Line endpoints (for visualization)
+
+    Line2d ToLine2d() const;
+    void GetEndPoints(double length, Point2d& pt1, Point2d& pt2) const;
+};
+```
+
+---
+
+### HoughCircle
+
+Hough circle detection result.
+
+```cpp
+struct HoughCircle {
+    double row;        // Circle center Y
+    double column;     // Circle center X
+    double radius;     // Circle radius
+    double score;      // Accumulator vote count
+
+    Point2d Center() const;
+    Circle2d ToCircle2d() const;
+};
+```
+
+---
+
+### HoughLines
+
+Standard Hough Transform for line detection.
+
+```cpp
+void HoughLines(
+    const QImage& edgeImage,
+    std::vector<HoughLine>& lines,
+    double rhoResolution = 1.0,
+    double thetaResolution = 0.01745329,  // ~1 degree
+    int32_t threshold = 100,
+    int32_t maxLines = 0
+);
+
+void HoughLines(
+    const std::vector<Point2d>& points,
+    int32_t imageWidth,
+    int32_t imageHeight,
+    std::vector<HoughLine>& lines,
+    double rhoResolution = 1.0,
+    double thetaResolution = 0.01745329,
+    int32_t threshold = 100,
+    int32_t maxLines = 0
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| edgeImage | const QImage& | Binary edge image |
+| lines | std::vector<HoughLine>& | [out] Detected lines (sorted by score) |
+| rhoResolution | double | Distance resolution (pixels) |
+| thetaResolution | double | Angle resolution (radians) |
+| threshold | int32_t | Minimum accumulator votes |
+| maxLines | int32_t | Maximum lines (0 = unlimited) |
+
+---
+
+### HoughLinesP
+
+Probabilistic Hough Transform for line segment detection.
+
+```cpp
+void HoughLinesP(
+    const QImage& edgeImage,
+    std::vector<Segment2d>& segments,
+    double rhoResolution = 1.0,
+    double thetaResolution = 0.01745329,
+    int32_t threshold = 50,
+    double minLineLength = 30.0,
+    double maxLineGap = 10.0
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| segments | std::vector<Segment2d>& | [out] Detected line segments |
+| minLineLength | double | Minimum segment length (pixels) |
+| maxLineGap | double | Maximum gap between points (pixels) |
+
+---
+
+### HoughLinesXld
+
+Detects lines from contours using Hough Transform.
+
+```cpp
+void HoughLinesXld(
+    const QContourArray& contours,
+    std::vector<Line2d>& lines,
+    int32_t threshold = 5,
+    double angleResolution = 0.01745329,
+    int32_t maxLines = 0
+);
+```
+
+---
+
+### HoughCircles
+
+Hough Circle Transform (gradient-based).
+
+```cpp
+void HoughCircles(
+    const QImage& edgeImage,
+    std::vector<HoughCircle>& circles,
+    double dp = 1.0,
+    double minDist = 20.0,
+    double param1 = 100.0,
+    double param2 = 30.0,
+    int32_t minRadius = 0,
+    int32_t maxRadius = 0
+);
+
+void HoughCircles(
+    const QImage& edgeImage,
+    const QImage& gradientX,
+    const QImage& gradientY,
+    std::vector<HoughCircle>& circles,
+    double minDist = 20.0,
+    double threshold = 30.0,
+    int32_t minRadius = 0,
+    int32_t maxRadius = 0
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| dp | double | Inverse accumulator resolution ratio |
+| minDist | double | Minimum distance between circle centers |
+| param1 | double | Canny high threshold (for edge detection) |
+| param2 | double | Accumulator threshold for centers |
+| minRadius | int32_t | Minimum circle radius |
+| maxRadius | int32_t | Maximum circle radius (0 = auto) |
+
+---
+
+### HoughCirclesXld
+
+Detects circles from contours using Hough Transform.
+
+```cpp
+void HoughCirclesXld(
+    const QContourArray& contours,
+    std::vector<Circle2d>& circles,
+    double minRadius,
+    double maxRadius,
+    int32_t threshold = 5,
+    double radiusResolution = 1.0
+);
+```
+
+---
+
+### DrawHoughLines
+
+Draws detected Hough lines on image.
+
+```cpp
+void DrawHoughLines(
+    QImage& image,
+    const std::vector<HoughLine>& lines,
+    const Scalar& color = Scalar::Green(),
+    int32_t thickness = 1
+);
+```
+
+---
+
+### DrawHoughCircles
+
+Draws detected Hough circles on image.
+
+```cpp
+void DrawHoughCircles(
+    QImage& image,
+    const std::vector<HoughCircle>& circles,
+    const Scalar& color = Scalar::Green(),
+    int32_t thickness = 1
+);
+```
+
+---
+
+### HoughLineParams
+
+Parameters for Hough line transform.
+
+```cpp
+struct HoughLineParams {
+    double rhoResolution = 1.0;
+    double thetaResolution = 0.01745329;
+    double threshold = 0.3;
+    bool thresholdIsRatio = true;
+    int32_t maxLines = 0;
+    double minDistance = 10.0;
+    bool suppressOverlapping = true;
+
+    static HoughLineParams Default();
+    static HoughLineParams Fine();
+};
+```
+
+---
+
+### HoughCircleParams
+
+Parameters for Hough circle transform.
+
+```cpp
+struct HoughCircleParams {
+    double dp = 1.0;
+    double minDist = 20.0;
+    double param1 = 100.0;
+    double param2 = 50.0;
+    int32_t minRadius = 5;
+    int32_t maxRadius = 0;
+    int32_t maxCircles = 0;
+
+    static HoughCircleParams Default();
+    static HoughCircleParams SmallCircles(int32_t minR = 5, int32_t maxR = 50);
+};
+```
+
+---
+
+### MergeHoughLines / MergeHoughCircles
+
+Non-maximum suppression for similar detections.
+
+```cpp
+std::vector<HoughLine> MergeHoughLines(
+    const std::vector<HoughLine>& lines,
+    double rhoThreshold = 10.0,
+    double thetaThreshold = 0.1
+);
+
+std::vector<HoughCircle> MergeHoughCircles(
+    const std::vector<HoughCircle>& circles,
+    double centerThreshold = 10.0,
+    double radiusThreshold = 5.0
+);
+```
+
+---
+
+### ClipHoughLineToImage
+
+Clips Hough line to image bounds.
+
+```cpp
+Segment2d ClipHoughLineToImage(
+    const HoughLine& line,
+    int32_t imageWidth,
+    int32_t imageHeight
+);
+```
+
+---
+
+### HoughLinesIntersection
+
+Gets intersection of two Hough lines.
+
+```cpp
+bool HoughLinesIntersection(
+    const HoughLine& line1,
+    const HoughLine& line2,
+    Point2d& intersection
+);
+```
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| bool | True if lines intersect (not parallel) |
+
+---
+
+### AreHoughLinesParallel
+
+Checks if two Hough lines are approximately parallel.
+
+```cpp
+bool AreHoughLinesParallel(
+    const HoughLine& line1,
+    const HoughLine& line2,
+    double angleTolerance = 0.05
+);
+```
+
+---
+
+### PointToHoughLineDistance
+
+Calculates distance from point to Hough line.
+
+```cpp
+double PointToHoughLineDistance(
+    const Point2d& point,
+    const HoughLine& line
+);
+```
+
+---
+
+## 15. Contour
+
+**Namespace**: `Qi::Vision::Contour`
+**Header**: `<QiVision/Contour/Contour.h>`
+
+XLD (eXtended Line Description) contour operations with subpixel precision.
+
+---
+
+### Contour Processing
+
+#### SmoothContoursXld
+
+Smooths contours using moving average.
+
+```cpp
+void SmoothContoursXld(
+    const QContourArray& contours,
+    QContourArray& smoothed,
+    int32_t numPoints = 5
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| contours | const QContourArray& | Input contour array |
+| smoothed | QContourArray& | [out] Smoothed contours |
+| numPoints | int32_t | Smoothing window size |
+
+---
+
+#### SimplifyContoursXld
+
+Simplifies contours using Douglas-Peucker algorithm.
+
+```cpp
+void SimplifyContoursXld(
+    const QContourArray& contours,
+    QContourArray& simplified,
+    double epsilon = 1.0
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| epsilon | double | Maximum deviation tolerance (pixels) |
+
+---
+
+#### ResampleContoursXld
+
+Resamples contours with fixed distance between points.
+
+```cpp
+void ResampleContoursXld(
+    const QContourArray& contours,
+    QContourArray& resampled,
+    double distance
+);
+```
+
+---
+
+#### CloseContoursXld
+
+Marks open contours as closed.
+
+```cpp
+void CloseContoursXld(
+    const QContourArray& contours,
+    QContourArray& closed
+);
+```
+
+---
+
+### Contour Analysis
+
+#### LengthXld
+
+Computes contour length (arc length).
+
+```cpp
+double LengthXld(const QContour& contour);
+std::vector<double> LengthXld(const QContourArray& contours);
+```
+
+---
+
+#### AreaCenterXld
+
+Computes area and centroid of a closed contour.
+
+```cpp
+double AreaCenterXld(const QContour& contour, double& row, double& column);
+```
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| double | Signed area (positive = CCW) |
+
+---
+
+#### SmallestRectangle1Xld
+
+Computes axis-aligned bounding box.
+
+```cpp
+void SmallestRectangle1Xld(
+    const QContour& contour,
+    double& row1, double& col1,
+    double& row2, double& col2
+);
+```
+
+---
+
+#### SmallestRectangle2Xld
+
+Computes minimum area enclosing rectangle (rotated).
+
+```cpp
+void SmallestRectangle2Xld(
+    const QContour& contour,
+    double& row, double& column,
+    double& phi,
+    double& length1, double& length2
+);
+```
+
+---
+
+#### SmallestCircleXld
+
+Computes minimum enclosing circle.
+
+```cpp
+void SmallestCircleXld(
+    const QContour& contour,
+    double& row, double& column,
+    double& radius
+);
+```
+
+---
+
+#### CurvatureXld
+
+Computes curvature at each point.
+
+```cpp
+std::vector<double> CurvatureXld(const QContour& contour, int32_t windowSize = 5);
+```
+
+---
+
+#### MomentsXld
+
+Computes geometric moments of a contour.
+
+```cpp
+void MomentsXld(
+    const QContour& contour,
+    double& m00, double& m10, double& m01,
+    double& m20, double& m11, double& m02
+);
+```
+
+---
+
+### Shape Descriptors
+
+#### CircularityXld / ConvexityXld / SolidityXld / EccentricityXld
+
+Shape descriptor functions.
+
+```cpp
+double CircularityXld(const QContour& contour);   // 4*PI*A/P^2, 1.0 for circle
+double ConvexityXld(const QContour& contour);     // Hull perimeter / perimeter
+double SolidityXld(const QContour& contour);      // Area / hull area
+double EccentricityXld(const QContour& contour);  // sqrt(1-(b/a)^2)
+```
+
+---
+
+### Contour Fitting
+
+#### FitEllipseContourXld
+
+Fits an ellipse to a contour.
+
+```cpp
+bool FitEllipseContourXld(
+    const QContour& contour,
+    double& row, double& column,
+    double& phi, double& ra, double& rb
+);
+```
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| bool | True if fitting succeeded |
+
+---
+
+#### FitLineContourXld
+
+Fits a line to a contour.
+
+```cpp
+bool FitLineContourXld(
+    const QContour& contour,
+    double& rowBegin, double& colBegin,
+    double& rowEnd, double& colEnd,
+    double& row, double& column,
+    double& phi
+);
+```
+
+---
+
+#### FitCircleContourXld
+
+Fits a circle/arc to a contour.
+
+```cpp
+bool FitCircleContourXld(
+    const QContour& contour,
+    double& row, double& column,
+    double& radius,
+    double& startPhi, double& endPhi,
+    const std::string& algorithm = "algebraic"
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| algorithm | const std::string& | "algebraic" (fast) or "geometric" (accurate) |
+
+---
+
+### Contour Selection
+
+#### SelectContoursXld
+
+Selects contours by a feature value range.
+
+```cpp
+void SelectContoursXld(
+    const QContourArray& contours,
+    QContourArray& selected,
+    const std::string& feature,
+    double minValue,
+    double maxValue
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| feature | const std::string& | "length", "area", "circularity", "convexity", "solidity", "compactness", "eccentricity", "elongation", "rectangularity", "mean_curvature", "max_curvature", "num_points" |
+
+---
+
+#### SelectClosedXld / SelectOpenXld
+
+Selects contours by open/closed state.
+
+```cpp
+void SelectClosedXld(const QContourArray& contours, QContourArray& closed);
+void SelectOpenXld(const QContourArray& contours, QContourArray& open);
+```
+
+---
+
+### Contour Segmentation
+
+#### SegmentContoursXld
+
+Segments contour into lines and/or circular arcs.
+
+```cpp
+void SegmentContoursXld(
+    const QContour& contour,
+    QContourArray& segments,
+    const std::string& mode = "lines_circles",
+    double maxLineDev = 2.0,
+    double maxArcDev = 2.0
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| mode | const std::string& | "lines", "circles", or "lines_circles" |
+
+---
+
+#### SplitContoursXld
+
+Splits contours at high curvature points (corners).
+
+```cpp
+void SplitContoursXld(
+    const QContourArray& contours,
+    QContourArray& split,
+    double maxAngle = 0.5
+);
+```
+
+---
+
+### Contour-Region Conversion
+
+#### GenContourRegionXld
+
+Converts region boundary to contours.
+
+```cpp
+void GenContourRegionXld(
+    const QRegion& region,
+    QContourArray& contours,
+    const std::string& mode = "border"
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| mode | const std::string& | "border" (outer only) or "border_holes" |
+
+---
+
+#### GenRegionContourXld
+
+Converts contour to filled region.
+
+```cpp
+void GenRegionContourXld(
+    const QContour& contour,
+    QRegion& region,
+    const std::string& mode = "filled"
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| mode | const std::string& | "filled" (interior) or "margin" (line only) |
+
+---
+
+### Contour Generation
+
+#### GenContourPolygonXld
+
+Creates contour from points.
+
+```cpp
+QContour GenContourPolygonXld(const std::vector<Point2d>& points);
+QContour GenContourPolygonXld(
+    const std::vector<double>& rows,
+    const std::vector<double>& cols
+);
+```
+
+---
+
+#### GenCircleContourXld
+
+Generates a circle/arc contour.
+
+```cpp
+QContour GenCircleContourXld(
+    double row, double column,
+    double radius,
+    double startAngle = 0.0,
+    double endAngle = 6.28318,
+    const std::string& resolution = "positive",
+    double stepAngle = 0.01
+);
+```
+
+---
+
+#### GenEllipseContourXld
+
+Generates an ellipse contour.
+
+```cpp
+QContour GenEllipseContourXld(
+    double row, double column,
+    double phi,
+    double ra, double rb,
+    double startAngle = 0.0,
+    double endAngle = 6.28318,
+    double stepAngle = 0.01
+);
+```
+
+---
+
+#### GenRectangle2ContourXld
+
+Generates a rotated rectangle contour.
+
+```cpp
+QContour GenRectangle2ContourXld(
+    double row, double column,
+    double phi,
+    double length1, double length2
+);
+```
+
+---
+
+### Utility Functions
+
+#### CountPointsXld / CountObjXld
+
+Counts points and contours.
+
+```cpp
+int32_t CountPointsXld(const QContour& contour);
+int32_t CountObjXld(const QContourArray& contours);
+```
+
+---
+
+#### TestPointXld
+
+Checks if a point is inside a closed contour.
+
+```cpp
+bool TestPointXld(const QContour& contour, double row, double column);
+```
+
+---
+
+#### DistancePointXld
+
+Computes distance from a point to a contour.
+
+```cpp
+double DistancePointXld(const QContour& contour, double row, double column);
+```
+
+---
+
 ## Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 0.13.0 | 2026-01-29 | Add Contour module (XLD operations) |
+| 0.12.0 | 2026-01-29 | Add Hough module (line and circle detection) |
 | 0.11.0 | 2026-01-29 | Add Affine/Homography Transform modules |
 | 0.10.0 | 2026-01-29 | Add Edge module (Canny, Steger subpixel edge detection) |
 | 0.9.0 | 2026-01-29 | Add Transform module (polar coordinate transformations) |

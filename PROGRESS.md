@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-29 (Transform 模块扩展：Affine/Homography)
+> 最后更新: 2026-01-29 (Contour 公开 API 模块)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -192,6 +192,8 @@ Tests    █████████████████░░░ 87%
 | **Transform/AffineTransform.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 仿射变换 (公开 API，封装 Internal) |
 | **Transform/Homography.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 透视变换 (公开 API，封装 Internal) |
 | **Morphology/Morphology.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 形态学 (二值+灰度, SE创建) |
+| **Hough/Hough.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 霍夫变换 (直线/圆检测, 公开 API) |
+| **Contour/Contour.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | XLD轮廓操作 (公开 API，封装 Internal) |
 | **OCR/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P1** | 字符识别/验证 |
 | **Barcode/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P1** | 一维码/二维码 |
 | **Defect/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P1** | 缺陷检测 |
@@ -250,6 +252,82 @@ Tests    █████████████████░░░ 87%
 ---
 
 ## 变更日志
+
+### 2026-01-29 (Contour 公开 API 模块)
+
+- **Contour/Contour.h 模块** (新增公开 API，封装 Internal 层)
+  - 新增 `include/QiVision/Contour/Contour.h`: XLD 轮廓操作公开 API 头文件
+  - 新增 `src/Contour/Contour.cpp`: 实现文件
+  - **轮廓处理**:
+    - SmoothContoursXld: 移动平均/高斯平滑
+    - SimplifyContoursXld: Douglas-Peucker 简化
+    - ResampleContoursXld: 等距/定点数重采样
+    - CloseContoursXld: 闭合轮廓
+    - ReverseContoursXld: 反转轮廓方向
+  - **轮廓分析**:
+    - LengthXld/AreaCenterXld/PerimeterXld: 基本属性
+    - SmallestRectangle1Xld/SmallestRectangle2Xld: 包围矩形
+    - SmallestCircleXld: 最小包围圆
+    - CurvatureXld/MomentsXld/OrientationXld: 曲率和矩
+    - CircularityXld/ConvexityXld/SolidityXld/EccentricityXld: 形状描述符
+  - **轮廓拟合**:
+    - FitEllipseContourXld: 椭圆拟合
+    - FitLineContourXld: 直线拟合
+    - FitCircleContourXld: 圆拟合 (代数/几何)
+    - ConvexHullXld: 凸包计算
+  - **轮廓选择**:
+    - SelectContoursXld: 按特征值选择
+    - SelectClosedXld/SelectOpenXld: 按闭合性选择
+    - SortContoursXld/SelectTopContoursXld: 排序和选择
+  - **轮廓分割**:
+    - SegmentContoursXld: 分割为直线/圆弧
+    - SplitContoursXld: 在拐角处分割
+    - DetectCornersXld: 角点检测
+  - **轮廓转换**:
+    - GenContourRegionXld: 区域→轮廓
+    - GenRegionContourXld: 轮廓→区域
+  - **轮廓生成**:
+    - GenContourPolygonXld: 从点生成
+    - GenCircleContourXld: 生成圆/弧轮廓
+    - GenEllipseContourXld: 生成椭圆轮廓
+    - GenRectangle2ContourXld: 生成旋转矩形轮廓
+  - **工具函数**:
+    - CountPointsXld/CountObjXld: 计数
+    - GetContourXld: 获取坐标
+    - TestPointXld: 点包含测试
+    - DistancePointXld: 点到轮廓距离
+    - UnionContoursXld: 轮廓合并
+    - SelectObjXld: 按索引选择
+  - 更新 API_Reference.md，添加 Contour 模块文档
+
+### 2026-01-29 (Hough 公开 API 模块)
+
+- **Hough/Hough.h 模块** (新增公开 API，封装 Internal 层)
+  - 新增 `include/QiVision/Hough/Hough.h`: 霍夫变换公开 API 头文件
+  - 新增 `src/Hough/Hough.cpp`: 实现文件
+  - **结果结构体**:
+    - HoughLine: 直线检测结果 (rho, theta, score, endpoints)
+    - HoughCircle: 圆检测结果 (row, column, radius, score)
+  - **直线检测**:
+    - HoughLines: 标准霍夫变换 (binary edge image)
+    - HoughLinesP: 概率霍夫变换 (返回线段)
+    - HoughLinesXld: 从轮廓检测直线
+  - **圆检测**:
+    - HoughCircles: 霍夫圆变换 (gradient-based)
+    - HoughCirclesXld: 从轮廓检测圆
+  - **可视化**:
+    - DrawHoughLines: 绘制检测到的直线
+    - DrawHoughCircles: 绘制检测到的圆
+  - **参数结构体**:
+    - HoughLineParams, HoughLinePParams, HoughCircleParams
+    - 支持 Default(), Fine(), SmallCircles() 等工厂方法
+  - **工具函数**:
+    - MergeHoughLines/MergeHoughCircles: 非极大值抑制
+    - ClipHoughLineToImage: 裁剪直线到图像边界
+    - HoughLinesIntersection: 计算直线交点
+    - AreHoughLinesParallel: 判断平行
+    - PointToHoughLineDistance: 点到直线距离
+  - 更新 CMakeLists.txt, QiVision.h, API_Reference.md
 
 ### 2026-01-29 (Transform 模块扩展：Affine/Homography)
 
