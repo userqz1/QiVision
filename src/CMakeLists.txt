@@ -99,6 +99,8 @@ set(QIVISION_SOURCES
     Calib/Undistort.cpp
     Calib/CalibBoard.cpp
     Calib/CameraCalib.cpp
+    # Transform (Feature Layer)
+    Transform/PolarTransform.cpp
 )
 
 set(QIVISION_HEADERS
@@ -202,6 +204,8 @@ set(QIVISION_HEADERS
     ${CMAKE_SOURCE_DIR}/include/QiVision/Calib/Undistort.h
     ${CMAKE_SOURCE_DIR}/include/QiVision/Calib/CalibBoard.h
     ${CMAKE_SOURCE_DIR}/include/QiVision/Calib/CameraCalib.h
+    # Transform (Feature Layer)
+    ${CMAKE_SOURCE_DIR}/include/QiVision/Transform/PolarTransform.h
 )
 
 # Create library

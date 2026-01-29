@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-28 (新增 CameraCalib 模块)
+> 最后更新: 2026-01-29 (PolarTransform stride 修复 + 公开 API)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -104,7 +104,7 @@ Tests    █████████████████░░░ 87%
 | AffineTransform.h | ✅ | ✅ | ✅ | ⬜ | ⬜ | 仿射变换 |
 | Homography.h | ✅ | ✅ | ✅ | ⬜ | ⬜ | 单应性变换 (DLT+RANSAC, WarpPerspective, LM精化) |
 | Hough.h | ✅ | ✅ | ✅ | ⬜ | ⬜ | 霍夫变换（直线/圆） |
-| PolarTransform.h | ✅ | ✅ | ⬜ | ⬜ | ⬜ | 极坐标变换 (Linear/SemiLog, WarpPolar) |
+| PolarTransform.h | ✅ | ✅ | ✅ | ⬜ | ⬜ | 极坐标变换 (Linear/SemiLog, WarpPolar, stride 修复) |
 | CornerRefine.h | ✅ | ✅ | ⬜ | ⬜ | ⬜ | 角点精化 (Harris/Shi-Tomasi/SubPix) |
 
 ---
@@ -188,7 +188,7 @@ Tests    █████████████████░░░ 87%
 | **GUI/Window.h** | ✅ | ✅ | ⬜ | - | ⬜ | **P0** | 窗口调试 (Win32/X11, macOS/Android stub, AutoResize) |
 | **Blob/Blob.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P0** | Blob 分析 (Connection, SelectShape, InnerCircle, FillUp, CountHoles等) |
 | Edge/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | 2D 边缘检测 |
-| Transform/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | 几何变换 |
+| **Transform/PolarTransform.h** | ✅ | ✅ | ✅ | ⬜ | ⬜ | **P1** | 极坐标变换 (公开 API，封装 Internal) |
 | **Morphology/Morphology.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 形态学 (二值+灰度, SE创建) |
 | **OCR/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P1** | 字符识别/验证 |
 | **Barcode/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P1** | 一维码/二维码 |
@@ -248,6 +248,32 @@ Tests    █████████████████░░░ 87%
 ---
 
 ## 变更日志
+
+### 2026-01-29 (PolarTransform 修复 + 公开 API)
+
+- **Transform/PolarTransform 模块** (新增公开 API)
+  - 新增 `include/QiVision/Transform/PolarTransform.h`: 公开 API 头文件
+  - 新增 `src/Transform/PolarTransform.cpp`: 公开 API 实现
+  - **CartesianToPolar**: 笛卡尔坐标 → 极坐标图像变换
+    - X 轴 = 角度 (0 到 2π)
+    - Y 轴 = 半径 (0 到 maxRadius)
+  - **PolarToCartesian**: 极坐标 → 笛卡尔坐标图像变换（逆变换）
+  - **PolarMode**: Linear / SemiLog 两种映射模式
+  - **PolarInterpolation**: Nearest / Bilinear / Bicubic 插值
+
+- **Internal/PolarTransform 模块修复** (stride 处理 bug)
+  - **问题**: QImage 有 64 字节对齐的 stride，原代码假设 stride == width
+  - **症状**: 当 maxRadius 改变时，极坐标图和重建图出现条纹错乱
+  - **修复**:
+    - 新增 `GetPixelWithStride`, `BilinearSampleWithStride`, `SamplePixelWithStride` 辅助函数
+    - 修改 `WarpCartesianToPolar` 和 `WarpPolarToCartesian` 接受 stride 参数
+    - 修复 Float32 inverse 分支缺少 stride 参数的问题
+
+- **示例程序**
+  - 新增 `samples/calib/polar_transform_test.cpp`: 极坐标变换测试
+    - 使用 Metrology 检测圆
+    - 应用极坐标变换
+    - 逆变换重建验证
 
 ### 2026-01-28 (新增 CameraCalib 模块)
 

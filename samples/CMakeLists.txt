@@ -26,6 +26,9 @@ add_sample(measure_caliper_circle_manual measure/caliper_circle_manual.cpp)
 # Blob - Blob analysis
 add_sample(blob_analysis blob/blob_analysis.cpp)
 
+# Calib/Transform - Polar transform
+add_sample(calib_polar_transform calib/polar_transform_test.cpp)
+
 # Build all samples
 add_custom_target(samples DEPENDS
     matching_shape_match
@@ -36,4 +39,5 @@ add_custom_target(samples DEPENDS
     measure_caliper_pairs
     measure_caliper_circle_manual
     blob_analysis
+    calib_polar_transform
 )

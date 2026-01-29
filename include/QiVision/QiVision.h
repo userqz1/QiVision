@@ -39,6 +39,7 @@
 #include <QiVision/Calib/Undistort.h>
 #include <QiVision/Calib/CalibBoard.h>
 #include <QiVision/Calib/CameraCalib.h>
+#include <QiVision/Transform/PolarTransform.h>
 
 namespace Qi::Vision {
 
