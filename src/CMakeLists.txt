@@ -101,6 +101,10 @@ set(QIVISION_SOURCES
     Calib/CameraCalib.cpp
     # Transform (Feature Layer)
     Transform/PolarTransform.cpp
+    Transform/AffineTransform.cpp
+    Transform/Homography.cpp
+    # Edge (Feature Layer)
+    Edge/Edge.cpp
 )
 
 set(QIVISION_HEADERS
@@ -206,6 +210,10 @@ set(QIVISION_HEADERS
     ${CMAKE_SOURCE_DIR}/include/QiVision/Calib/CameraCalib.h
     # Transform (Feature Layer)
     ${CMAKE_SOURCE_DIR}/include/QiVision/Transform/PolarTransform.h
+    ${CMAKE_SOURCE_DIR}/include/QiVision/Transform/AffineTransform.h
+    ${CMAKE_SOURCE_DIR}/include/QiVision/Transform/Homography.h
+    # Edge (Feature Layer)
+    ${CMAKE_SOURCE_DIR}/include/QiVision/Edge/Edge.h
 )
 
 # Create library

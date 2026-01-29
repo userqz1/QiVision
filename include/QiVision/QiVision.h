@@ -40,6 +40,9 @@
 #include <QiVision/Calib/CalibBoard.h>
 #include <QiVision/Calib/CameraCalib.h>
 #include <QiVision/Transform/PolarTransform.h>
+#include <QiVision/Transform/AffineTransform.h>
+#include <QiVision/Transform/Homography.h>
+#include <QiVision/Edge/Edge.h>
 
 namespace Qi::Vision {
 

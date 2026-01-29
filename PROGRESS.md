@@ -1,6 +1,6 @@
 # QiVision 开发进度追踪
 
-> 最后更新: 2026-01-29 (PolarTransform stride 修复 + 公开 API)
+> 最后更新: 2026-01-29 (Transform 模块扩展：Affine/Homography)
 >
 > 状态图例:
 > - ⬜ 未开始
@@ -187,8 +187,10 @@ Tests    █████████████████░░░ 87%
 | **Display/Display.h** | ✅ | ✅ | ⬜ | - | ⬜ | **P0** | 图像显示与绘制 (Halcon 风格 API) |
 | **GUI/Window.h** | ✅ | ✅ | ⬜ | - | ⬜ | **P0** | 窗口调试 (Win32/X11, macOS/Android stub, AutoResize) |
 | **Blob/Blob.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P0** | Blob 分析 (Connection, SelectShape, InnerCircle, FillUp, CountHoles等) |
-| Edge/* | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | P1 | 2D 边缘检测 |
+| **Edge/Edge.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 边缘检测 (Canny, Steger 亚像素) |
 | **Transform/PolarTransform.h** | ✅ | ✅ | ✅ | ⬜ | ⬜ | **P1** | 极坐标变换 (公开 API，封装 Internal) |
+| **Transform/AffineTransform.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 仿射变换 (公开 API，封装 Internal) |
+| **Transform/Homography.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 透视变换 (公开 API，封装 Internal) |
 | **Morphology/Morphology.h** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | **P1** | 形态学 (二值+灰度, SE创建) |
 | **OCR/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P1** | 字符识别/验证 |
 | **Barcode/*** | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | **P1** | 一维码/二维码 |
@@ -248,6 +250,68 @@ Tests    █████████████████░░░ 87%
 ---
 
 ## 变更日志
+
+### 2026-01-29 (Transform 模块扩展：Affine/Homography)
+
+- **Transform/AffineTransform.h 模块** (新增公开 API)
+  - 新增 `include/QiVision/Transform/AffineTransform.h`: 仿射变换公开 API 头文件
+  - 新增 `src/Transform/AffineTransform.cpp`: 实现文件
+  - **AffineTransImage**: 仿射变换图像 (bilinear/bicubic 插值)
+  - **RotateImage**: 旋转图像 (中心点/角度)
+  - **ScaleImage/ZoomImageSize**: 缩放图像
+  - **Matrix 创建函数** (Halcon 风格):
+    - HomMat2dIdentity, HomMat2dRotate, HomMat2dScale
+    - HomMat2dTranslate, HomMat2dCompose, HomMat2dInvert
+    - HomMat2dRotateLocal, HomMat2dScaleLocal
+  - **AffineTransPoint2d**: 点变换 (单点/多点)
+  - **Transform 估计**:
+    - VectorToHomMat2d: 仿射变换估计 (>=3 点)
+    - VectorToRigid: 刚体变换估计 (>=2 点)
+    - VectorToSimilarity: 相似变换估计 (>=2 点)
+  - **Matrix 分析**:
+    - HomMat2dToAffinePar: 分解为 tx,ty,phi,sx,sy,shear
+    - HomMat2dIsRigid/HomMat2dIsSimilarity: 变换类型检测
+
+- **Transform/Homography.h 模块** (新增公开 API)
+  - 新增 `include/QiVision/Transform/Homography.h`: 透视变换公开 API 头文件
+  - 新增 `src/Transform/Homography.cpp`: 实现文件
+  - **HomMat3d 类**: 3x3 单应矩阵
+    - Identity, FromAffine, Inverse, Normalized
+    - IsAffine, ToAffine, Transform
+  - **ProjectiveTransImage**: 透视变换图像
+  - **Matrix 函数**:
+    - ProjHomMat2dIdentity, HomMat2dToProjHomMat
+    - ProjHomMat2dCompose, ProjHomMat2dInvert
+  - **ProjectiveTransPoint2d**: 透视点变换
+  - **Homography 估计**:
+    - VectorToProjHomMat2d: DLT 单应估计 (>=4 点)
+    - HomVectorToProjHomMat2d: 精确 4 点估计
+    - ProjMatchPointsRansac: RANSAC 鲁棒估计
+  - **矩形校正**:
+    - RectifyQuadrilateral: 四边形 -> 矩形
+    - RectangleToQuadrilateral: 矩形 -> 四边形
+  - **工具函数**:
+    - IsValidHomography: 有效性检测
+    - HomographyError: 重投影误差
+    - RefineHomography: LM 精化
+
+### 2026-01-29 (Edge 模块公开 API)
+
+- **Edge/Edge.h 模块** (新增公开 API)
+  - 新增 `include/QiVision/Edge/Edge.h`: 边缘检测公开 API 头文件
+  - 新增 `src/Edge/Edge.cpp`: 公开 API 实现
+  - **EdgesImage**: Canny 边缘检测 (二值输出)
+  - **EdgesSubPix**: Canny 边缘检测 (亚像素轮廓输出)
+  - **EdgesSubPixAuto**: 自动阈值 Canny 检测
+  - **LinesSubPix**: Steger 亚像素线检测
+    - 支持 light/dark/all 极性选择
+    - 基于 Hessian 特征值分析
+    - 亚像素精度 <0.02 像素
+  - **LinesSubPixAuto**: 自动阈值 Steger 检测
+  - **CannyEdgeParams/StegerLineParams**: 高级参数结构体
+  - **DetectEdges/DetectLines**: 完整参数控制版本
+  - **ComputeSigmaForLineWidth**: 根据线宽计算推荐 sigma
+  - **EstimateThresholds**: 基于梯度统计估计阈值
 
 ### 2026-01-29 (PolarTransform 修复 + 公开 API)
 

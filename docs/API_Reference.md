@@ -1,7 +1,7 @@
 # QiVision API Reference
 
-> Version: 0.7.0
-> Last Updated: 2026-01-28
+> Version: 0.11.0
+> Last Updated: 2026-01-29
 > Namespace: `Qi::Vision`
 
 Professional industrial machine vision library.
@@ -21,7 +21,9 @@ Professional industrial machine vision library.
 9. [GUI](#9-gui) - Window display
 10. [Morphology](#10-morphology) - Morphological operations
 11. [Calib](#11-calib) - Camera calibration and distortion correction
-12. [Appendix](#appendix) - Types and constants
+12. [Transform](#12-transform) - Geometric transformations (Polar, Affine, Homography)
+13. [Edge](#13-edge) - Edge detection (Canny, Steger)
+14. [Appendix](#appendix) - Types and constants
 
 ---
 
@@ -2764,10 +2766,602 @@ void DrawChessboardCorners(
 
 ---
 
+## 12. Transform
+
+**Namespace**: `Qi::Vision::Transform`
+**Header**: `<QiVision/Transform/PolarTransform.h>`
+
+Polar coordinate transformations for circular object inspection and rotation-invariant processing.
+
+---
+
+### PolarMode
+
+Polar transformation mapping mode.
+
+```cpp
+enum class PolarMode {
+    Linear,     // Linear radial mapping: output_y proportional to radius
+    SemiLog     // Semi-log radial mapping: enhanced detail near center
+};
+```
+
+---
+
+### PolarInterpolation
+
+Interpolation method for transformation.
+
+```cpp
+enum class PolarInterpolation {
+    Nearest,    // Nearest neighbor (fast, pixelated)
+    Bilinear,   // Bilinear interpolation (default, good quality)
+    Bicubic     // Bicubic interpolation (best quality, slower)
+};
+```
+
+---
+
+### CartesianToPolar
+
+Transforms image from Cartesian to Polar coordinates.
+
+Maps a circular region centered at 'center' to a rectangular image where:
+- X axis = angle [0, 2*pi)
+- Y axis = radius [0, maxRadius]
+
+```cpp
+void CartesianToPolar(
+    const QImage& src,
+    QImage& dst,
+    const Point2d& center,
+    double maxRadius,
+    int32_t dstWidth = 0,
+    int32_t dstHeight = 0,
+    PolarMode mode = PolarMode::Linear,
+    PolarInterpolation interp = PolarInterpolation::Bilinear
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| src | const QImage& | Source image (grayscale) |
+| dst | QImage& | [out] Output polar image |
+| center | const Point2d& | Center point of polar transformation |
+| maxRadius | double | Maximum radius to include |
+| dstWidth | int32_t | Output width (angle resolution), 0 = auto |
+| dstHeight | int32_t | Output height (radial resolution), 0 = auto |
+| mode | PolarMode | Mapping mode (Linear or SemiLog) |
+| interp | PolarInterpolation | Interpolation method |
+
+**Use Cases**
+- Inspecting circular objects (defects become horizontal lines)
+- Analyzing ring-shaped patterns
+- Rotation-invariant processing
+
+---
+
+### PolarToCartesian
+
+Transforms image from Polar back to Cartesian coordinates.
+
+Inverse of CartesianToPolar. Maps a polar image back to Cartesian space.
+
+```cpp
+void PolarToCartesian(
+    const QImage& src,
+    QImage& dst,
+    const Point2d& center,
+    double maxRadius,
+    int32_t dstWidth = 0,
+    int32_t dstHeight = 0,
+    PolarMode mode = PolarMode::Linear,
+    PolarInterpolation interp = PolarInterpolation::Bilinear
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| src | const QImage& | Source polar image |
+| dst | QImage& | [out] Output Cartesian image |
+| center | const Point2d& | Center point for output image |
+| maxRadius | double | Maximum radius that was used in forward transform |
+| dstWidth | int32_t | Output width, 0 = 2 * maxRadius |
+| dstHeight | int32_t | Output height, 0 = 2 * maxRadius |
+| mode | PolarMode | Mapping mode (must match forward transform) |
+| interp | PolarInterpolation | Interpolation method |
+
+---
+
+### WarpPolar
+
+General polar warp function combining forward and inverse transforms.
+
+```cpp
+void WarpPolar(
+    const QImage& src,
+    QImage& dst,
+    const Point2d& center,
+    double maxRadius,
+    int32_t dstWidth = 0,
+    int32_t dstHeight = 0,
+    PolarMode mode = PolarMode::Linear,
+    bool inverse = false,
+    PolarInterpolation interp = PolarInterpolation::Bilinear
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| src | const QImage& | Source image |
+| dst | QImage& | [out] Output image |
+| center | const Point2d& | Center point for polar transformation |
+| maxRadius | double | Maximum radius |
+| dstWidth | int32_t | Output width (0 = auto) |
+| dstHeight | int32_t | Output height (0 = auto) |
+| mode | PolarMode | Mapping mode |
+| inverse | bool | If true, Polar->Cartesian; if false, Cartesian->Polar |
+| interp | PolarInterpolation | Interpolation method |
+
+---
+
+### PointCartesianToPolar
+
+Converts a single point from Cartesian to Polar coordinates.
+
+```cpp
+Point2d PointCartesianToPolar(const Point2d& pt, const Point2d& center);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| pt | const Point2d& | Point in Cartesian coordinates |
+| center | const Point2d& | Center of polar system |
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| Point2d | Point where x = angle (radians, [0, 2*pi)), y = radius |
+
+---
+
+### PointPolarToCartesian
+
+Converts a single point from Polar to Cartesian coordinates.
+
+```cpp
+Point2d PointPolarToCartesian(double angle, double radius, const Point2d& center);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| angle | double | Angle in radians |
+| radius | double | Radius |
+| center | const Point2d& | Center of polar system |
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| Point2d | Point in Cartesian coordinates |
+
+---
+
+## 12.2 Affine Transforms
+
+**Namespace**: `Qi::Vision::Transform`
+**Header**: `<QiVision/Transform/AffineTransform.h>`
+
+Affine transformation operations for images and points.
+
+---
+
+### AffineTransImage
+
+Applies affine transformation to an image.
+
+```cpp
+void AffineTransImage(
+    const QImage& src,
+    QImage& dst,
+    const QMatrix& matrix,
+    const std::string& interpolation = "bilinear",
+    const std::string& borderMode = "constant",
+    double borderValue = 0.0
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| src | const QImage& | Source image |
+| dst | QImage& | [out] Output transformed image |
+| matrix | const QMatrix& | 2D affine transformation matrix |
+| interpolation | const std::string& | "nearest", "bilinear" (default), "bicubic" |
+| borderMode | const std::string& | "constant" (default), "replicate", "reflect", "wrap" |
+| borderValue | double | Border value for constant mode |
+
+---
+
+### RotateImage
+
+Rotates image around its center or specified point.
+
+```cpp
+void RotateImage(
+    const QImage& src,
+    QImage& dst,
+    double angle,
+    const std::string& interpolation = "bilinear"
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| angle | double | Rotation angle in radians (positive = counter-clockwise) |
+
+---
+
+### ScaleImage / ZoomImageSize
+
+Scales image by factors or to specified size.
+
+```cpp
+void ScaleImage(const QImage& src, QImage& dst, double scaleX, double scaleY, const std::string& interpolation = "bilinear");
+void ZoomImageSize(const QImage& src, QImage& dst, int32_t dstWidth, int32_t dstHeight, const std::string& interpolation = "bilinear");
+```
+
+---
+
+### Matrix Creation Functions
+
+Halcon-style matrix creation functions.
+
+| Function | Description |
+|----------|-------------|
+| HomMat2dIdentity() | Creates identity matrix |
+| HomMat2dRotate(phi, cy, cx) | Creates rotation matrix around (cx, cy) |
+| HomMat2dScale(sy, sx, cy, cx) | Creates scaling matrix around (cx, cy) |
+| HomMat2dTranslate(mat, ty, tx) | Adds translation to existing matrix |
+| HomMat2dCompose(m1, m2) | Composes two matrices (m1 * m2) |
+| HomMat2dInvert(mat) | Inverts transformation matrix |
+
+---
+
+### AffineTransPoint2d
+
+Transforms points using affine matrix.
+
+```cpp
+Point2d AffineTransPoint2d(const QMatrix& homMat2d, const Point2d& point);
+std::vector<Point2d> AffineTransPoint2d(const QMatrix& homMat2d, const std::vector<Point2d>& points);
+```
+
+---
+
+### Transform Estimation
+
+Estimates transformation from point correspondences.
+
+| Function | Min Points | Description |
+|----------|------------|-------------|
+| VectorToHomMat2d | 3 | Full affine transform |
+| VectorToRigid | 2 | Rotation + translation only |
+| VectorToSimilarity | 2 | Rotation + translation + uniform scale |
+
+---
+
+## 12.3 Projective Transforms (Homography)
+
+**Namespace**: `Qi::Vision::Transform`
+**Header**: `<QiVision/Transform/Homography.h>`
+
+Projective (perspective) transformation operations.
+
+---
+
+### HomMat3d
+
+3x3 homography matrix class for projective transformations.
+
+```cpp
+class HomMat3d {
+public:
+    HomMat3d();  // Identity
+    static HomMat3d Identity();
+    static HomMat3d FromAffine(const QMatrix& affine);
+
+    HomMat3d operator*(const HomMat3d& other) const;
+    HomMat3d Inverse() const;
+
+    Point2d Transform(const Point2d& p) const;
+};
+```
+
+---
+
+### ProjectiveTransImage
+
+Applies projective (perspective) transformation to an image.
+
+```cpp
+void ProjectiveTransImage(
+    const QImage& src,
+    QImage& dst,
+    const HomMat3d& homMat3d,
+    const std::string& interpolation = "bilinear",
+    const std::string& borderMode = "constant",
+    double borderValue = 0.0
+);
+```
+
+---
+
+### Homography Estimation
+
+```cpp
+bool VectorToProjHomMat2d(const std::vector<Point2d>& srcPoints, const std::vector<Point2d>& dstPoints, HomMat3d& homMat3d);
+bool ProjMatchPointsRansac(const std::vector<Point2d>& srcPoints, const std::vector<Point2d>& dstPoints, HomMat3d& homMat3d, double distanceThreshold = 3.0, double confidence = 0.99, int32_t maxIterations = 2000, std::vector<bool>* inlierMask = nullptr);
+```
+
+| Function | Min Points | Description |
+|----------|------------|-------------|
+| VectorToProjHomMat2d | 4 | DLT homography estimation |
+| ProjMatchPointsRansac | 4 | RANSAC robust estimation |
+
+---
+
+### Quadrilateral Rectification
+
+```cpp
+bool RectifyQuadrilateral(const std::array<Point2d, 4>& quadPoints, double width, double height, HomMat3d& homMat3d);
+bool RectangleToQuadrilateral(double width, double height, const std::array<Point2d, 4>& quadPoints, HomMat3d& homMat3d);
+```
+
+---
+
+## 13. Edge
+
+**Namespace**: `Qi::Vision::Edge`
+**Header**: `<QiVision/Edge/Edge.h>`
+
+Edge detection operations including Canny and Steger (subpixel line detection).
+
+---
+
+### EdgesImage
+
+Detects edges using Canny algorithm (binary output).
+
+```cpp
+void EdgesImage(
+    const QImage& image,
+    QImage& edges,
+    const std::string& filter = "canny",
+    double sigma = 1.0,
+    double lowThreshold = 20.0,
+    double highThreshold = 40.0
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| image | const QImage& | Input grayscale image |
+| edges | QImage& | [out] Binary edge image (255 = edge, 0 = non-edge) |
+| filter | const std::string& | Filter type: "canny", "canny_sobel", "canny_scharr" |
+| sigma | double | Gaussian smoothing sigma |
+| lowThreshold | double | Low threshold for hysteresis |
+| highThreshold | double | High threshold for hysteresis |
+
+---
+
+### EdgesSubPix
+
+Detects edges with subpixel accuracy (contour output).
+
+```cpp
+void EdgesSubPix(
+    const QImage& image,
+    QContourArray& contours,
+    const std::string& filter = "canny",
+    double sigma = 1.0,
+    double lowThreshold = 20.0,
+    double highThreshold = 40.0
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| image | const QImage& | Input grayscale image |
+| contours | QContourArray& | [out] Edge contours (XLD format) |
+| filter | const std::string& | Filter type |
+| sigma | double | Gaussian smoothing sigma |
+| lowThreshold | double | Low threshold for hysteresis |
+| highThreshold | double | High threshold for hysteresis |
+
+---
+
+### EdgesSubPixAuto
+
+Detects edges with auto-computed thresholds.
+
+```cpp
+void EdgesSubPixAuto(
+    const QImage& image,
+    QContourArray& contours,
+    const std::string& filter = "canny",
+    double sigma = 1.0
+);
+```
+
+---
+
+### LinesSubPix
+
+Detects lines/edges with subpixel accuracy using Steger algorithm.
+
+Uses Hessian matrix eigenvalue analysis to detect curvilinear structures
+(lines, ridges, valleys) with high subpixel accuracy.
+
+```cpp
+void LinesSubPix(
+    const QImage& image,
+    QContourArray& contours,
+    double sigma = 1.5,
+    double lowThreshold = 3.0,
+    double highThreshold = 8.0,
+    const std::string& lightDark = "light"
+);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| image | const QImage& | Input grayscale image |
+| contours | QContourArray& | [out] Line contours (XLD format) |
+| sigma | double | Gaussian sigma (controls line width sensitivity) |
+| lowThreshold | double | Low threshold for hysteresis |
+| highThreshold | double | High threshold for hysteresis |
+| lightDark | const std::string& | Line polarity: "light", "dark", "all" |
+
+---
+
+### LinesSubPixAuto
+
+Detects lines with auto-computed thresholds.
+
+```cpp
+void LinesSubPixAuto(
+    const QImage& image,
+    QContourArray& contours,
+    double sigma = 1.5,
+    const std::string& lightDark = "light"
+);
+```
+
+---
+
+### CannyEdgeParams
+
+Parameters for Canny edge detection.
+
+```cpp
+struct CannyEdgeParams {
+    double sigma = 1.0;
+    double lowThreshold = 20.0;
+    double highThreshold = 40.0;
+    bool autoThreshold = false;
+    std::string gradientOp = "sobel";
+    bool subPixelRefinement = true;
+    double minContourLength = 5.0;
+    int32_t minContourPoints = 3;
+
+    static CannyEdgeParams Auto(double sigma = 1.0);
+    static CannyEdgeParams WithThresholds(double low, double high, double sigma = 1.0);
+};
+```
+
+---
+
+### StegerLineParams
+
+Parameters for Steger line detection.
+
+```cpp
+struct StegerLineParams {
+    double sigma = 1.5;
+    double lowThreshold = 3.0;
+    double highThreshold = 8.0;
+    std::string lineType = "light";
+    double minLength = 5.0;
+    double maxGap = 2.0;
+    double maxAngleDiff = 0.5;
+    bool subPixelRefinement = true;
+
+    static StegerLineParams Light(double sigma, double lowThr, double highThr);
+    static StegerLineParams Dark(double sigma, double lowThr, double highThr);
+};
+```
+
+---
+
+### DetectEdges
+
+Detects edges with full parameter control.
+
+```cpp
+void DetectEdges(
+    const QImage& image,
+    QContourArray& contours,
+    const CannyEdgeParams& params
+);
+```
+
+---
+
+### DetectLines
+
+Detects lines with full parameter control.
+
+```cpp
+void DetectLines(
+    const QImage& image,
+    QContourArray& contours,
+    const StegerLineParams& params
+);
+```
+
+---
+
+### ComputeSigmaForLineWidth
+
+Computes recommended sigma based on line width.
+
+```cpp
+double ComputeSigmaForLineWidth(double lineWidthPixels);
+```
+
+**Parameters**
+| Name | Type | Description |
+|------|------|-------------|
+| lineWidthPixels | double | Expected line width in pixels |
+
+**Returns**
+| Type | Description |
+|------|-------------|
+| double | Recommended sigma value |
+
+---
+
+### EstimateThresholds
+
+Estimates thresholds from image gradient statistics.
+
+```cpp
+void EstimateThresholds(
+    const QImage& image,
+    double sigma,
+    double& lowThreshold,
+    double& highThreshold
+);
+```
+
+---
+
 ## Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 0.11.0 | 2026-01-29 | Add Affine/Homography Transform modules |
+| 0.10.0 | 2026-01-29 | Add Edge module (Canny, Steger subpixel edge detection) |
+| 0.9.0 | 2026-01-29 | Add Transform module (polar coordinate transformations) |
 | 0.8.0 | 2026-01-28 | Add CalibBoard module (chessboard detection, corner refinement) |
 | 0.7.0 | 2026-01-28 | Add Calib module (CameraModel, Undistort) |
 | 0.6.0 | 2026-01-27 | Add Morphology module (binary + gray-scale) |
